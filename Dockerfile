@@ -1,4 +1,5 @@
-FROM azathothas/archlinux:latest AS bootstrap
+FROM ghcr.io/fwcd/archlinux:latest AS bootstrap
+#FROM azathothas/archlinux:latest AS bootstrap
 
 ARG TARGETARCH
 ARG TARGETVARIANT
