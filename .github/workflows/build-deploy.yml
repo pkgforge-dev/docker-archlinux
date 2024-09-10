@@ -42,6 +42,10 @@ jobs:
           #Docker Tags
           DOCKER_TAG="v$(date +'%Y.%m.%d')" && export DOCKER_TAG="$DOCKER_TAG"
           echo "DOCKER_TAG=$DOCKER_TAG" >> "$GITHUB_ENV"
+          #Repo
+          mkdir -p "/tmp/ARCHLINUX" && pushd "/tmp/ARCHLINUX" >/dev/null 2>&1
+          git clone --filter="blob:none" --depth="1" "https://github.com/Azathothas/docker-archlinux"
+          popd >/dev/null 2>&1
         continue-on-error: true
 
       - name: Set up QEMU
@@ -63,7 +67,7 @@ jobs:
       - name: Docker Build and Push (archlinux)
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: /tmp/ARCHLINUX/docker-archlinux
           platforms: "linux/amd64,linux/arm64"
           tags: |
             azathothas/archlinux:latest
