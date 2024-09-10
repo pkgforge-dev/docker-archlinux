@@ -26,12 +26,6 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          path: main
-          filter: "blob:none"
-
       - name: Debloat Runner
         run: |
           #Presets
