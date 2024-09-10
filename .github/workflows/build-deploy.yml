@@ -1,46 +1,78 @@
-name: Build and Deploy
-
+name: 🐬 Builds ArchLinux Images for DockerHub 🐬
+#REF: https://docs.docker.com/build/ci/github-actions/multi-platform/
+#SECRETS: DOCKERHUB_USERNAME || DOCKERHUB_TOKEN
+#URL: https://hub.docker.com/r/azathothas/archlinux/tags
+#For: https://github.com/Azathothas/Toolpacks/settings/actions/runners
+#------------------------------------------------------------------------------------#
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  #push:
   workflow_dispatch:
-  workflow_run:
-    workflows: ['Trigger Build']
-    types: [completed]
+  schedule:
+    - cron: "30 08 * * 4"  # 08:30 PM UTC Fri (02:15 AM NPT Fri Midnight) 
+  #  - cron: "*/30 * * * *"  # Every 30 Mins
+defaults:
+  run:
+    shell: bash
+    working-directory: /tmp
 
 permissions:
   contents: read
   packages: write
 
+#------------------------------------------------------------------------------------#  
 jobs:
-  build:
+  build-push-docker-alpine:
+    name: Push (ArchLinux) --> Docker Hub
     runs-on: ubuntu-latest
-
+    
     steps:
-      - uses: actions/checkout@v3
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-      - name: Log in to GHCR
-        uses: docker/login-action@v1
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Compute tags
-        id: tags
+          path: main
+          filter: "blob:none"
+
+      - name: Debloat Runner
         run: |
-          echo "DATE=$(date '+%Y%m%d')" >> "$GITHUB_OUTPUT"
-          echo "NAME=ghcr.io/fwcd/archlinux" >> "$GITHUB_OUTPUT"
-      - name: Build and push image
-        uses: docker/build-push-action@v4
+          #Presets
+          set +x ; set +e
+          #--------------#
+          bash <(curl -qfsSL "https://pub.ajam.dev/repos/Azathothas/Arsenal/misc/Github/Runners/Ubuntu/debloat.sh")
+        continue-on-error: true
+
+      - name: Setup Env
+        run: |
+          #Presets
+          set +x ; set +e
+          #--------------#
+          #Docker Tags
+          DOCKER_TAG="v$(date +'%Y.%m.%d')" && export DOCKER_TAG="$DOCKER_TAG"
+          echo "DOCKER_TAG=$DOCKER_TAG" >> "$GITHUB_ENV"
+        continue-on-error: true
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        continue-on-error: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        continue-on-error: true
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: "${{ secrets.DOCKERHUB_USERNAME }}"
+          password: "${{ secrets.DOCKERHUB_TOKEN }}"
+        continue-on-error: true
+
+    #https://hub.docker.com/r/azathothas/archlinux
+      - name: Docker Build and Push (archlinux)
+        uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/386,linux/amd64,linux/arm64,linux/arm/v7,linux/riscv64,linux/ppc64le
-          push: ${{ github.ref == 'refs/heads/main' }}
-          tags: ${{ steps.tags.outputs.NAME }}:latest,${{ steps.tags.outputs.NAME }}:${{ steps.tags.outputs.DATE }}
+          platforms: "linux/amd64,linux/arm64"
+          tags: |
+            azathothas/archlinux:latest
+            azathothas/archlinux:${{ env.DOCKER_TAG }}
+          push: true  
+        continue-on-error: true
