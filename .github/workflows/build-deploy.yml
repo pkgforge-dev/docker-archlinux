@@ -67,8 +67,8 @@ jobs:
       - name: Docker Build and Push (archlinux)
         uses: docker/build-push-action@v6
         with:
-          context: /tmp/ARCHLINUX/docker-archlinux
-          platforms: "linux/amd64,linux/arm64"
+          context: "/tmp/ARCHLINUX/docker-archlinux"
+          platforms: "linux/386,linux/amd64,linux/arm64,linux/arm/v7,linux/riscv64,linux/ppc64le"
           tags: |
             azathothas/archlinux:latest
             azathothas/archlinux:${{ env.DOCKER_TAG }}
