@@ -15,10 +15,11 @@ Unofficial, automated Docker multi-platform images of Arch Linux for the followi
 ```bash
 !# --privileged is DANGEROUS but often fixes lots of DNS & Internet Issues
 !# --platform="${PLATFORM}" can be set to run other ArchLinux on Supported System (Requires QEMU)
+## --platform="linux/arm64" --> Lets you test the aarch64 version of ArchLinux on x86_64 Host
 !# --rm will delete the container upon exit
 
 !# This will drop you in a bash shell
-docker run --rm -it --platform="linux/arm64" --privileged --net="host" "azathothas/archlinux:latest"
+docker run --rm -it --privileged --net="host" "azathothas/archlinux:latest"
 ```
 
 [^1]: The pentium4 architecture is for 32-bit CPUs that support SSE2 and the only one we support (for now). See [here](https://archlinux32.org/architecture) for a comparison of architectures supported by upstream.
