@@ -1,25 +1,38 @@
-name: Trigger Build
+name: ⌚ TIME
 
 on:
-  # Run every day at 07:20 (to avoid the peak times)
-  schedule:
-  - cron: '20 7 * * *'
   workflow_dispatch:
-
-permissions:
-  contents: write
-
+  schedule:
+    #- cron: "15 23 * * *" #( 11:15 PM UTC 05:00 AM Morning )
+    - cron: "0 */6 * * *" #Every 6 hrs 
+#------------------------------------------------------------------------------------#
 jobs:
-  trigger-build:
+  Initialize:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      
+    steps:        
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: main
+          filter: "blob:none" #https://github.blog/2020-12-21-get-up-to-speed-with-partial-clone-and-shallow-clone/ 
 
-    steps:
-    - uses: actions/checkout@v3
-    - name: Configure Git user
-      run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
-    - name: Create dummy commit
-      run: git commit --allow-empty -m "Trigger build ($(date -I))"
-    - name: Push
-      run: git push
+      - name: Get DateTime
+        run: |
+          # Date Time
+          NEPALI_TIME=$(TZ='Asia/Kathmandu' date +'%Y-%m-%d (%I:%M:%S %p)')
+          echo "NEPALI_TIME=$NEPALI_TIME" >> $GITHUB_ENV
+          #
+          echo "$(TZ='Asia/Kathmandu' date +'%Y-%m-%d (%I:%M:%S %p)') ⌚" > "$GITHUB_WORKSPACE/main/.github/TIME"
+        continue-on-error: true
+
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          repository: ./main        
+          commit_user_name: Azathothas # defaults to "github-actions[bot]"
+          commit_user_email: AjamX101@gmail.com # defaults to "41898282+github-actions[bot]@users.noreply.github.com"
+          commit_message: "✅ Time <-- ${{ env.NEPALI_TIME }} ⌚"
+          #push_options: '--force'
