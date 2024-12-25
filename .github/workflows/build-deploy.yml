@@ -44,7 +44,7 @@ jobs:
           echo "DOCKER_TAG=$DOCKER_TAG" >> "${GITHUB_ENV}"
           #Repo
           mkdir -p "/tmp/ARCHLINUX" && pushd "/tmp/ARCHLINUX" >/dev/null 2>&1
-          git clone --filter="blob:none" --depth="1" "https://github.com/pkgforge/docker-archlinux"
+          git clone --filter="blob:none" --depth="1" "https://github.com/pkgforge-dev/docker-archlinux"
           popd >/dev/null 2>&1
         continue-on-error: true
 
