@@ -50,6 +50,35 @@ jobs:
           popd >/dev/null 2>&1
         continue-on-error: true
 
+      - name: Update Mirrors
+        run: |
+          #Presets
+          set +x ; set +e
+          #--------------#
+          pushd "$(mktemp -d)" >/dev/null 2>&1
+           wget "https://bin.pkgforge.dev/$(uname -m)/rate-mirrors" -O "./rate-mirrors" && chmod +x "./rate-mirrors"
+           if [[ -s "./rate-mirrors" && $(stat -c%s "./rate-mirrors") -gt 10 ]]; then
+             ##386
+             pushd "$(mktemp -d)" >/dev/null 2>&1
+              curl -qfsSL "https://archlinux32.org/mirrorlist/?country=all&protocol=https" -o "./mirrors.txt"
+              sed -i '/^#Server/s/^#//' "./mirrors.txt"
+              if [[ -s "./mirrors.txt" && $(wc -l < "./mirrors.txt") -gt 3 ]]; then
+                cat "./mirrors.txt" | tee "${GITHUB_WORKSPACE}/main/rootfs/386/etc/pacman.d/mirrorlist"
+              fi
+             popd >/dev/null 2>&1
+             ##Arm64/Armv7
+             pushd "$(mktemp -d)" >/dev/null 2>&1
+              wget "https://bin.pkgforge.dev/$(uname -m)/rate-mirrors" -O "./rate-mirrors" && chmod +x "./rate-mirrors"
+              "./rate-mirrors" --allow-root --disable-comments-in-file --save "./mirrors.txt" archarm
+              if [[ -s "./mirrors.txt" && $(wc -l < "./mirrors.txt") -gt 3 ]]; then
+                cat "./mirrors.txt" | tee "${GITHUB_WORKSPACE}/main/rootfs/arm64/etc/pacman.d/mirrorlist"
+                cat "./mirrors.txt" | tee "${GITHUB_WORKSPACE}/main/rootfs/armv7/etc/pacman.d/mirrorlist"
+              fi
+             popd >/dev/null 2>&1
+           fi
+          popd >/dev/null 2>&1
+        continue-on-error: true
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         continue-on-error: true
