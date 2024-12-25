@@ -1,4 +1,4 @@
-- #### [Docker images of Arch Linux](https://hub.docker.com/r/azathothas/archlinux/tags) [![Build and Deploy](https://github.com/fwcd/docker-archlinux/actions/workflows/build-deploy.yml/badge.svg)](https://github.com/fwcd/docker-archlinux/actions/workflows/build-deploy.yml)
+- #### [Docker images of Arch Linux](https://hub.docker.com/r/pkgforge/archlinux/tags) [![Build and Deploy](https://github.com/pkgforge/docker-archlinux/actions/workflows/build-deploy.yml/badge.svg)](https://github.com/pkgforge/docker-archlinux/actions/workflows/build-deploy.yml)
 
 Unofficial, automated Docker multi-platform images of Arch Linux for the following architectures:
 
@@ -19,7 +19,7 @@ Unofficial, automated Docker multi-platform images of Arch Linux for the followi
 !# --rm will delete the container upon exit
 
 !# This will drop you in a bash shell
-docker run --rm -it --privileged --net="host" "azathothas/archlinux:latest"
+docker run --rm -it --privileged --net="host" "pkgforge/archlinux:latest"
 ```
 
 [^1]: The pentium4 architecture is for 32-bit CPUs that support SSE2 and the only one we support (for now). See [here](https://archlinux32.org/architecture) for a comparison of architectures supported by upstream.

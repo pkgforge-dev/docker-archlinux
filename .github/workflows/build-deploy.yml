@@ -1,8 +1,8 @@
 name: 🐬 Builds ArchLinux Images for DockerHub 🐬
 #REF: https://docs.docker.com/build/ci/github-actions/multi-platform/
 #SECRETS: DOCKERHUB_USERNAME || DOCKERHUB_TOKEN
-#URL: https://hub.docker.com/r/azathothas/archlinux/tags
-#For: https://github.com/Azathothas/Toolpacks/settings/actions/runners
+#URL: https://hub.docker.com/r/pkgforge/archlinux/tags
+#For: https://github.com/pkgforge/devscripts/tree/main/Github/Runners
 #------------------------------------------------------------------------------------#
 on:
   #push:
@@ -31,7 +31,7 @@ jobs:
           #Presets
           set +x ; set +e
           #--------------#
-          bash <(curl -qfsSL "https://pub.ajam.dev/repos/Azathothas/Arsenal/misc/Github/Runners/Ubuntu/debloat.sh")
+          bash <(curl -qfsSL "https://raw.githubusercontent.com/pkgforge/devscripts/refs/heads/main/Github/Runners/debloat_ubuntu.sh")
         continue-on-error: true
 
       - name: Setup Env
@@ -41,10 +41,10 @@ jobs:
           #--------------#
           #Docker Tags
           DOCKER_TAG="v$(date +'%Y.%m.%d')" && export DOCKER_TAG="$DOCKER_TAG"
-          echo "DOCKER_TAG=$DOCKER_TAG" >> "$GITHUB_ENV"
+          echo "DOCKER_TAG=$DOCKER_TAG" >> "${GITHUB_ENV}"
           #Repo
           mkdir -p "/tmp/ARCHLINUX" && pushd "/tmp/ARCHLINUX" >/dev/null 2>&1
-          git clone --filter="blob:none" --depth="1" "https://github.com/Azathothas/docker-archlinux"
+          git clone --filter="blob:none" --depth="1" "https://github.com/pkgforge/docker-archlinux"
           popd >/dev/null 2>&1
         continue-on-error: true
 
@@ -63,14 +63,14 @@ jobs:
           password: "${{ secrets.DOCKERHUB_TOKEN }}"
         continue-on-error: true
 
-    #https://hub.docker.com/r/azathothas/archlinux
+    #https://hub.docker.com/r/pkgforge/archlinux
       - name: Docker Build and Push (archlinux)
         uses: docker/build-push-action@v6
         with:
           context: "/tmp/ARCHLINUX/docker-archlinux"
           platforms: "linux/386,linux/amd64,linux/arm64,linux/arm/v7,linux/riscv64,linux/ppc64le"
           tags: |
-            azathothas/archlinux:latest
-            azathothas/archlinux:${{ env.DOCKER_TAG }}
+            pkgforge/archlinux:latest
+            pkgforge/archlinux:${{ env.DOCKER_TAG }}
           push: true  
         continue-on-error: true
