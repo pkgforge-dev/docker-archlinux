@@ -17,7 +17,7 @@ COPY /rootfs/${TARGETARCH}${TARGETVARIANT} /rootfs
 
 #------------------------------------------------------------------------------------#
 ##Install the base packages
-RUN cat /etc/bootstrap-packages.txt | xargs pacstrap-docker /rootfs 2>/dev/null
+RUN cat /etc/bootstrap-packages.txt | xargs pacstrap-docker /rootfs 2>/dev/null || true
 #------------------------------------------------------------------------------------#
 
 #------------------------------------------------------------------------------------#
