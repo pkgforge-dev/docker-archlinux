@@ -18,12 +18,12 @@ permissions:
   contents: read
   packages: write
 
-#------------------------------------------------------------------------------------#  
+#------------------------------------------------------------------------------------#
 jobs:
   build-push-docker-alpine:
     name: Push (ArchLinux) --> Docker Hub
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Debloat Runner
         run: |
@@ -57,14 +57,6 @@ jobs:
           pushd "$(mktemp -d)" >/dev/null 2>&1
            wget "https://bin.pkgforge.dev/$(uname -m)/rate-mirrors" -O "./rate-mirrors" && chmod +x "./rate-mirrors"
            if [[ -s "./rate-mirrors" && $(stat -c%s "./rate-mirrors") -gt 10 ]]; then
-             ##386
-             pushd "$(mktemp -d)" >/dev/null 2>&1
-              curl -qfsSL "https://archlinux32.org/mirrorlist/?country=all&protocol=https" -o "./mirrors.txt"
-              sed -i '/^#Server/s/^#//' "./mirrors.txt"
-              if [[ -s "./mirrors.txt" && $(wc -l < "./mirrors.txt") -gt 3 ]]; then
-                cat "./mirrors.txt" | tee "/tmp/ARCHLINUX/docker-archlinux/rootfs/386/etc/pacman.d/mirrorlist"
-              fi
-             popd >/dev/null 2>&1
              ##Arm64/Armv7
              pushd "$(mktemp -d)" >/dev/null 2>&1
               wget "https://bin.pkgforge.dev/$(uname -m)/rate-mirrors" -O "./rate-mirrors" && chmod +x "./rate-mirrors"
@@ -105,11 +97,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: "/tmp/ARCHLINUX/docker-archlinux"
-          platforms: "linux/386,linux/amd64,linux/arm64,linux/arm/v7,linux/riscv64,linux/ppc64le"
+          platforms: "linux/amd64,linux/arm64,linux/arm/v7,linux/riscv64,linux/ppc64le"
           tags: |
             pkgforge/archlinux:latest
             pkgforge/archlinux:${{ env.DOCKER_TAG }}
             ${{ env.GHCR_NAME }}:latest
             ${{ env.GHCR_NAME }}:${{ env.DOCKER_TAG }}
-          push: true  
+          push: true
         continue-on-error: true
