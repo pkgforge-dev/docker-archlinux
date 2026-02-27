@@ -8,7 +8,6 @@ Unofficial, automated Docker multi-platform images of Arch Linux for the followi
 | aarch64 | `linux/arm64` | [Arch Linux ARM](https://archlinuxarm.org) |
 | armv7h | `linux/arm/v7` | [Arch Linux ARM](https://archlinuxarm.org) |
 | riscv64 | `linux/riscv64` | [Arch Linux RISC-V](https://archriscv.felixc.at) |
-| powerpc64le | `linux/ppc64le` | [Arch POWER](https://archlinuxpower.org) |
 
 - #### Usage
 ```bash
