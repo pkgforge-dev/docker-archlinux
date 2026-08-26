@@ -39,7 +39,8 @@ for key in ID VERSION_ID; do
   else
     fail "/etc/os-release carries $key" \
       "the key is absent or empty" \
-      "found keys: $(awk -F= '/^[A-Z_]+=/ { printf "%s ", $1 }' "$work/os-release")"
+      "found keys: $(awk -F= '/^[A-Z_]+=/ { printf "%s ", $1 }' "$work/os-release")" \
+      "reproduce: $RUNTIME create --platform $PLATFORM $IMAGE true, then $RUNTIME cp CID:/etc/os-release ."
   fi
 done
 
@@ -56,7 +57,8 @@ elif [ "$label" = "$version_id" ]; then
 else
   fail "org.opencontainers.image.version matches VERSION_ID" \
     "label: $label" \
-    "VERSION_ID: $version_id"
+    "VERSION_ID: $version_id" \
+    "reproduce: $RUNTIME image inspect $IMAGE, and compare the org.opencontainers.image.version label with VERSION_ID in /etc/os-release"
 fi
 
 summary

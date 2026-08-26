@@ -14,7 +14,8 @@ set -euo pipefail
 . "$REPO_ROOT/tests/lib/harness.sh"
 
 if ! command -v git >/dev/null; then
-  fail "git is available" "this test reads the index with git ls-files"
+  fail "git is available" "this test reads the index with git ls-files" \
+    "reproduce: command -v git"
   summary
   exit 1
 fi
@@ -40,7 +41,8 @@ must_be_executable() {
 
 targets="$(must_be_executable | sort -u)"
 if [ -z "$targets" ]; then
-  fail "there is something to check" "no scripts, bootstrap binaries or test files found"
+  fail "there is something to check" "no scripts, bootstrap binaries or test files found" \
+    "reproduce: ls scripts bootstrap/any/usr/local/bin tests/static tests/image"
   summary
   exit 1
 fi
@@ -79,7 +81,8 @@ else
   fail "every invoked file is executable in the index" \
     "not executable:$not_executable" \
     "the working tree can disagree with the index on Windows, and CI uses the index" \
-    "fix with: git update-index --chmod=+x <path>"
+    "fix with: git update-index --chmod=+x <path>" \
+    "reproduce: git ls-files -s <path>, where a mode of 100644 is the defect"
 fi
 
 if [ -z "$untracked" ]; then
@@ -87,7 +90,8 @@ if [ -z "$untracked" ]; then
 else
   fail "every invoked file is tracked by git" \
     "untracked:$untracked" \
-    "a file CI cannot check out cannot run"
+    "a file CI cannot check out cannot run" \
+    "reproduce: git add <path>"
 fi
 
 summary

@@ -36,7 +36,8 @@ if [ "$certs" -ge "$MIN_CERTS" ]; then
 else
   fail "$BUNDLE holds at least $MIN_CERTS certificates" \
     "counted: $certs" \
-    "a bundle that resolves but is empty fails TLS the same way a missing one does"
+    "a bundle that resolves but is empty fails TLS the same way a missing one does" \
+    "reproduce: $RUNTIME run --rm --platform $PLATFORM $IMAGE sh -c 'grep BEGIN $BUNDLE | wc -l'"
 fi
 
 summary

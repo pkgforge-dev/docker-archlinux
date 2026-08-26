@@ -16,7 +16,8 @@ set -euo pipefail
 
 lists="$(find "$REPO_ROOT/bootstrap" -type f -name bootstrap-packages.txt | sort)"
 if [ -z "$lists" ]; then
-  fail "at least one bootstrap package list exists" "searched: $REPO_ROOT/bootstrap"
+  fail "at least one bootstrap package list exists" "searched: $REPO_ROOT/bootstrap" \
+    "reproduce: ls bootstrap/*/etc/bootstrap-packages.txt"
   summary
   exit 1
 fi
@@ -31,7 +32,8 @@ while IFS= read -r list; do
   count=$((count + 1))
 
   if [ ! -s "$list" ]; then
-    fail "$rel is not empty" "an empty list installs nothing and the image has no shell"
+    fail "$rel is not empty" "an empty list installs nothing and the image has no shell" \
+      "reproduce: cat $rel"
     continue
   fi
 
@@ -54,7 +56,8 @@ while IFS= read -r list; do
       "xargs has no comment syntax, so a # line becomes a package named #" \
       "reproduce: xargs -r -a $rel echo pacstrap-docker /rootfs"
   elif [ "$n" -eq 0 ]; then
-    fail "$rel names at least one package" "the file has no non-blank line"
+    fail "$rel names at least one package" "the file has no non-blank line" \
+      "reproduce: cat $rel"
   else
     ok "$rel names $n package(s), all valid names"
   fi
@@ -67,7 +70,8 @@ for arch in amd64 arm64 armv7 riscv64; do
     ok "bootstrap/$arch/etc/bootstrap-packages.txt exists"
   else
     fail "bootstrap/$arch/etc/bootstrap-packages.txt exists" \
-      "the build matrix has a $arch entry and there is no list for it"
+      "the build matrix has a $arch entry and there is no list for it" \
+      "reproduce: ls bootstrap/$arch/etc/bootstrap-packages.txt"
   fi
 done
 

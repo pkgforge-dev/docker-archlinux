@@ -27,7 +27,8 @@ for path in /bin/sh /usr/bin/bash; do
     if [ "$size" -gt 0 ]; then
       ok "$path exists and resolves in $IMAGE on $PLATFORM ($size bytes)"
     else
-      fail "$path is not empty in $IMAGE on $PLATFORM" "size: $size bytes"
+      fail "$path is not empty in $IMAGE on $PLATFORM" "size: $size bytes" \
+        "reproduce: $RUNTIME create --platform $PLATFORM $IMAGE true, then $RUNTIME cp CID:$path ."
     fi
   else
     fail "$path exists and resolves in $IMAGE on $PLATFORM" \

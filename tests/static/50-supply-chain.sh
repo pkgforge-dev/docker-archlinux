@@ -11,7 +11,8 @@ set -euo pipefail
 
 workflows="$(find "$REPO_ROOT/.github/workflows" -type f \( -name '*.yml' -o -name '*.yaml' \) | sort)"
 if [ -z "$workflows" ]; then
-  fail "at least one workflow exists" "searched: $REPO_ROOT/.github/workflows"
+  fail "at least one workflow exists" "searched: $REPO_ROOT/.github/workflows" \
+    "reproduce: ls .github/workflows"
   summary
   exit 1
 fi
@@ -37,12 +38,14 @@ while IFS= read -r wf; do
       fail "action is pinned to a commit hash at $rel:$lineno" \
         "found: $ref" \
         "a tag moves, gets deleted and gets re-cut, see standing policy 10" \
-        "resolve with: gh api repos/OWNER/REPO/git/ref/tags/TAG --jq .object.sha"
+        "resolve with: gh api repos/OWNER/REPO/git/ref/tags/TAG --jq .object.sha" \
+        "reproduce: grep -n 'uses:' $rel"
       unpinned=$((unpinned + 1))
     elif ! printf '%s\n' "$text" | grep -qE '#[[:space:]]*v?[0-9]'; then
       fail "pinned action names its version in a comment at $rel:$lineno" \
         "found: $text" \
-        "a bare hash is unreadable, so record the version it corresponds to"
+        "a bare hash is unreadable, so record the version it corresponds to" \
+        "reproduce: add a trailing comment naming the version, shaped: uses: owner/repo@<sha> # v1.2.3"
       uncommented=$((uncommented + 1))
     fi
   done <<< "$uses"
@@ -83,7 +86,8 @@ while IFS= read -r f; do
       fail "no remote script is piped into a shell at $rel:${h%%:*}" \
         "found: $(printf '%s\n' "${h#*:}" | sed 's/^[[:space:]]*//')" \
         "the fetched content is unpinned and unreviewed at the moment it runs" \
-        "vendor it into this repository instead, see standing policy 1"
+        "vendor it into this repository instead, see standing policy 1" \
+        "reproduce: grep -nE 'curl|wget' $rel"
       piped=$((piped + 1))
     done <<< "$hits"
   fi
@@ -94,7 +98,8 @@ while IFS= read -r f; do
       [ -n "$h" ] || continue
       fail "no opaque binary is fetched and made executable at $rel:${h%%:*}" \
         "found: $(printf '%s\n' "${h#*:}" | sed 's/^[[:space:]]*//')" \
-        "build it from a pinned source, or pin the artefact by sha256"
+        "build it from a pinned source, or pin the artefact by sha256" \
+        "reproduce: grep -n chmod $rel"
       fetched=$((fetched + 1))
     done <<< "$hits"
   fi
@@ -119,7 +124,8 @@ while IFS= read -r wf; do
       [ -n "$h" ] || continue
       fail "no deprecated workflow command at $rel:${h%%:*}" \
         "found: $(printf '%s\n' "${h#*:}" | sed 's/^[[:space:]]*//')" \
-        "write to the GITHUB_OUTPUT, GITHUB_STATE, GITHUB_ENV or GITHUB_PATH file instead"
+        "write to the GITHUB_OUTPUT, GITHUB_STATE, GITHUB_ENV or GITHUB_PATH file instead" \
+        "reproduce: grep -n '::set-' $rel"
       deprecated=$((deprecated + 1))
     done <<< "$hits"
   fi
@@ -145,7 +151,8 @@ while IFS= read -r wf; do
   fi
   wide="$(grep_matches '^[[:space:]]*permissions:[[:space:]]*write-all' "$wf")"
   if [ -n "$wide" ]; then
-    fail "$rel does not grant write-all" "found: $wide"
+    fail "$rel does not grant write-all" "found: $wide" \
+      "reproduce: grep -n -A3 'permissions:' $rel"
     perms=$((perms + 1))
   fi
 done <<< "$workflows"

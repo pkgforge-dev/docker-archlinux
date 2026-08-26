@@ -20,7 +20,8 @@ VERSION="2026.08.26"
 ANCHOR="7.1.0.r9.g54d9411-2"
 
 if [ ! -x "$TAGS" ]; then
-  fail "scripts/tag-names is executable" "expected: $TAGS"
+  fail "scripts/tag-names is executable" "expected: $TAGS" \
+    "reproduce: git update-index --chmod=+x scripts/tag-names"
   summary
   exit 1
 fi
@@ -37,7 +38,8 @@ expect_alias_count() { # arch expected
   if [ "$got" = "$2" ]; then
     ok "$1 has $2 alias name(s)"
   else
-    fail "$1 has $2 alias name(s)" "got $got: $("$TAGS" aliases "$1")"
+    fail "$1 has $2 alias name(s)" "got $got: $("$TAGS" aliases "$1")" \
+      "reproduce: $TAGS aliases $1"
   fi
 }
 
@@ -57,7 +59,8 @@ for arch in amd64 arm64 armv7 riscv64; do
   if [ "$got" = "$want" ]; then
     ok "$arch emits $want tags, $n_alias alias(es) times rolling, dated and pinned, on two registries"
   else
-    fail "$arch emits $want tags" "got $got"
+    fail "$arch emits $want tags" "got $got" \
+      "reproduce: $TAGS arch $arch $VERSION $ANCHOR"
   fi
 
   for a in $aliases; do
@@ -72,7 +75,8 @@ for arch in amd64 arm64 armv7 riscv64; do
     if [ -z "$missing" ]; then
       ok "$arch alias $a has a rolling, a dated and a pinned tag on both registries"
     else
-      fail "$arch alias $a has all three shapes on both registries" "missing:$missing"
+      fail "$arch alias $a has all three shapes on both registries" "missing:$missing" \
+        "reproduce: $TAGS arch $arch $VERSION $ANCHOR, which must emit $GHCR and $HUB for every alias"
     fi
   done
 done
@@ -84,7 +88,8 @@ for shape in "latest" "v$VERSION"; do
     if grep -qxF "$image:$shape" <<< "$index"; then
       ok "index tag $image:$shape is created"
     else
-      fail "index tag $image:$shape is created" "the index tags are: $(printf '%s\n' "$index" | tr '\n' ' ')"
+      fail "index tag $image:$shape is created" "the index tags are: $(printf '%s\n' "$index" | tr '\n' ' ')" \
+        "reproduce: $TAGS index $VERSION"
     fi
   done
 done
@@ -95,7 +100,8 @@ dupes="$(printf '%s\n' "$all_aliases" | sort | uniq -d | tr '\n' ' ')"
 if [ -z "$(printf '%s' "$dupes" | tr -d '[:space:]')" ]; then
   ok "no alias is claimed by two architectures"
 else
-  fail "no alias is claimed by two architectures" "duplicated: $dupes"
+  fail "no alias is claimed by two architectures" "duplicated: $dupes" \
+    "reproduce: for a in amd64 arm64 armv7 riscv64; do scripts/tag-names aliases $a; done"
 fi
 
 # Both organisation names appear. They differ and it is not a typo.
@@ -103,19 +109,22 @@ amd64_tags="$(tags_for amd64)"
 if grep -q "^$GHCR:" <<< "$amd64_tags" && grep -q "^$HUB:" <<< "$amd64_tags"; then
   ok "both registry names are emitted, $GHCR and $HUB"
 else
-  fail "both registry names are emitted" "one of the two organisation names is missing"
+  fail "both registry names are emitted" "one of the two organisation names is missing" \
+    "reproduce: $TAGS arch amd64 $VERSION $ANCHOR, and look for both $GHCR and $HUB"
 fi
 
 # An unknown architecture is refused rather than silently skipped.
 if "$TAGS" arch ppc64le "$VERSION" "$ANCHOR" "$GHCR" >/dev/null 2>&1; then
-  fail "an unknown architecture is refused" "tag-names accepted ppc64le"
+  fail "an unknown architecture is refused" "tag-names accepted ppc64le" \
+    "reproduce: $TAGS arch ppc64le $VERSION $ANCHOR, which must exit non-zero"
 else
   ok "an unknown architecture is refused"
 fi
 
 # A missing version is refused, so a tag can never be created as bare :-v
 if "$TAGS" arch amd64 "" "$ANCHOR" "$GHCR" >/dev/null 2>&1; then
-  fail "an empty version is refused" "tag-names accepted an empty version"
+  fail "an empty version is refused" "tag-names accepted an empty version" \
+    "reproduce: $TAGS arch amd64 '' $ANCHOR, which must exit non-zero"
 else
   ok "an empty version is refused"
 fi

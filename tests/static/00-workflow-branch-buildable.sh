@@ -12,7 +12,8 @@ set -euo pipefail
 WF="$REPO_ROOT/.github/workflows/build-deploy.yml"
 
 if [ ! -f "$WF" ]; then
-  fail "workflow exists" "expected: $WF"
+  fail "workflow exists" "expected: $WF" \
+    "reproduce: ls .github/workflows/build-deploy.yml"
   summary
   exit 1
 fi
@@ -26,7 +27,8 @@ if [ -z "$checkout" ]; then
 elif ! printf '%s\n' "$checkout" | grep -qE 'actions/checkout@[0-9a-f]{40}'; then
   fail "actions/checkout is pinned to a commit hash" \
     "found: $checkout" \
-    "a tag is not a pin, see standing policy 10"
+    "a tag is not a pin, see standing policy 10" \
+    "reproduce: grep -n 'actions/checkout' .github/workflows/build-deploy.yml, then resolve the tag with gh api repos/actions/checkout/git/ref/tags/TAG --jq .object.sha"
 else
   ok "actions/checkout is used and pinned to a commit hash"
 fi
@@ -36,7 +38,8 @@ clones="$(grep_matches 'git[[:space:]]+clone' "$WF")"
 if [ -n "$clones" ]; then
   fail "the workflow does not hand-clone the repository" \
     "found: $clones" \
-    "a hand-clone without --branch builds the default branch, not the triggering ref"
+    "a hand-clone without --branch builds the default branch, not the triggering ref" \
+    "reproduce: grep -n 'git clone' .github/workflows/build-deploy.yml, and use actions/checkout instead"
 else
   ok "the workflow does not hand-clone the repository"
 fi
@@ -52,7 +55,8 @@ else
     if ! printf '%s\n' "$c" | grep -qE 'context:[[:space:]]*"?(\.|\$\{\{[[:space:]]*github\.workspace)'; then
       fail "build context is the workspace" \
         "found: $c" \
-        "expected . or \${{ github.workspace }}"
+        "expected . or \${{ github.workspace }}" \
+        "reproduce: grep -n 'context:' .github/workflows/build-deploy.yml"
       bad=1
     fi
   done <<< "$contexts"

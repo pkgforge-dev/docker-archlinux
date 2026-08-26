@@ -22,8 +22,18 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANCHOR_PACKAGE="${ANCHOR_PACKAGE:-pacman}"
 UA="${MIRROR_PROBE_UA:-docker-archlinux-mirrorlist/1 (+https://github.com/pkgforge-dev/docker-archlinux)}"
 
+# die MESSAGE [ACTION ...]
+#
+# The first argument says what is wrong. Every argument after it is printed
+# indented below it, and is what the reader does next. A message with no
+# next step leaves the reader to work it out from the source.
 die() {
-  echo "resolve-anchor: $*" >&2
+  echo "resolve-anchor: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
   exit 1
 }
 
@@ -72,4 +82,7 @@ while IFS= read -r server; do
   echo "resolve-anchor: $ANCHOR_PACKAGE not found in $url/core.db, trying the next server" >&2
 done < <(awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); print }' "$list")
 
-die "could not resolve the $ANCHOR_PACKAGE version for $dir from any server in rootfs/$dir/etc/pacman.d/mirrorlist"
+die "could not resolve the $ANCHOR_PACKAGE version for $dir from any server in rootfs/$dir/etc/pacman.d/mirrorlist" \
+  "every server in that list was tried and none served a readable core database" \
+  "probe them with: bash tests/run.sh static" \
+  "regenerate the list with: scripts/gen-mirrorlist $dir"

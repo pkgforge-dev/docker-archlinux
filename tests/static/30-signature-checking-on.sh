@@ -12,7 +12,8 @@ set -euo pipefail
 confs="$(find "$REPO_ROOT/rootfs" -type f -name pacman.conf | sort)"
 
 if [ -z "$confs" ]; then
-  fail "at least one shipped pacman.conf exists" "searched: $REPO_ROOT/rootfs"
+  fail "at least one shipped pacman.conf exists" "searched: $REPO_ROOT/rootfs" \
+    "reproduce: ls rootfs/*/etc/pacman.conf"
   summary
   exit 1
 fi
@@ -40,7 +41,8 @@ while IFS= read -r conf; do
   else
     fail "$rel sets SigLevel = Required" \
       "found: $siglevel" \
-      "the first token after = must be Required"
+      "the first token after = must be Required" \
+      "reproduce: grep -n SigLevel $rel"
   fi
 done <<< "$confs"
 

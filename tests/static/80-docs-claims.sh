@@ -24,14 +24,16 @@ EXAMPLES="$REPO_ROOT/examples"
 if [ ! -d "$EXAMPLES" ]; then
   fail "examples/ exists" \
     "expected: $EXAMPLES" \
-    "the examples are what stop the same question being asked repeatedly"
+    "the examples are what stop the same question being asked repeatedly" \
+    "reproduce: ls examples"
   summary
   exit 1
 fi
 
 shell_examples="$(find "$EXAMPLES" -maxdepth 1 -type f -name '*.sh' | sort)"
 if [ -z "$shell_examples" ]; then
-  fail "examples/ holds at least one shell example" "searched: $EXAMPLES/*.sh"
+  fail "examples/ holds at least one shell example" "searched: $EXAMPLES/*.sh" \
+    "reproduce: ls examples/*.sh"
 else
   bad=0
   n=0
@@ -79,7 +81,8 @@ if [ -n "$shell_examples" ]; then
     fail "no example sets pipefail alongside a pipeline that exits early" \
       "found at:$trapped" \
       "head closing the pipe makes the producer take SIGPIPE, and pipefail turns that into 141" \
-      "drop pipefail in an example, or do not pipe into head"
+      "drop pipefail in an example, or do not pipe into head" \
+      "reproduce: grep -nE 'set .*pipefail' examples/*.sh"
   fi
 fi
 
@@ -123,7 +126,8 @@ if [ -f "$work/index" ]; then
     if ! err="$(bash -n "$file" 2>&1)"; then
       fail "$doc bash block $num parses" \
         "bash -n said: $(printf '%s\n' "$err" | awk 'NR == 1')" \
-        "first line of the block: $(head -1 "$file")"
+        "first line of the block: $(head -1 "$file")" \
+        "reproduce: bash -n $file, where the block is $doc block $num"
       bad_blocks=$((bad_blocks + 1))
     fi
   done < "$work/index"
@@ -131,7 +135,8 @@ fi
 
 if [ "$total_blocks" -eq 0 ]; then
   fail "the documentation carries at least one bash block" \
-    "no \`\`\`bash fence found in README.md, examples/README.md or tests/README.md"
+    "no \`\`\`bash fence found in README.md, examples/README.md or tests/README.md" \
+    "reproduce: grep -n '\`\`\`bash' README.md examples/README.md tests/README.md"
 elif [ "$bad_blocks" -eq 0 ]; then
   ok "all $total_blocks documented bash blocks parse"
 fi
@@ -149,7 +154,8 @@ if [ -f "$readme" ]; then
   if [ -n "$wrong" ]; then
     fail "README does not link to github.com/pkgforge/docker-archlinux" \
       "found: $(printf '%s\n' "$wrong" | awk 'NR == 1')" \
-      "that path is a 404, the repository is pkgforge-dev/docker-archlinux"
+      "that path is a 404, the repository is pkgforge-dev/docker-archlinux" \
+      "reproduce: grep -n 'pkgforge/docker-archlinux' README.md"
   else
     ok "README links to the repository that exists"
   fi
@@ -194,7 +200,8 @@ if [ -x "$TAGS" ] && [ -f "$readme" ]; then
   if [ -z "$documented" ]; then
     fail "the README documents the tag names" \
       "no tag table rows matched" \
-      "expected rows shaped: | \`linux/amd64\` | \`x86_64\`, \`amd64\` |"
+      "expected rows shaped: | \`linux/amd64\` | \`x86_64\`, \`amd64\` |" \
+      "reproduce: grep -n 'linux/amd64' README.md"
   else
     missing=""
     while IFS= read -r d; do
@@ -223,7 +230,8 @@ if [ -x "$TAGS" ] && [ -f "$readme" ]; then
     else
       fail "every tag name scripts/tag-names emits is documented in the README" \
         "created but undocumented:$undocumented" \
-        "a published tag nobody documents is a tag nobody can rely on"
+        "a published tag nobody documents is a tag nobody can rely on" \
+        "reproduce: scripts/tag-names arch amd64 2026.01.01 1.0.0, and document each name in the README tag table"
     fi
   fi
 fi

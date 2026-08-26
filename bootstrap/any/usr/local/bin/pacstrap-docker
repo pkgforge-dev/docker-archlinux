@@ -52,5 +52,10 @@ trap 'rm -f "$newroot/dev/null"' EXIT
 
 info "Installing packages at $newroot..."
 if ! pacman -r "$newroot" -Sy --noconfirm "${pacman_args[@]}"; then
-  die 'Failed to install packages into new root'
+  error 'pacman printed the reason above. The three inputs it used, all from this'
+  error 'build stage rather than from the target root:'
+  error '  packages  /etc/bootstrap-packages.txt'
+  error '  mirrors   /etc/pacman.d/mirrorlist'
+  error '  config    /etc/pacman.conf, which sets Architecture and SigLevel'
+  die "Failed to install packages into $newroot"
 fi

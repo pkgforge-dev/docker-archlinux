@@ -14,7 +14,8 @@ set -euo pipefail
 DF="$REPO_ROOT/Dockerfile"
 
 if [ ! -f "$DF" ]; then
-  fail "Dockerfile exists" "expected: $DF"
+  fail "Dockerfile exists" "expected: $DF" \
+    "reproduce: ls Dockerfile"
   summary
   exit 1
 fi
@@ -25,7 +26,8 @@ OWN_IMAGES='(^|/)pkgforge(-dev)?/archlinux(:|@|$)'
 from_lines="$(grep_matches '^[[:space:]]*FROM[[:space:]]' "$DF")"
 
 if [ -z "$from_lines" ]; then
-  fail "Dockerfile has at least one FROM" "no uncommented FROM found in $DF"
+  fail "Dockerfile has at least one FROM" "no uncommented FROM found in $DF" \
+    "reproduce: grep -n '^FROM' Dockerfile"
   summary
   exit 1
 fi
@@ -52,7 +54,8 @@ while IFS= read -r entry; do
   if [ "$image" != "scratch" ] && ! printf '%s\n' "$image" | grep -qE '@sha256:[0-9a-f]{64}'; then
     fail "every base image is pinned by digest" \
       "Dockerfile:$lineno names $image" \
-      "a tag is not a pin, see standing policy 10"
+      "a tag is not a pin, see standing policy 10" \
+      "reproduce: scripts/check-image-pins --apply, which rewrites the digest and keeps the tag marker"
     unpinned=1
   fi
 done <<< "$from_lines"

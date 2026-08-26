@@ -35,8 +35,18 @@ CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-10}"
 MAX_SYNC_DELAY="${MAX_SYNC_DELAY:-86400}"
 MIN_COMPLETION="${MIN_COMPLETION:-1}"
 
+# die MESSAGE [ACTION ...]
+#
+# The first argument says what is wrong. Every argument after it is printed
+# indented below it, and is what the reader does next. A message with no
+# next step leaves the reader to work it out from the source.
 die() {
-  echo "gen-mirrorlist: $*" >&2
+  echo "gen-mirrorlist: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
   exit 1
 }
 
@@ -138,11 +148,16 @@ pool_amd64() {
   if ! curl -sSfL -A "$UA" --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
        -o "$json" "$ARCH_STATUS_JSON"; then
     rm -f "$json"
-    die "cannot fetch $ARCH_STATUS_JSON"
+    die "cannot fetch $ARCH_STATUS_JSON" \
+      "this endpoint answers 429 under load and has been unreachable during incidents" \
+      "nothing was written, so the shipped lists are unchanged. Re-run later." \
+      "check it with: curl -sS -o /dev/null -w %{http_code} $ARCH_STATUS_JSON"
   fi
   if ! jq -e '.urls | length > 0' "$json" >/dev/null; then
     rm -f "$json"
-    die "$ARCH_STATUS_JSON returned no mirrors"
+    die "$ARCH_STATUS_JSON returned no mirrors" \
+      "the endpoint answered and carried an empty list, so it is mid-update or degraded" \
+      "check it with: curl -sSL $ARCH_STATUS_JSON | jq '.urls | length'"
   fi
   # Filtering on sync completion and sync delay follows the reference. The
   # active field is this repository's own addition.
@@ -167,7 +182,9 @@ pool_alarm() {
   if ! curl -sSfL -A "$UA" --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
        -o "$out" "$ALARM_POOL_URL"; then
     rm -f "$out"
-    die "cannot fetch $ALARM_POOL_URL"
+    die "cannot fetch $ALARM_POOL_URL" \
+      "nothing was written, so the shipped lists are unchanged. Re-run later." \
+      "set ALARM_POOL_URL if upstream moved the file"
   fi
   # Commented entries are candidates. Upstream ships the regional mirrors
   # commented out and only the balanced endpoint active.
@@ -212,7 +229,9 @@ generate() {
   if [ -n "$dead_anchors" ]; then
     echo "gen-mirrorlist: an anchor did not answer for $dir:" >&2
     printf '  %s\n' "$dead_anchors" >&2
-    die "refusing to generate a list whose anchor is down"
+    die "refusing to generate a list whose anchor is down" \
+      "the servers are named above. An anchor is a well known mirror and is never ranked away" \
+      "if one is gone for good, remove it from mirrors/$dir.anchors and say why in the commit"
   fi
   echo "    anchors: $anchor_count verified"
 
@@ -247,7 +266,9 @@ generate() {
 
   local total=$((anchor_count + live))
   if [ "$total" -lt "$MIN_SERVERS" ]; then
-    die "only $total server(s) reachable for $dir, the floor is $MIN_SERVERS, leaving $dest alone"
+    die "only $total server(s) reachable for $dir, the floor is $MIN_SERVERS, leaving $dest alone" \
+      "every probe result is printed above, with the code each server returned" \
+      "widen the candidate pool, or re-run when the mirrors are back"
   fi
 
   local tmp
@@ -278,7 +299,9 @@ generate() {
   written="$(awk '/^Server/ { n++ } END { print n + 0 }' "$tmp")"
   if [ "$written" -lt "$MIN_SERVERS" ]; then
     rm -f "$tmp"
-    die "the generated list for $dir has $written server(s), the floor is $MIN_SERVERS"
+    die "the generated list for $dir has $written server(s), the floor is $MIN_SERVERS" \
+      "mirrors/$dir.anchors is written unconditionally, so a count this low means it lists too few" \
+      "check it with: awk '/^Server/ { c++ } END { print c + 0 }' mirrors/$dir.anchors"
   fi
 
   mv "$tmp" "$dest"

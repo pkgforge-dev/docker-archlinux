@@ -91,7 +91,8 @@ else
     "head closing the pipe makes the producer take SIGPIPE, which pipefail reports as 141" \
     "counting with a grep flag exits 1 on zero, which under set -e stops the script silently" \
     "count lines with: awk '/pattern/ { n++ } END { print n + 0 }' FILE" \
-    "limit output with: awk -v n=N 'NR <= n' instead of head -n N"
+    "limit output with: awk -v n=N 'NR <= n' instead of head -n N" \
+    "reproduce: bash tests/run.sh static, which names each file and line"
   while IFS= read -r t; do
     [ -n "$t" ] && diag "$t"
   done <<< "$trapped"
@@ -125,7 +126,8 @@ elif [ -z "$wf_trapped" ]; then
 else
   fail "none of the $wf_scanned workflows uses a pipeline that fails on a normal result" \
     "run blocks execute under -eo pipefail even when the block does not set it" \
-    "count lines with: awk '/pattern/ { n++ } END { print n + 0 }' FILE"
+    "count lines with: awk '/pattern/ { n++ } END { print n + 0 }' FILE" \
+    "reproduce: bash tests/run.sh static, which names each file and line"
   while IFS= read -r t; do
     [ -n "$t" ] && diag "$t"
   done <<< "$wf_trapped"

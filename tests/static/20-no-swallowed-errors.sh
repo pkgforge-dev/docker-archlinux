@@ -36,7 +36,8 @@ scan_targets() {
 
 targets="$(scan_targets)"
 if [ -z "$targets" ]; then
-  fail "there is something to scan" "no workflows, Dockerfile or scripts found"
+  fail "there is something to scan" "no workflows, Dockerfile or scripts found" \
+    "reproduce: ls .github/workflows Dockerfile scripts"
   summary
   exit 1
 fi
@@ -54,7 +55,8 @@ if [ -f "$ALLOW" ]; then
     if [ -z "$path" ] || [ -z "$needle" ] || [ -z "$reason" ]; then
       fail "every allowlist entry has a path, a pattern and a reason" \
         "malformed: $raw" \
-        "expected: path | fixed string | reason"
+        "expected: path | fixed string | reason" \
+        "reproduce: cat tests/policy/swallowed-errors.allow"
       continue
     fi
     allow_paths+=("$path")
@@ -106,7 +108,8 @@ while [ "$i" -lt "${#allow_paths[@]}" ]; do
   if [ "${allow_used[$i]}" -eq 0 ]; then
     fail "allowlist entry is still needed" \
       "unused: ${allow_paths[$i]} | ${allow_needles[$i]}" \
-      "the construct is gone, so remove the exception"
+      "the construct is gone, so remove the exception" \
+      "reproduce: remove the line from tests/policy/swallowed-errors.allow"
     stale=1
   fi
   i=$((i + 1))

@@ -23,6 +23,7 @@ fault, and pointing `REPO_ROOT` at that directory.
 | `05` | `grep_matches` returns 0 instead of 2 on a file it cannot read | `not ok 9 - grep_matches returns 2 when the file cannot be read` |
 | `05` | `fail` stops calling `diag`, so an assertion fails with no reason printed | `not ok 3 - fail prints its diagnostics as TAP comments` |
 | `10-bootstrap-not-circular.sh` | `FROM docker.io/library/archlinux:latest`, a digest rewritten to a tag | `not ok 1 - every base image is pinned by digest` |
+| `15-actionable-failures.sh` | the `reproduce:` argument removed from one `fail` call, and the continuation backslash above it dropped | `not ok 1 - all 103 fail calls in tests/ carry a reproduce: line`, naming `tests/static/90-package-lists.sh:19` |
 | `20-no-swallowed-errors.sh` | `\|\| true` appended to the pacstrap line in the Dockerfile | `not ok 1 - no swallowed error at Dockerfile:41` |
 | `20` | `continue-on-error: true` on a workflow step | `not ok 1 - no swallowed error at .github/workflows/ci.yml:41` |
 | `25-pipeline-traps.sh` | `\| head -n "$LIMIT"` in a script that sets pipefail | `not ok 1 - none of the N pipefail scripts uses a pipeline that fails on a normal result`, naming `scripts/faulty:3` |

@@ -26,8 +26,18 @@ ANCHOR_PACKAGE="${ANCHOR_PACKAGE:-pacman}"
 UA="${MIRROR_PROBE_UA:-docker-archlinux-mirrorlist/1 (+https://github.com/pkgforge-dev/docker-archlinux)}"
 RUNTIME="${CONTAINER_RUNTIME:-}"
 
+# die MESSAGE [ACTION ...]
+#
+# The first argument says what is wrong. Every argument after it is printed
+# indented below it, and is what the reader does next. A message with no
+# next step leaves the reader to work it out from the source.
 die() {
-  echo "gen-evidence: $*" >&2
+  echo "gen-evidence: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
   exit 1
 }
 
@@ -96,7 +106,10 @@ if ! runtime run --rm --platform "$platform" "$image" \
      > "$work/local.txt" 2> "$work/local.err"; then
   echo "gen-evidence: cannot read the package database inside $image" >&2
   sed 's/^/  /' < "$work/local.err" >&2
-  die "the image must carry a readable /var/lib/pacman/local"
+  die "the image must carry a readable /var/lib/pacman/local" \
+    "the runtime error is printed above" \
+    "an image whose bootstrap installed nothing has the directory and no entries in it" \
+    "list them with: $RUNTIME run --rm --platform $platform $image sh -c 'ls /var/lib/pacman/local'"
 fi
 
 awk '
@@ -283,5 +296,7 @@ echo "    $(jq -r '.package_count' "$output") packages, anchor $ANCHOR_PACKAGE $
 if [ -n "$unresolved" ]; then
   echo "gen-evidence: these installed packages are in no repository database:" >&2
   echo "  ${unresolved%, }" >&2
-  die "the databases moved between the build and this run, so the evidence has holes"
+  die "the databases moved between the build and this run, so the evidence has holes" \
+    "the packages are named above: installed in the image, absent from every repository database" \
+    "this happens when a package is superseded between the build and this run. Re-run against the same image"
 fi

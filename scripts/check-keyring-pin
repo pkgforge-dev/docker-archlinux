@@ -21,8 +21,18 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PIN="${ALARM_KEYRING_PIN:-$REPO_ROOT/bootstrap/keyrings/archlinuxarm.pin}"
 MIRROR="${ALARM_KEYRING_MIRROR:-http://mirror.archlinuxarm.org/aarch64/core}"
 
+# die MESSAGE [ACTION ...]
+#
+# The first argument says what is wrong. Every argument after it is printed
+# indented below it, and is what the reader does next. A message with no
+# next step leaves the reader to work it out from the source.
 die() {
-  echo "check-keyring-pin: $*" >&2
+  echo "check-keyring-pin: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
   exit 1
 }
 
@@ -71,7 +81,9 @@ index="$(mktemp)"
 trap 'rm -f "$index"' EXIT
 if ! curl -sSfL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 3 \
      -o "$index" "$MIRROR/"; then
-  die "cannot list $MIRROR/"
+  die "cannot list $MIRROR/" \
+    "set ALARM_KEYRING_MIRROR to another Arch Linux ARM mirror and re-run" \
+    "check it with: curl -sS -o /dev/null -w %{http_code} $MIRROR/"
 fi
 
 # Sorted by version, newest last. The names carry a date and a pkgrel, so a
@@ -106,7 +118,9 @@ trap 'rm -f "$index"; rm -rf "$work"' EXIT
 
 if ! curl -sSfL --connect-timeout 15 --max-time 300 --retry 3 --retry-delay 3 \
      -o "$work/k.pkg" "$MIRROR/$new_pkg"; then
-  die "cannot fetch $MIRROR/$new_pkg"
+  die "cannot fetch $MIRROR/$new_pkg" \
+    "the index listed this package, so the mirror is mid-sync or the file went away between the two requests" \
+    "re-run, or set ALARM_KEYRING_MIRROR to another Arch Linux ARM mirror"
 fi
 new_sha="$(sha256sum "$work/k.pkg" | cut -d' ' -f1)"
 mkdir -p "$work/x"

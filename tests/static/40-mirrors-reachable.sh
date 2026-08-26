@@ -21,7 +21,8 @@ MIN_SERVERS=2
 
 lists="$(find "$REPO_ROOT/rootfs" -type f -path '*/etc/pacman.d/mirrorlist' | sort)"
 if [ -z "$lists" ]; then
-  fail "at least one mirrorlist exists" "searched: $REPO_ROOT/rootfs"
+  fail "at least one mirrorlist exists" "searched: $REPO_ROOT/rootfs" \
+    "reproduce: ls rootfs/*/etc/pacman.d/mirrorlist"
   summary
   exit 1
 fi
@@ -41,13 +42,15 @@ while IFS= read -r list; do
 
   # pacman substitutes $arch with the Architecture from its own config
   if [ ! -f "$conf" ]; then
-    fail "$rel has a sibling pacman.conf" "expected: rootfs/$archdir/etc/pacman.conf"
+    fail "$rel has a sibling pacman.conf" "expected: rootfs/$archdir/etc/pacman.conf" \
+      "reproduce: ls rootfs/$archdir/etc/pacman.conf"
     continue
   fi
   arch="$(awk -F= '/^[[:space:]]*Architecture[[:space:]]*=/ {gsub(/[[:space:]]/,"",$2); print $2; exit}' "$conf")"
   if [ -z "$arch" ]; then
     fail "$rel resolves \$arch from pacman.conf" \
-      "no uncommented Architecture line in rootfs/$archdir/etc/pacman.conf"
+      "no uncommented Architecture line in rootfs/$archdir/etc/pacman.conf" \
+      "reproduce: grep -n Architecture rootfs/$archdir/etc/pacman.conf"
     continue
   fi
 
@@ -64,7 +67,8 @@ while IFS= read -r list; do
     if [ "$age_days" -gt "$MAX_AGE_DAYS" ]; then
       fail "$rel is not stale" \
         "generated $gendate, which is $age_days days ago" \
-        "the bound is $MAX_AGE_DAYS days, set MIRRORLIST_MAX_AGE_DAYS to change it"
+        "the bound is $MAX_AGE_DAYS days, set MIRRORLIST_MAX_AGE_DAYS to change it" \
+        "reproduce: scripts/gen-mirrorlist $archdir"
     else
       ok "$rel was generated $gendate, $age_days days ago"
     fi
@@ -172,7 +176,8 @@ while IFS= read -r list; do
     fail "$rel keeps at least $floor reachable servers" \
       "reachable: $alive of $total" \
       "a list at or below the floor is how the riscv64 outage started" \
-      "regenerate with: scripts/gen-mirrorlist $archdir"
+      "regenerate with: scripts/gen-mirrorlist $archdir" \
+      "reproduce: awk '/^Server/ { c++ } END { print c + 0 }' $rel"
   fi
 
   dead_total=$((dead_total + dead))

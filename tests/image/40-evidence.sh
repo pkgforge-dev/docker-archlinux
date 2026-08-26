@@ -15,7 +15,8 @@ image_require
 : "${EVIDENCE:?this test needs EVIDENCE set to the evidence file for this image}"
 
 if ! command -v jq >/dev/null 2>&1; then
-  fail "jq is available" "this test reads the evidence file with jq"
+  fail "jq is available" "this test reads the evidence file with jq" \
+    "reproduce: command -v jq, and install it if it prints nothing"
   summary
   exit 1
 fi
@@ -23,13 +24,15 @@ fi
 if [ ! -f "$EVIDENCE" ]; then
   fail "the evidence file exists" \
     "expected: $EVIDENCE" \
-    "the build must write one evidence file per platform"
+    "the build must write one evidence file per platform" \
+    "reproduce: scripts/gen-evidence <arch> $IMAGE $PLATFORM $EVIDENCE, with SOURCE_COMMIT and BUILD_DATE set"
   summary
   exit 1
 fi
 
 if ! jq -e . "$EVIDENCE" >/dev/null 2>&1; then
-  fail "the evidence file is valid JSON" "path: $EVIDENCE"
+  fail "the evidence file is valid JSON" "path: $EVIDENCE" \
+    "reproduce: jq . $EVIDENCE"
   summary
   exit 1
 fi
@@ -41,7 +44,8 @@ for key in image platform digest built source_commit anchor packages; do
     ok "evidence has a top level $key"
   else
     fail "evidence has a top level $key" \
-      "keys present: $(jq -r 'keys | join(", ")' "$EVIDENCE")"
+      "keys present: $(jq -r 'keys | join(", ")' "$EVIDENCE")" \
+      "reproduce: jq -r 'keys | join(", ")' $EVIDENCE"
   fi
 done
 
@@ -52,7 +56,8 @@ if [ "$ev_platform" = "$PLATFORM" ]; then
 else
   fail "evidence platform matches the image under test" \
     "evidence says: $ev_platform" \
-    "testing: $PLATFORM"
+    "testing: $PLATFORM" \
+    "reproduce: jq -r .platform $EVIDENCE, and compare it with PLATFORM"
 fi
 
 ev_digest="$(jq -r '.digest // ""' "$EVIDENCE")"
@@ -67,7 +72,8 @@ elif [ "$ev_digest" = "$img_digest" ]; then
 else
   fail "evidence digest matches the image" \
     "evidence says: $ev_digest" \
-    "image reports: $img_digest"
+    "image reports: $img_digest" \
+    "reproduce: jq -r .digest $EVIDENCE, and compare it with $RUNTIME image inspect $IMAGE"
 fi
 
 # The source commit ties the image back to the tree that produced it.
@@ -75,7 +81,8 @@ ev_commit="$(jq -r '.source_commit // ""' "$EVIDENCE")"
 if printf '%s\n' "$ev_commit" | grep -qE '^[0-9a-f]{40}$'; then
   ok "evidence source_commit is a full commit hash"
 else
-  fail "evidence source_commit is a full commit hash" "found: $ev_commit"
+  fail "evidence source_commit is a full commit hash" "found: $ev_commit" \
+    "reproduce: jq -r .source_commit $EVIDENCE, which must be the 40 character hash the build was given"
 fi
 
 # Every package entry carries all five facts.
@@ -83,7 +90,8 @@ pkg_count="$(jq -r '.packages | length' "$EVIDENCE")"
 if [ "$pkg_count" -gt 0 ]; then
   ok "evidence records $pkg_count packages"
 else
-  fail "evidence records at least one package" "packages: $pkg_count"
+  fail "evidence records at least one package" "packages: $pkg_count" \
+    "reproduce: jq '.packages | length' $EVIDENCE"
 fi
 
 incomplete="$(jq -r '
@@ -111,14 +119,16 @@ anchor="$(jq -r '.anchor.name // ""' "$EVIDENCE")"
 anchor_ver="$(jq -r '.anchor.version // ""' "$EVIDENCE")"
 if [ -z "$anchor" ] || [ -z "$anchor_ver" ]; then
   fail "the anchor names a package and a version" \
-    "anchor.name: $anchor, anchor.version: $anchor_ver"
+    "anchor.name: $anchor, anchor.version: $anchor_ver" \
+    "reproduce: jq -r .anchor $EVIDENCE, and scripts/resolve-anchor <arch> for what it should hold"
 elif [ "$(jq -r --arg n "$anchor" --arg v "$anchor_ver" \
       '[ .packages[] | select(.name == $n and .version == $v) ] | length' "$EVIDENCE")" -gt 0 ]; then
   ok "the anchor $anchor $anchor_ver appears in the recorded packages"
 else
   fail "the anchor appears in the recorded packages" \
     "anchor: $anchor $anchor_ver" \
-    "the pinned tag family is named after this version, so it must be recorded"
+    "the pinned tag family is named after this version, so it must be recorded" \
+    "reproduce: jq -r '.packages[].name' $EVIDENCE, and look for $anchor"
 fi
 
 summary

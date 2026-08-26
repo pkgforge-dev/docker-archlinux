@@ -24,8 +24,18 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# die MESSAGE [ACTION ...]
+#
+# The first argument says what is wrong. Every argument after it is printed
+# indented below it, and is what the reader does next. A message with no
+# next step leaves the reader to work it out from the source.
 die() {
-  echo "check-image-pins: $*" >&2
+  echo "check-image-pins: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
   exit 1
 }
 
@@ -161,7 +171,9 @@ while IFS= read -r file; do
           echo "  applied"
         else
           rm -f "$tmp"
-          die "rewriting $rel:$lineno did not take, the digest is unchanged"
+          die "rewriting $rel:$lineno did not take, the digest is unchanged" \
+            "nothing was written, so the file is untouched" \
+            "edit it by hand: on $rel line $lineno, replace $have with $want"
         fi
       fi
     fi

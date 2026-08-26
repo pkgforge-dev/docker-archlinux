@@ -19,6 +19,7 @@ reproduces it. Exit status is non-zero when any assertion fails.
 | `00-workflow-branch-buildable.sh` | the workflow builds the triggering ref, through `actions/checkout` pinned to a commit hash, with no hand-clone |
 | `05-harness.sh` | `lib/harness.sh` itself: `ok` and `fail` number and count, `summary` returns non-zero when anything failed and when nothing ran, `grep_matches` tells no-match from cannot-read, `image_digest` reads a digest already in the reference. ⛔ It reports through its own counters, never the harness, because a reporter checked through itself cannot fail when the reporter is what is broken |
 | `10-bootstrap-not-circular.sh` | no `FROM` names an image this repository publishes, and every non-scratch base is pinned by digest |
+| `15-actionable-failures.sh` | every `fail` call in `tests/` carries a line starting `reproduce:`. A test that prints only what it expected leaves the reader to rebuild the command from the source |
 | `20-no-swallowed-errors.sh` | no `continue-on-error`, `\|\| true`, `set +e` or `2>/dev/null` in the workflows, the Dockerfile or `scripts/`, outside `tests/policy/swallowed-errors.allow` |
 | `25-pipeline-traps.sh` | no script that sets `pipefail`, and no workflow `run` block, pipes into `head` or counts with a `grep` count flag. Both fail on a result that is normal, and both stop the script with no message |
 | `30-signature-checking-on.sh` | every shipped `pacman.conf` sets `SigLevel = Required` and none sets any SigLevel to `Never` |
