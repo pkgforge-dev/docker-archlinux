@@ -18,6 +18,10 @@ on:
         description: Push to a scratch repository and create no public tag
         type: boolean
         default: false
+      dry_run_hub:
+        description: With dry_run, also copy to the Docker Hub scratch repository
+        type: boolean
+        default: false
   schedule:
     - cron: "30 05 * * *"  # 08:30 PM UTC everyday
 
@@ -37,6 +41,10 @@ env:
   GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/archlinux
   HUB_IMAGE: pkgforge/archlinux
   SCRATCH_IMAGE: ghcr.io/${{ github.repository_owner }}/archlinux-ci
+  # The Docker Hub side of a dry run. Copying across registries is the one part
+  # of the publish that a GHCR-only dry run cannot reach, so it needs a scratch
+  # repository of its own on the other registry.
+  HUB_SCRATCH_IMAGE: pkgforge/archlinux-ci
 
 #------------------------------------------------------------------------------------#
 jobs:
@@ -53,6 +61,7 @@ jobs:
       build_date: ${{ steps.inputs.outputs.build_date }}
       anchors: ${{ steps.inputs.outputs.anchors }}
       target_image: ${{ steps.inputs.outputs.target_image }}
+      hub_image: ${{ steps.inputs.outputs.hub_image }}
       publish_hub: ${{ steps.inputs.outputs.publish_hub }}
     steps:
       - name: Checkout
@@ -64,21 +73,43 @@ jobs:
         id: inputs
         env:
           DRY_RUN: ${{ inputs.dry_run }}
+          DRY_RUN_HUB: ${{ inputs.dry_run_hub }}
         run: |
           set -euo pipefail
           version="$(date -u +'%Y.%m.%d')"
           build_date="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "build_date=$build_date" >> "$GITHUB_OUTPUT"
+
+          # ⛔ dry_run_hub only makes sense inside a dry run. Without this guard
+          # a run with dry_run_hub alone would take the real branch and read as
+          # though it had tested something.
+          if [ "${DRY_RUN_HUB:-false}" = "true" ] && [ "${DRY_RUN:-false}" != "true" ]; then
+            echo "dry_run_hub needs dry_run. On its own it would publish to the real repositories." >&2
+            exit 1
+          fi
 
           if [ "${DRY_RUN:-false}" = "true" ]; then
-            echo "target_image=${SCRATCH_IMAGE}" >> "$GITHUB_OUTPUT"
-            echo "publish_hub=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::dry run, building into ${SCRATCH_IMAGE} and creating no public tag"
+            target_image="$SCRATCH_IMAGE"
+            hub_image="$HUB_SCRATCH_IMAGE"
+            if [ "${DRY_RUN_HUB:-false}" = "true" ]; then
+              publish_hub=true
+              echo "::notice::dry run into ${SCRATCH_IMAGE} and ${HUB_SCRATCH_IMAGE}, exercising the cross-registry copy, creating no public tag"
+            else
+              publish_hub=false
+              echo "::notice::dry run, building into ${SCRATCH_IMAGE} and creating no public tag"
+            fi
           else
-            echo "target_image=${GHCR_IMAGE}" >> "$GITHUB_OUTPUT"
-            echo "publish_hub=true" >> "$GITHUB_OUTPUT"
+            target_image="$GHCR_IMAGE"
+            hub_image="$HUB_IMAGE"
+            publish_hub=true
           fi
+
+          {
+            echo "version=$version"
+            echo "build_date=$build_date"
+            echo "target_image=$target_image"
+            echo "hub_image=$hub_image"
+            echo "publish_hub=$publish_hub"
+          } >> "$GITHUB_OUTPUT"
 
           # The anchor names the pinned tag family. The ports are not in
           # lockstep, so it is resolved per architecture.
@@ -282,6 +313,7 @@ jobs:
       - name: Create the per architecture tags
         env:
           TARGET_IMAGE: ${{ needs.resolve.outputs.target_image }}
+          HUB_TARGET: ${{ needs.resolve.outputs.hub_image }}
           PUBLISH_HUB: ${{ needs.resolve.outputs.publish_hub }}
           VERSION: ${{ needs.resolve.outputs.version }}
           ANCHORS: ${{ needs.resolve.outputs.anchors }}
@@ -289,7 +321,7 @@ jobs:
           set -euo pipefail
           images=("$TARGET_IMAGE")
           if [ "$PUBLISH_HUB" = "true" ]; then
-            images+=("$HUB_IMAGE")
+            images+=("$HUB_TARGET")
           fi
           for arch in amd64 arm64 armv7 riscv64; do
             digest_file="/tmp/digests/$arch"
@@ -312,13 +344,14 @@ jobs:
       - name: Create the index tags
         env:
           TARGET_IMAGE: ${{ needs.resolve.outputs.target_image }}
+          HUB_TARGET: ${{ needs.resolve.outputs.hub_image }}
           PUBLISH_HUB: ${{ needs.resolve.outputs.publish_hub }}
           VERSION: ${{ needs.resolve.outputs.version }}
         run: |
           set -euo pipefail
           images=("$TARGET_IMAGE")
           if [ "$PUBLISH_HUB" = "true" ]; then
-            images+=("$HUB_IMAGE")
+            images+=("$HUB_TARGET")
           fi
           sources=()
           for arch in amd64 arm64 armv7 riscv64; do
@@ -335,31 +368,52 @@ jobs:
       - name: Verify what was published
         env:
           TARGET_IMAGE: ${{ needs.resolve.outputs.target_image }}
+          HUB_TARGET: ${{ needs.resolve.outputs.hub_image }}
+          PUBLISH_HUB: ${{ needs.resolve.outputs.publish_hub }}
           VERSION: ${{ needs.resolve.outputs.version }}
         run: |
           set -euo pipefail
-          # The dated index tag carries a leading v. scripts/tag-names is the
-          # authority on the spelling, so it is asked rather than reconstructed:
-          # inspecting a tag the publish job never created would fail every run.
-          dated="$(scripts/tag-names index "$VERSION" "$TARGET_IMAGE" | grep -v ':latest$')"
-          echo "verifying $dated"
 
-          # The index must carry all four platforms. An index with a hole in it
-          # is the failure this whole topology exists to prevent.
-          got="$(docker buildx imagetools inspect "$dated" --raw \
-            | jq -r '[ .manifests[].platform
-                       | select(.os != "unknown")
-                       | .architecture + (if .variant then "/" + .variant else "" end) ]
-                     | sort | join(" ")')"
-          echo "index platforms: $got"
+          # ⛔ Both registries are verified, not just the one the digests were
+          # staged on. Copying across registries is a separate operation that can
+          # fail on its own, and until this step covered it a Docker Hub tag that
+          # never arrived, or arrived without every platform, ended a green run.
+          verify_index() {
+            local image="$1" dated got expect
+            # The dated index tag carries a leading v. scripts/tag-names is the
+            # authority on the spelling, so it is asked rather than
+            # reconstructed: inspecting a tag the publish job never created
+            # would fail every run.
+            dated="$(scripts/tag-names index "$VERSION" "$image" | grep -v ':latest$')"
+            echo "verifying $dated"
 
-          # armv7 renders as arm/v7. A bare match on arm would also match arm64,
-          # so the assertion would pass with armv7 missing and mean nothing.
-          for expect in amd64 arm64 riscv64 arm/v7; do
-            if ! grep -qw -- "$expect" <<< "$got"; then
-              echo "the index for $dated is missing $expect" >&2
-              echo "it carries: $got" >&2
-              exit 1
-            fi
-          done
-          echo "::notice::published $dated with platforms $got"
+            # The index must carry all four platforms. An index with a hole in
+            # it is the failure this whole topology exists to prevent.
+            got="$(docker buildx imagetools inspect "$dated" --raw \
+              | jq -r '[ .manifests[].platform
+                         | select(.os != "unknown")
+                         | .architecture + (if .variant then "/" + .variant else "" end) ]
+                       | sort | join(" ")')"
+            echo "index platforms: $got"
+
+            # armv7 renders as arm/v7. A bare match on arm would also match
+            # arm64, so the assertion would pass with armv7 missing and mean
+            # nothing.
+            for expect in amd64 arm64 riscv64 arm/v7; do
+              if ! grep -qw -- "$expect" <<< "$got"; then
+                echo "the index for $dated is missing $expect" >&2
+                echo "it carries: $got" >&2
+                echo "the digests were staged on ${TARGET_IMAGE}. If that index is" >&2
+                echo "complete and this one is not, the cross-registry copy is what failed." >&2
+                exit 1
+              fi
+            done
+            echo "::notice::published $dated with platforms $got"
+          }
+
+          verify_index "$TARGET_IMAGE"
+          if [ "$PUBLISH_HUB" = "true" ]; then
+            verify_index "$HUB_TARGET"
+          else
+            echo "::notice::publish_hub is false, so no Docker Hub tag was created or verified"
+          fi

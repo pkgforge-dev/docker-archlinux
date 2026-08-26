@@ -30,6 +30,10 @@ fault, and pointing `REPO_ROOT` at that directory.
 | `25` | the `grep -c` form restored at `scripts/gen-mirrorlist:278` | `not ok 1`, naming the file and line |
 | `25` | the `grep -c` form restored at `.github/workflows/freshness-mirrors.yml:47` | `not ok 2 - none of the 5 workflows uses a pipeline that fails on a normal result` |
 | `30-signature-checking-on.sh` | `SigLevel = Never` in `rootfs/riscv64/etc/pacman.conf` | `not ok 7 - does not disable signature checking`, `not ok 8 - sets SigLevel = Required` |
+| `35-publish-targets.sh` | a tag-creating step changed back to `images+=("$HUB_IMAGE")` | `not ok 4 - no tag-creating step names GHCR_IMAGE or HUB_IMAGE directly`, naming both lines |
+| `35` | `HUB_SCRATCH_IMAGE` set to `pkgforge/archlinux`, the real repository | `not ok 3 - HUB_SCRATCH_IMAGE names a different repository from HUB_IMAGE` |
+| `35` | the `dry_run_hub needs dry_run` guard deleted | `not ok 5 - the resolve step refuses dry_run_hub without dry_run` |
+| `35` | the `verify_index "$HUB_TARGET"` call deleted | `not ok 6 - the publish job verifies the index on both registries`, `matched 1 of the 2` |
 | `40-mirrors-reachable.sh` | the riscv64 list cut to one server, which is the shape that caused the outage | `not ok 11 - offers a fallback server`, `not ok 16 - keeps at least 2 reachable servers` |
 | `40` | ten of thirteen amd64 servers replaced with unresolvable hosts | `not ok 13 - keeps at least 7 reachable servers` |
 | `50-supply-chain.sh` | `actions/checkout@v7.0.1` at all three call sites | `not ok 1..3 - action is pinned to a commit hash at ...` |
