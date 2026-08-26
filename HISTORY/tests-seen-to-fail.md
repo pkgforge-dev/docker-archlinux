@@ -17,6 +17,11 @@ fault, and pointing `REPO_ROOT` at that directory.
 | --- | --- | --- |
 | `00-workflow-branch-buildable.sh` | the pre-change workflow, which hand-cloned the default branch | `not ok 1 - actions/checkout is used`, `not ok 2 - the workflow does not hand-clone the repository`, `not ok 3 - build context is the workspace` |
 | `00` | `actions/checkout@v7.0.1`, a pin rewritten back to a tag | `not ok 1 - actions/checkout is pinned to a commit hash` |
+| `05-harness.sh` | `not_ok` stops incrementing `TESTS_FAILED`, so a suite with a failing assertion exits 0 | `not ok 5 - summary returns 1 when one assertion failed` |
+| `05` | `ok` stops incrementing `TESTS_RUN` | `not ok 1`, `not ok 2`, `not ok 4`, `not ok 5`, showing `ok 0 - first` and a plan of `1..0` |
+| `05` | `summary` returns 0 instead of 1 | `not ok 5`, `not ok 6 - summary returns 1 when nothing ran at all` |
+| `05` | `grep_matches` returns 0 instead of 2 on a file it cannot read | `not ok 9 - grep_matches returns 2 when the file cannot be read` |
+| `05` | `fail` stops calling `diag`, so an assertion fails with no reason printed | `not ok 3 - fail prints its diagnostics as TAP comments` |
 | `10-bootstrap-not-circular.sh` | `FROM docker.io/library/archlinux:latest`, a digest rewritten to a tag | `not ok 1 - every base image is pinned by digest` |
 | `20-no-swallowed-errors.sh` | `\|\| true` appended to the pacstrap line in the Dockerfile | `not ok 1 - no swallowed error at Dockerfile:41` |
 | `20` | `continue-on-error: true` on a workflow step | `not ok 1 - no swallowed error at .github/workflows/ci.yml:41` |
