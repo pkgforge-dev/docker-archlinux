@@ -8,15 +8,15 @@
 Server = http://mirror.archlinuxarm.org/$arch/$repo
 
 ## Ranked by connection time, fastest first.
-Server = http://hu.mirror.archlinuxarm.org/$arch/$repo
-Server = http://fr.mirror.archlinuxarm.org/$arch/$repo
-Server = https://de3.mirror.archlinuxarm.org/$arch/$repo
-Server = https://ca.us.mirror.archlinuxarm.org/$arch/$repo
-Server = http://dk.mirror.archlinuxarm.org/$arch/$repo
-Server = http://tw.mirror.archlinuxarm.org/$arch/$repo
-Server = http://de4.mirror.archlinuxarm.org/$arch/$repo
-Server = http://de.mirror.archlinuxarm.org/$arch/$repo
-Server = http://gr.mirror.archlinuxarm.org/$arch/$repo
-Server = https://fl.us.mirror.archlinuxarm.org/$arch/$repo
 Server = http://nj.us.mirror.archlinuxarm.org/$arch/$repo
+Server = https://fl.us.mirror.archlinuxarm.org/$arch/$repo
 Server = http://tw2.mirror.archlinuxarm.org/$arch/$repo
+Server = http://de.mirror.archlinuxarm.org/$arch/$repo
+Server = http://dk.mirror.archlinuxarm.org/$arch/$repo
+Server = http://gr.mirror.archlinuxarm.org/$arch/$repo
+Server = http://fr.mirror.archlinuxarm.org/$arch/$repo
+Server = http://de4.mirror.archlinuxarm.org/$arch/$repo
+Server = http://hu.mirror.archlinuxarm.org/$arch/$repo
+Server = http://tw.mirror.archlinuxarm.org/$arch/$repo
+Server = https://ca.us.mirror.archlinuxarm.org/$arch/$repo
+Server = https://de3.mirror.archlinuxarm.org/$arch/$repo
