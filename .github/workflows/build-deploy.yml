@@ -4,104 +4,359 @@ name: 🐬 Builds ArchLinux Images for DockerHub 🐬
 #URL: https://hub.docker.com/r/pkgforge/archlinux/tags
 #For: https://github.com/pkgforge/devscripts/tree/main/Github/Runners
 #------------------------------------------------------------------------------------#
+# One job per architecture builds and pushes by digest. No tag is created there.
+# A merge job with needs: over the whole matrix creates every tag from those
+# digests, so a run that lost one architecture publishes nothing at all.
+#
+# Run it with dry_run to build against a scratch repository and create no public
+# tag. That is how a branch is tested without a consumer seeing anything.
+#------------------------------------------------------------------------------------#
 on:
-  #push:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Push to a scratch repository and create no public tag
+        type: boolean
+        default: false
   schedule:
     - cron: "30 05 * * *"  # 08:30 PM UTC everyday
+
 defaults:
   run:
     shell: bash
-    working-directory: /tmp
 
 permissions:
   contents: read
-  packages: write
+
+# A superseded scheduled run is cancelled rather than racing the newer one.
+concurrency:
+  group: build-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/archlinux
+  HUB_IMAGE: pkgforge/archlinux
+  SCRATCH_IMAGE: ghcr.io/${{ github.repository_owner }}/archlinux-ci
 
 #------------------------------------------------------------------------------------#
 jobs:
-  build-push-docker-alpine:
-    name: Push (ArchLinux) --> Docker Hub
+  #----------------------------------------------------------------------------------#
+  # Resolve every input once. Each architecture then builds against the same
+  # version, the same commit and an anchor pinned before any build started, so a
+  # run is reproducible as a unit and not only job by job.
+  #----------------------------------------------------------------------------------#
+  resolve:
+    name: Resolve inputs
     runs-on: ubuntu-latest
-
+    outputs:
+      version: ${{ steps.inputs.outputs.version }}
+      build_date: ${{ steps.inputs.outputs.build_date }}
+      anchors: ${{ steps.inputs.outputs.anchors }}
+      target_image: ${{ steps.inputs.outputs.target_image }}
+      publish_hub: ${{ steps.inputs.outputs.publish_hub }}
     steps:
-      - name: Debloat Runner
-        run: |
-          #Presets
-          set +x ; set +e
-          #--------------#
-          bash <(curl -qfsSL "https://raw.githubusercontent.com/pkgforge/devscripts/refs/heads/main/Github/Runners/debloat_ubuntu.sh")
-        continue-on-error: true
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Setup Env
+      - name: Resolve
+        id: inputs
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          #Presets
-          set +x ; set +e
-          #--------------#
-          #Docker Tags
-          DOCKER_TAG="v$(date +'%Y.%m.%d')" && export DOCKER_TAG="$DOCKER_TAG"
-          echo "DOCKER_TAG=$DOCKER_TAG" >> "${GITHUB_ENV}"
-          #GHCR Tags
-          echo "GHCR_NAME=ghcr.io/${{ github.repository_owner }}/archlinux" >> "${GITHUB_ENV}"
-          #Repo
-          mkdir -p "/tmp/ARCHLINUX" && pushd "/tmp/ARCHLINUX" >/dev/null 2>&1
-          git clone --filter="blob:none" --depth="1" "https://github.com/pkgforge-dev/docker-archlinux"
-          popd >/dev/null 2>&1
-        continue-on-error: true
+          set -euo pipefail
+          version="$(date -u +'%Y.%m.%d')"
+          build_date="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build_date=$build_date" >> "$GITHUB_OUTPUT"
 
-      - name: Update Mirrors
-        run: |
-          #Presets
-          set +x ; set +e
-          #--------------#
-          pushd "$(mktemp -d)" >/dev/null 2>&1
-           wget "https://bin.pkgforge.dev/$(uname -m)/rate-mirrors" -O "./rate-mirrors" && chmod +x "./rate-mirrors"
-           if [[ -s "./rate-mirrors" && $(stat -c%s "./rate-mirrors") -gt 10 ]]; then
-             ##Arm64/Armv7
-             pushd "$(mktemp -d)" >/dev/null 2>&1
-              wget "https://bin.pkgforge.dev/$(uname -m)/rate-mirrors" -O "./rate-mirrors" && chmod +x "./rate-mirrors"
-              "./rate-mirrors" --allow-root --disable-comments-in-file --save "./mirrors.txt" archarm
-              if [[ -s "./mirrors.txt" && $(wc -l < "./mirrors.txt") -gt 3 ]]; then
-                cat "./mirrors.txt" | tee "/tmp/ARCHLINUX/docker-archlinux/rootfs/arm64/etc/pacman.d/mirrorlist"
-                cat "./mirrors.txt" | tee "/tmp/ARCHLINUX/docker-archlinux/rootfs/armv7/etc/pacman.d/mirrorlist"
-              fi
-             popd >/dev/null 2>&1
-           fi
-          popd >/dev/null 2>&1
-        continue-on-error: true
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            echo "target_image=${SCRATCH_IMAGE}" >> "$GITHUB_OUTPUT"
+            echo "publish_hub=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::dry run, building into ${SCRATCH_IMAGE} and creating no public tag"
+          else
+            echo "target_image=${GHCR_IMAGE}" >> "$GITHUB_OUTPUT"
+            echo "publish_hub=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          # The anchor names the pinned tag family. The ports are not in
+          # lockstep, so it is resolved per architecture.
+          anchors='{'
+          sep=''
+          for arch in amd64 arm64 armv7 riscv64; do
+            anchor="$(scripts/resolve-anchor "$arch")"
+            anchors="${anchors}${sep}\"${arch}\":\"${anchor}\""
+            sep=','
+            echo "anchor for $arch: $anchor"
+          done
+          anchors="${anchors}}"
+          jq -e . <<< "$anchors" > /dev/null
+          echo "anchors=$anchors" >> "$GITHUB_OUTPUT"
+
+      - name: Check the repository before building it
+        run: tests/run.sh static
+
+  #----------------------------------------------------------------------------------#
+  # Build each architecture and push it by digest. No tag is created here.
+  #
+  # The Dockerfile runs pacman on the builder's own architecture and only the
+  # last few steps are emulated, so QEMU is set up but carries little of the
+  # work. Cache is keyed per architecture: one shared key thrashes.
+  #
+  # There is no runner debloat step. Each job now builds one architecture rather
+  # than four in one job, so the disk pressure that step existed for is much
+  # lower. ⚠ Runner disk use has not been measured on this workflow.
+  #----------------------------------------------------------------------------------#
+  build:
+    name: Build ${{ matrix.docker_arch }}
+    needs: resolve
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      # One run reports every broken architecture. The merge job still refuses
+      # unless all of them passed.
+      fail-fast: false
+      matrix:
+        include:
+          - docker_arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          # Set the ARM64_RUNNER repository variable to a native arm64 label to
+          # take this target out of emulation. ⚠ Whether this repository has
+          # access to those runners is unverified, so the default keeps QEMU.
+          - docker_arch: arm64
+            platform: linux/arm64
+            runner: ${{ vars.ARM64_RUNNER || 'ubuntu-latest' }}
+          - docker_arch: armv7
+            platform: linux/arm/v7
+            runner: ubuntu-latest
+          - docker_arch: riscv64
+            platform: linux/riscv64
+            runner: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        continue-on-error: true
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        continue-on-error: true
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: "${{ secrets.DOCKERHUB_USERNAME }}"
-          password: "${{ secrets.DOCKERHUB_TOKEN }}"
-        continue-on-error: true
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
-          username: "${{ github.actor }}"
-          password: "${{ secrets.GITHUB_TOKEN }}"
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    #https://hub.docker.com/r/pkgforge/archlinux
-      - name: Docker Build and Push (archlinux)
-        uses: docker/build-push-action@v6
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          context: "/tmp/ARCHLINUX/docker-archlinux"
-          platforms: "linux/amd64,linux/arm64,linux/arm/v7,linux/riscv64"
-          tags: |
-            pkgforge/archlinux:latest
-            pkgforge/archlinux:${{ env.DOCKER_TAG }}
-            ${{ env.GHCR_NAME }}:latest
-            ${{ env.GHCR_NAME }}:${{ env.DOCKER_TAG }}
-          push: true
-        continue-on-error: true
+          context: ${{ github.workspace }}
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            IMAGE_VERSION=${{ needs.resolve.outputs.version }}
+            SOURCE_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ needs.resolve.outputs.build_date }}
+          outputs: type=image,name=${{ needs.resolve.outputs.target_image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.docker_arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.docker_arch }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Record the evidence for what was pushed
+        env:
+          IMAGE: ${{ needs.resolve.outputs.target_image }}@${{ steps.build.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
+          DOCKER_ARCH: ${{ matrix.docker_arch }}
+          CONTAINER_RUNTIME: docker
+          SOURCE_COMMIT: ${{ github.sha }}
+          BUILD_DATE: ${{ needs.resolve.outputs.build_date }}
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE"
+          mkdir -p /tmp/evidence
+          # Which package, which version, which size, which checksum, and when
+          # it was built. A record saying the build succeeded is not evidence.
+          scripts/gen-evidence "$DOCKER_ARCH" "$IMAGE" "$PLATFORM" \
+            "/tmp/evidence/evidence-${DOCKER_ARCH}.json"
+
+      - name: Test what was actually pushed
+        env:
+          IMAGE: ${{ needs.resolve.outputs.target_image }}@${{ steps.build.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
+          CONTAINER_RUNTIME: docker
+          EVIDENCE: /tmp/evidence/evidence-${{ matrix.docker_arch }}.json
+        run: |
+          set -euo pipefail
+          # The image suite inspects without starting, so an architecture whose
+          # bootstrap installed nothing still fails with a readable assertion
+          # rather than a runc error.
+          tests/run.sh image
+
+      - name: Upload the evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: evidence-${{ matrix.docker_arch }}
+          path: /tmp/evidence/evidence-${{ matrix.docker_arch }}.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Export the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DIGEST" ]; then
+            echo "the build produced no digest" >&2
+            exit 1
+          fi
+          mkdir -p /tmp/digests
+          printf '%s' "$DIGEST" > "/tmp/digests/${{ matrix.docker_arch }}"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digest-${{ matrix.docker_arch }}
+          path: /tmp/digests/${{ matrix.docker_arch }}
+          if-no-files-found: error
+          retention-days: 1
+
+  #----------------------------------------------------------------------------------#
+  # Create every tag from the digests the matrix produced.
+  #
+  # needs: over the whole matrix is what makes a partial failure publish nothing.
+  # There is no if: always() here on purpose: one architecture failing means no
+  # tag moves, rather than an index with a hole in it.
+  #
+  # The per architecture tags are created first and the index tags last, so
+  # :latest only moves after everything else has succeeded.
+  #----------------------------------------------------------------------------------#
+  publish:
+    name: Create tags
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Login to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        if: needs.resolve.outputs.publish_hub == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create the per architecture tags
+        env:
+          TARGET_IMAGE: ${{ needs.resolve.outputs.target_image }}
+          PUBLISH_HUB: ${{ needs.resolve.outputs.publish_hub }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+          ANCHORS: ${{ needs.resolve.outputs.anchors }}
+        run: |
+          set -euo pipefail
+          images=("$TARGET_IMAGE")
+          if [ "$PUBLISH_HUB" = "true" ]; then
+            images+=("$HUB_IMAGE")
+          fi
+          for arch in amd64 arm64 armv7 riscv64; do
+            digest_file="/tmp/digests/$arch"
+            if [ ! -s "$digest_file" ]; then
+              echo "no digest for $arch, refusing to tag a partial release" >&2
+              exit 1
+            fi
+            digest="$(cat "$digest_file")"
+            anchor="$(jq -er --arg a "$arch" '.[$a]' <<< "$ANCHORS")"
+            mapfile -t tags < <(scripts/tag-names arch "$arch" "$VERSION" "$anchor" "${images[@]}")
+            args=()
+            for t in "${tags[@]}"; do
+              args+=(-t "$t")
+            done
+            echo "==> $arch $digest"
+            printf '    %s\n' "${tags[@]}"
+            docker buildx imagetools create "${args[@]}" "$TARGET_IMAGE@$digest"
+          done
+
+      - name: Create the index tags
+        env:
+          TARGET_IMAGE: ${{ needs.resolve.outputs.target_image }}
+          PUBLISH_HUB: ${{ needs.resolve.outputs.publish_hub }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          images=("$TARGET_IMAGE")
+          if [ "$PUBLISH_HUB" = "true" ]; then
+            images+=("$HUB_IMAGE")
+          fi
+          sources=()
+          for arch in amd64 arm64 armv7 riscv64; do
+            sources+=("$TARGET_IMAGE@$(cat "/tmp/digests/$arch")")
+          done
+          mapfile -t tags < <(scripts/tag-names index "$VERSION" "${images[@]}")
+          args=()
+          for t in "${tags[@]}"; do
+            args+=(-t "$t")
+          done
+          printf '    %s\n' "${tags[@]}"
+          docker buildx imagetools create "${args[@]}" "${sources[@]}"
+
+      - name: Verify what was published
+        env:
+          TARGET_IMAGE: ${{ needs.resolve.outputs.target_image }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The dated index tag carries a leading v. scripts/tag-names is the
+          # authority on the spelling, so it is asked rather than reconstructed:
+          # inspecting a tag the publish job never created would fail every run.
+          dated="$(scripts/tag-names index "$VERSION" "$TARGET_IMAGE" | grep -v ':latest$')"
+          echo "verifying $dated"
+
+          # The index must carry all four platforms. An index with a hole in it
+          # is the failure this whole topology exists to prevent.
+          got="$(docker buildx imagetools inspect "$dated" --raw \
+            | jq -r '[ .manifests[].platform
+                       | select(.os != "unknown")
+                       | .architecture + (if .variant then "/" + .variant else "" end) ]
+                     | sort | join(" ")')"
+          echo "index platforms: $got"
+
+          # armv7 renders as arm/v7. A bare match on arm would also match arm64,
+          # so the assertion would pass with armv7 missing and mean nothing.
+          for expect in amd64 arm64 riscv64 arm/v7; do
+            if ! grep -qw -- "$expect" <<< "$got"; then
+              echo "the index for $dated is missing $expect" >&2
+              echo "it carries: $got" >&2
+              exit 1
+            fi
+          done
+          echo "::notice::published $dated with platforms $got"
