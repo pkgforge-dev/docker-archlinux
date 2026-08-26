@@ -1,0 +1,171 @@
+name: Freshness, Arch Linux ARM keyring
+
+# The pinned keyring package name carries its version, and Arch Linux ARM
+# removes a superseded package from the mirror. A pin that falls behind stops
+# being fetchable and every ARM build fails. This job notices before that
+# happens, applies the bump on a branch, tests it, and opens a pull request.
+#
+# A failing run here is a normal result. It means upstream moved.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 04 * * 1"  # Mondays, 04:15 UTC
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+concurrency:
+  group: freshness-keyring
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check the keyring pin
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compare the pin against the mirror
+        id: check
+        run: |
+          set -uo pipefail
+          # 0 current, 3 behind, 4 gone, 1 the check could not run.
+          scripts/check-keyring-pin | tee /tmp/check.txt
+          rc="${PIPESTATUS[0]}"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          case "$rc" in
+            0) echo "::notice::the keyring pin is current" ;;
+            3) echo "::warning::a newer keyring is published, preparing a pull request" ;;
+            4) echo "::error::the pinned keyring is gone from the mirror, ARM builds are broken now" ;;
+            *) echo "the freshness check could not run" >&2; exit 1 ;;
+          esac
+
+      - name: Apply the bump on a branch
+        if: steps.check.outputs.rc != '0'
+        id: apply
+        run: |
+          set -uo pipefail
+          branch="freshness/alarm-keyring-$(date -u +%Y%m%d)"
+          git switch -c "$branch"
+          scripts/check-keyring-pin --apply | tee /tmp/apply.txt
+          rc="${PIPESTATUS[0]}"
+          if [ "$rc" != "3" ] && [ "$rc" != "4" ]; then
+            echo "applying the bump did not report a bump, refusing to open a pull request" >&2
+            exit 1
+          fi
+          # check-keyring-pin writes the measured values straight to
+          # GITHUB_OUTPUT when it runs under Actions, so nothing is re-parsed
+          # out of its human readable output here.
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          git diff --stat
+
+      - name: Set up QEMU
+        if: steps.check.outputs.rc != '0'
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - name: Test the bump with the tests that guard a normal build
+        if: steps.check.outputs.rc != '0'
+        id: test
+        run: |
+          set -euo pipefail
+          echo "::group::static suite"
+          tests/run.sh static
+          echo "::endgroup::"
+
+          # The keyring only affects the two ARM ports. arm64 is built and
+          # inspected, because a keyring that installs but does not verify
+          # produces an empty root rather than a build error.
+          ver="$(date -u +%Y.%m.%d)"
+          docker build --platform linux/arm64 \
+            --build-arg "IMAGE_VERSION=$ver" \
+            --build-arg "SOURCE_COMMIT=${{ github.sha }}" \
+            --build-arg "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t freshness-check:arm64 .
+
+          echo "::group::image suite"
+          SOURCE_COMMIT="${{ github.sha }}" BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            scripts/gen-evidence arm64 freshness-check:arm64 linux/arm64 /tmp/evidence-arm64.json
+          IMAGE=freshness-check:arm64 PLATFORM=linux/arm64 CONTAINER_RUNTIME=docker \
+            EVIDENCE=/tmp/evidence-arm64.json tests/run.sh image
+          echo "::endgroup::"
+
+          pkgs="$(jq -r '.package_count' /tmp/evidence-arm64.json)"
+          echo "packages=$pkgs" >> "$GITHUB_OUTPUT"
+
+      - name: Open a pull request carrying the measurement
+        if: steps.check.outputs.rc != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ steps.apply.outputs.branch }}
+          OLD_PACKAGE: ${{ steps.apply.outputs.old_package }}
+          OLD_SHA: ${{ steps.apply.outputs.old_sha256 }}
+          OLD_MASTER: ${{ steps.apply.outputs.old_master }}
+          NEW_PACKAGE: ${{ steps.apply.outputs.new_package }}
+          NEW_SHA: ${{ steps.apply.outputs.new_sha256 }}
+          NEW_MASTER: ${{ steps.apply.outputs.new_master }}
+          NEW_SIZE: ${{ steps.apply.outputs.new_size }}
+          MASTER_COUNT: ${{ steps.apply.outputs.master_count }}
+          PINNED_HTTP: ${{ steps.apply.outputs.pinned_http }}
+          PACKAGES: ${{ steps.test.outputs.packages }}
+          RC: ${{ steps.check.outputs.rc }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bootstrap/keyrings/archlinuxarm.pin
+          git commit -m "keyring: pin ${NEW_PACKAGE}"
+          git push --set-upstream origin "$BRANCH"
+
+          urgency="a newer keyring is published and the pinned one still answers"
+          if [ "$RC" = "4" ]; then
+            urgency="the pinned keyring is GONE from the mirror, so ARM builds fail until this merges"
+          fi
+
+          # The printf formats are markdown. Backticks inside them are literal
+          # text for the pull request body, not shell expansions.
+          # shellcheck disable=SC2016
+          {
+            printf '## What moved\n\n'
+            printf 'Arch Linux ARM published a new `archlinuxarm-keyring`. %s\n\n' "$urgency"
+            printf '| | pinned before | pinned now |\n'
+            printf '| --- | --- | --- |\n'
+            printf '| package | `%s` | `%s` |\n' "$OLD_PACKAGE" "$NEW_PACKAGE"
+            printf '| sha256 | `%s` | `%s` |\n' "$OLD_SHA" "$NEW_SHA"
+            printf '| master fingerprint | `%s` | `%s` |\n\n' "$OLD_MASTER" "$NEW_MASTER"
+            printf 'The old package answered HTTP `%s` at check time. The new package is\n' "$PINNED_HTTP"
+            printf '`%s` bytes and lists `%s` master key(s).\n\n' "$NEW_SIZE" "$MASTER_COUNT"
+            printf 'Every value above was re-derived from the package itself by\n'
+            printf '`scripts/check-keyring-pin`. None was copied from a report.\n\n'
+            printf '## What the tests did\n\n'
+            printf -- '- `tests/run.sh static`, the same suite the build job runs first.\n'
+            printf -- '- A full `linux/arm64` build from this branch.\n'
+            printf -- '- `scripts/gen-evidence` then `tests/run.sh image` against that build,\n'
+            printf '  which installed `%s` packages.\n\n' "$PACKAGES"
+            printf 'Signature verification stayed at `SigLevel = Required` throughout. A\n'
+            printf 'keyring that installs but does not verify produces an empty root, which\n'
+            printf 'the image suite fails on rather than passing.\n\n'
+            printf '## ⚠ What this job did NOT verify\n\n'
+            printf -- '- **armv7 was not built.** Only arm64 was. The two ports share this\n'
+            printf '  keyring, so a fault specific to armv7 packaging would not show here.\n'
+            printf -- '- **amd64 and riscv64 were not built.** They do not use this keyring.\n'
+            printf -- '- **The new master fingerprint was not checked against any source other\n'
+            printf '  than the package that carries it.** That is the trust model the existing\n'
+            printf '  pin uses, and it is why the sha256 is pinned alongside it.\n'
+            printf -- '- **No image was published.** The build stayed on the runner.\n'
+            printf -- '- **The mirror was read once.** A mirror mid sync can serve an older\n'
+            printf '  listing than another mirror.\n'
+          } > /tmp/body.md
+
+          title="keyring: pin ${NEW_PACKAGE}"
+          if [ "$RC" = "4" ]; then
+            title="keyring: pin ${NEW_PACKAGE} (ARM builds are broken until this merges)"
+          fi
+          gh pr create --base main --head "$BRANCH" --title "$title" --body-file /tmp/body.md

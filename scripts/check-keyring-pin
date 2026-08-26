@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+#
+# Check bootstrap/keyrings/archlinuxarm.pin against the mirror, and optionally
+# rewrite it.
+#
+#   scripts/check-keyring-pin            report only, exit 0 current, 3 behind, 4 gone
+#   scripts/check-keyring-pin --apply    rewrite the pin to what the mirror serves
+#
+# The pinned package name carries its version. Arch Linux ARM removes a
+# superseded keyring package from the mirror, so a pin that falls behind stops
+# being fetchable and the build fails. This is what notices first.
+#
+# Exit status is the result, not just success or failure:
+#   0  the pin matches the newest package on the mirror
+#   3  a newer package exists, the pinned one is still fetchable
+#   4  the pinned package is gone from the mirror, so the build is broken now
+#   1  the check itself could not run
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PIN="${ALARM_KEYRING_PIN:-$REPO_ROOT/bootstrap/keyrings/archlinuxarm.pin}"
+MIRROR="${ALARM_KEYRING_MIRROR:-http://mirror.archlinuxarm.org/aarch64/core}"
+
+die() {
+  echo "check-keyring-pin: $*" >&2
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null || die "$1 is required"
+}
+need curl
+need awk
+need sha256sum
+
+# GNU tar auto-detects the xz compression Arch Linux ARM ships. bsdtar reads it
+# too and is what the Arch build container has, so either is accepted.
+if command -v bsdtar >/dev/null; then
+  unpack() { bsdtar -xf "$1" -C "$2"; }
+elif command -v tar >/dev/null; then
+  unpack() { tar -xf "$1" -C "$2"; }
+else
+  die "one of bsdtar or tar is required"
+fi
+
+apply=0
+case "${1:-}" in
+  "") ;;
+  --apply) apply=1 ;;
+  *) die "usage: check-keyring-pin [--apply]" ;;
+esac
+
+[ -f "$PIN" ] || die "no pin file at $PIN"
+
+field() {
+  awk -F= -v k="$1" '$0 !~ /^[[:space:]]*#/ && $1 ~ k { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$PIN"
+}
+old_pkg="$(field '^[[:space:]]*package')"
+old_sha="$(field '^[[:space:]]*sha256')"
+old_fpr="$(field '^[[:space:]]*master')"
+[ -n "$old_pkg" ] && [ -n "$old_sha" ] && [ -n "$old_fpr" ] || die "$PIN is missing a value"
+
+echo "pinned package : $old_pkg"
+echo "pinned sha256  : $old_sha"
+echo "pinned master  : $old_fpr"
+
+#---------------------------------------------------------------------------#
+# What the mirror serves today
+#---------------------------------------------------------------------------#
+index="$(mktemp)"
+trap 'rm -f "$index"' EXIT
+if ! curl -sSfL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 3 \
+     -o "$index" "$MIRROR/"; then
+  die "cannot list $MIRROR/"
+fi
+
+# Sorted by version, newest last. The names carry a date and a pkgrel, so a
+# plain version sort is the right order.
+new_pkg="$(grep -oE 'archlinuxarm-keyring-[0-9][0-9a-zA-Z.-]*\.pkg\.tar\.[a-z]+' "$index" \
+  | sort -u -V | tail -n 1)"
+[ -n "$new_pkg" ] || die "no archlinuxarm-keyring package found at $MIRROR/"
+echo "mirror newest  : $new_pkg"
+
+pinned_code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 60 \
+  -L "$MIRROR/$old_pkg")"
+echo "pinned still fetchable: HTTP $pinned_code"
+
+if [ "$new_pkg" = "$old_pkg" ]; then
+  echo "result: current"
+  exit 0
+fi
+
+if [ "$pinned_code" = "200" ]; then
+  result=3
+  echo "result: behind, the pinned package is still fetchable"
+else
+  result=4
+  echo "result: GONE, the pinned package no longer answers, the build is broken now"
+fi
+
+#---------------------------------------------------------------------------#
+# Derive the new values. Never copied from the report, always re-measured.
+#---------------------------------------------------------------------------#
+work="$(mktemp -d)"
+trap 'rm -f "$index"; rm -rf "$work"' EXIT
+
+if ! curl -sSfL --connect-timeout 15 --max-time 300 --retry 3 --retry-delay 3 \
+     -o "$work/k.pkg" "$MIRROR/$new_pkg"; then
+  die "cannot fetch $MIRROR/$new_pkg"
+fi
+new_sha="$(sha256sum "$work/k.pkg" | cut -d' ' -f1)"
+mkdir -p "$work/x"
+unpack "$work/k.pkg" "$work/x"
+trusted="$work/x/usr/share/pacman/keyrings/archlinuxarm-trusted"
+[ -f "$trusted" ] || die "$new_pkg carries no archlinuxarm-trusted file"
+new_fpr="$(cut -d: -f1 < "$trusted" | head -n 1)"
+[ -n "$new_fpr" ] || die "$new_pkg lists no master key fingerprint"
+
+new_size="$(stat -c%s "$work/k.pkg")"
+master_count="$(grep -c . "$trusted")"
+
+echo "new sha256     : $new_sha"
+echo "new master     : $new_fpr"
+echo "new size       : $new_size bytes"
+echo "master keys    : $master_count"
+
+if [ "$new_fpr" != "$old_fpr" ]; then
+  echo "⚠ the master key fingerprint changes with this bump"
+fi
+
+# Machine readable, for the job that opens the pull request.
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  {
+    printf 'old_package=%s\n' "$old_pkg"
+    printf 'old_sha256=%s\n' "$old_sha"
+    printf 'old_master=%s\n' "$old_fpr"
+    printf 'new_package=%s\n' "$new_pkg"
+    printf 'new_sha256=%s\n' "$new_sha"
+    printf 'new_master=%s\n' "$new_fpr"
+    printf 'new_size=%s\n' "$new_size"
+    printf 'master_count=%s\n' "$master_count"
+    printf 'pinned_http=%s\n' "$pinned_code"
+    printf 'result=%s\n' "$result"
+  } >> "$GITHUB_OUTPUT"
+fi
+
+if [ "$apply" -eq 0 ]; then
+  exit "$result"
+fi
+
+#---------------------------------------------------------------------------#
+# Apply
+#
+# Written to a temporary file and moved into place, so an interrupted run
+# cannot leave a half written pin behind.
+#---------------------------------------------------------------------------#
+tmp="$(mktemp)"
+awk -v pkg="$new_pkg" -v sha="$new_sha" -v fpr="$new_fpr" -v today="$(date -u +%Y-%m-%d)" '
+  /^[[:space:]]*package[[:space:]]*=/ { printf "package = %s\n", pkg; next }
+  /^[[:space:]]*sha256[[:space:]]*=/  { printf "sha256  = %s\n", sha; next }
+  /^[[:space:]]*master[[:space:]]*=/  { printf "master  = %s\n", fpr; next }
+  /^# Adopted .* Verified on that date against$/ { printf "# Adopted %s. Verified on that date against\n", today; next }
+  { print }
+' "$PIN" > "$tmp"
+
+for k in package sha256 master; do
+  grep -qE "^[[:space:]]*${k}[[:space:]]*=" "$tmp" || die "the rewritten pin lost its $k line"
+done
+
+mv "$tmp" "$PIN"
+chmod 0644 "$PIN"
+echo "applied: $PIN now pins $new_pkg"
+exit "$result"
