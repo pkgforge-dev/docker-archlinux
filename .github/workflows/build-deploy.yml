@@ -181,7 +181,10 @@ jobs:
           BUILD_DATE: ${{ needs.resolve.outputs.build_date }}
         run: |
           set -euo pipefail
-          docker pull "$IMAGE"
+          # --platform is required. provenance and sbom wrap the pushed
+          # manifest in an index, so a bare pull selects the runner's own
+          # architecture and fails with "no matching manifest for linux/amd64".
+          docker pull --platform "$PLATFORM" "$IMAGE"
           mkdir -p /tmp/evidence
           # Which package, which version, which size, which checksum, and when
           # it was built. A record saying the build succeeded is not evidence.
