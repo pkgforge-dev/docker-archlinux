@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+#
+# Write the evidence file for one built image.
+#
+#   scripts/gen-evidence <docker-arch> <image> <platform> <output>
+#
+# A record that says "built successfully" is not evidence. This records which
+# package, which version, which size, which checksum and when it was built, for
+# every package in the image, so a reader can tell what was in an image without
+# having the image.
+#
+# The package set comes from the image's own pacman database, so it is what was
+# installed rather than what was requested. The size, the checksum and the build
+# date come from the repository databases, because the local database does not
+# carry a checksum and does not carry the download size for every package.
+#
+# SOURCE_COMMIT and BUILD_DATE are read from the environment when set, so the
+# evidence records the same values the image labels do.
+#
+# tests/image/40-evidence.sh checks the result.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+ANCHOR_PACKAGE="${ANCHOR_PACKAGE:-pacman}"
+UA="${MIRROR_PROBE_UA:-docker-archlinux-mirrorlist/1 (+https://github.com/pkgforge-dev/docker-archlinux)}"
+RUNTIME="${CONTAINER_RUNTIME:-}"
+
+# die MESSAGE [ACTION ...]
+#
+# The first argument says what is wrong. Every argument after it is printed
+# indented below it, and is what the reader does next. A message with no
+# next step leaves the reader to work it out from the source.
+die() {
+  echo "gen-evidence: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null || die "$1 is required"
+}
+need curl
+need awk
+need jq
+need tar
+
+[ "$#" -eq 4 ] || die "usage: gen-evidence <docker-arch> <image> <platform> <output>"
+dir="$1"
+image="$2"
+platform="$3"
+output="$4"
+
+if [ -z "$RUNTIME" ]; then
+  if command -v podman >/dev/null; then
+    RUNTIME=podman
+  elif command -v docker >/dev/null; then
+    RUNTIME=docker
+  else
+    die "no container runtime found, set CONTAINER_RUNTIME"
+  fi
+fi
+# podman and docker on Windows are native binaries and do not read MSYS paths,
+# so path conversion is disabled for their arguments. It is scoped to this one
+# wrapper rather than exported: curl and tar in this script take MSYS paths and
+# break if conversion is switched off for them too.
+runtime() {
+  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "$RUNTIME" "$@"
+}
+
+conf="$REPO_ROOT/rootfs/$dir/etc/pacman.conf"
+list="$REPO_ROOT/rootfs/$dir/etc/pacman.d/mirrorlist"
+[ -f "$conf" ] || die "no pacman.conf for $dir"
+[ -f "$list" ] || die "no mirrorlist for $dir"
+
+arch="$(awk -F= '/^[[:space:]]*Architecture[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$conf")"
+[ -n "$arch" ] || die "$conf has no Architecture line"
+
+# The repositories this architecture actually enables. An evidence file that
+# looked in the wrong set would silently miss packages.
+repos="$(awk '/^[[:space:]]*\[/ { name = $0
+                                  gsub(/^[[:space:]]*\[|\][[:space:]]*$/, "", name)
+                                  if (name != "options") print name }' "$conf")"
+[ -n "$repos" ] || die "$conf enables no repository"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+#---------------------------------------------------------------------------#
+# 1. what is installed, read from the image's own database
+#
+# The image is run rather than inspected. Evidence is generated for an image
+# that already passed the shell check, so a root that cannot execute is a build
+# failure that has happened earlier, not a case to handle here.
+#---------------------------------------------------------------------------#
+echo "==> reading the installed set from $image" >&2
+# shellcheck disable=SC2016
+# The single quotes are deliberate. The glob and the variable are expanded by
+# the shell inside the container, against the image's own filesystem.
+if ! runtime run --rm --platform "$platform" "$image" \
+     sh -c 'for d in /var/lib/pacman/local/*/desc; do [ -e "$d" ] && cat "$d" && echo "%%END%%"; done' \
+     > "$work/local.txt" 2> "$work/local.err"; then
+  echo "gen-evidence: cannot read the package database inside $image" >&2
+  sed 's/^/  /' < "$work/local.err" >&2
+  die "the image must carry a readable /var/lib/pacman/local" \
+    "the runtime error is printed above" \
+    "an image whose bootstrap installed nothing has the directory and no entries in it" \
+    "list them with: $RUNTIME run --rm --platform $platform $image sh -c 'ls /var/lib/pacman/local'"
+fi
+
+awk '
+  /^%NAME%$/     { getline; name = $0; next }
+  /^%VERSION%$/  { getline; version = $0; next }
+  /^%%END%%$/    { if (name != "" && version != "") print name "\t" version
+                   name = ""; version = ""; next }
+' "$work/local.txt" | sort > "$work/installed.tsv"
+
+installed_count="$(awk 'NF' "$work/installed.tsv" | wc -l | tr -d '[:space:]')"
+[ "$installed_count" -gt 0 ] || die "no installed packages found in $image"
+echo "    $installed_count packages installed" >&2
+
+#---------------------------------------------------------------------------#
+# 2. what the repositories say about those artefacts
+#
+# Each repository database is tried against every server in turn. One mirror
+# being mid sync must not decide the evidence for a whole release.
+#---------------------------------------------------------------------------#
+: > "$work/repo.tsv"
+for repo in $repos; do
+  got=0
+  while IFS= read -r server; do
+    [ -n "$server" ] || continue
+    url="${server//\$repo/$repo}"
+    url="${url//\$arch/$arch}"
+    db="$work/$repo.db"
+    if ! fetch_error="$(curl -sSL -A "$UA" --connect-timeout 10 --max-time 300 \
+        -o "$db" "$url/$repo.db" 2>&1)"; then
+      echo "gen-evidence: cannot fetch $url/$repo.db: ${fetch_error:-no error text}" >&2
+      rm -f "$db"
+      continue
+    fi
+
+    # The desc members are streamed rather than extracted. extra carries
+    # roughly 15000 of them, and writing that many small files costs minutes
+    # where the stream costs seconds. %FILENAME% opens every record.
+    if ! descs="$(tar -xzOf "$db" --wildcards '*/desc' 2>&1 >"$work/desc.txt")"; then
+      echo "gen-evidence: $url/$repo.db is not a readable gzip archive: ${descs:-no error text}" >&2
+      rm -f "$db" "$work/desc.txt"
+      continue
+    fi
+    rm -f "$db"
+
+    awk '
+      function flush() {
+        if (name != "" && version != "") {
+          printf "%s\t%s\t%s\t%s\t%s\t%s\n", name, version,
+                 (csize == "" ? "-" : csize),
+                 (isize == "" ? "-" : isize),
+                 (sha == "" ? "-" : sha),
+                 (built == "" ? "-" : built)
+        }
+        name = ""; version = ""; csize = ""; isize = ""; sha = ""; built = ""
+      }
+      /^%FILENAME%$/  { flush(); next }
+      /^%NAME%$/      { getline; name = $0; next }
+      /^%VERSION%$/   { getline; version = $0; next }
+      /^%CSIZE%$/     { getline; csize = $0; next }
+      /^%ISIZE%$/     { getline; isize = $0; next }
+      /^%SHA256SUM%$/ { getline; sha = $0; next }
+      /^%BUILDDATE%$/ { getline; built = $0; next }
+      END { flush() }
+    ' "$work/desc.txt" >> "$work/repo.tsv"
+    rm -f "$work/desc.txt"
+    got=1
+    break
+  done < <(awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); print }' "$list")
+
+  [ "$got" -eq 1 ] || die "could not fetch the $repo database for $dir from any server in rootfs/$dir/etc/pacman.d/mirrorlist"
+  echo "    $repo database read" >&2
+done
+
+#---------------------------------------------------------------------------#
+# 3. join, and refuse to invent anything that is missing
+#
+# A package installed in the image but absent from every repository database is
+# reported by name. It means the databases moved between the build and this run,
+# and an evidence file with a hole in it is worse than none.
+#---------------------------------------------------------------------------#
+awk -F'\t' '
+  NR == FNR { key = $1 "\t" $2
+              csize[key] = $3; isize[key] = $4; sha[key] = $5; built[key] = $6
+              next }
+  { key = $1 "\t" $2
+    if (key in sha) {
+      printf "%s\t%s\t%s\t%s\t%s\t%s\n", $1, $2, csize[key], isize[key], sha[key], built[key]
+    } else {
+      printf "%s\t%s\t-\t-\t-\t-\n", $1, $2
+    }
+  }
+' "$work/repo.tsv" "$work/installed.tsv" > "$work/joined.tsv"
+
+unresolved="$(awk -F'\t' '$5 == "-" { printf "%s %s, ", $1, $2 }' "$work/joined.tsv")"
+
+#---------------------------------------------------------------------------#
+# 4. emit
+#
+# A build date that upstream does not publish is written as a dash. It is never
+# guessed, and tests/image/40-evidence.sh names any entry carrying one.
+#---------------------------------------------------------------------------#
+# The two runtimes disagree about where the digest lives. podman exposes
+# .Digest; docker's inspect type has no such field and errors on it. A
+# reference that already carries @sha256: is authoritative and needs neither,
+# which is the shape CI passes in.
+resolve_digest() {
+  local ref="$1" out
+  case "$ref" in
+    *@sha256:*)
+      printf 'sha256:%s\n' "${ref##*@sha256:}"
+      return 0
+      ;;
+  esac
+  if out="$(runtime image inspect "$ref" --format '{{ .Digest }}' 2>&1)"; then
+    if [ -n "$out" ] && [ "$out" != "<no value>" ]; then
+      printf '%s\n' "$out"
+      return 0
+    fi
+  fi
+  if out="$(runtime image inspect "$ref" --format '{{ index .RepoDigests 0 }}' 2>&1)"; then
+    case "$out" in
+      *@sha256:*)
+        printf 'sha256:%s\n' "${out##*@sha256:}"
+        return 0
+        ;;
+    esac
+  fi
+  return 0
+}
+digest="$(resolve_digest "$image")"
+# shellcheck disable=SC2016
+# Expanded inside the container, against the image's own os-release.
+version_id="$(runtime run --rm --platform "$platform" "$image" \
+  sh -c '. /etc/os-release; printf "%s\n" "${VERSION_ID:-}"')"
+
+anchor_version="$(awk -F'\t' -v p="$ANCHOR_PACKAGE" '$1 == p { print $2; exit }' "$work/joined.tsv")"
+[ -n "$anchor_version" ] || die "the anchor package $ANCHOR_PACKAGE is not installed in $image"
+
+jq -n \
+  --arg image "$image" \
+  --arg platform "$platform" \
+  --arg digest "${digest:--}" \
+  --arg built "${BUILD_DATE:--}" \
+  --arg source_commit "${SOURCE_COMMIT:--}" \
+  --arg version "${version_id:--}" \
+  --arg arch "$arch" \
+  --arg docker_arch "$dir" \
+  --arg anchor_name "$ANCHOR_PACKAGE" \
+  --arg anchor_version "$anchor_version" \
+  --rawfile packages "$work/joined.tsv" \
+  '{
+     image: $image,
+     platform: $platform,
+     digest: $digest,
+     built: $built,
+     source_commit: $source_commit,
+     version_id: $version,
+     architecture: $arch,
+     docker_architecture: $docker_arch,
+     anchor: { name: $anchor_name, version: $anchor_version },
+     packages: (
+       $packages
+       | split("\n")
+       | map(select(length > 0))
+       | map(split("\t"))
+       | map({
+           name:     .[0],
+           version:  .[1],
+           size:     (if .[2] == "-" then "-" else (.[2] | tonumber) end),
+           installed_size: (if .[3] == "-" then "-" else (.[3] | tonumber) end),
+           sha256:   .[4],
+           released: (if .[5] == "-" then "-"
+                      else (.[5] | tonumber | gmtime | strftime("%Y-%m-%d")) end)
+         })
+     )
+   }
+   | .package_count = (.packages | length)' > "$output"
+
+jq -e . "$output" > /dev/null || die "the generated evidence file is not valid JSON: $output"
+
+echo "==> wrote $output" >&2
+echo "    $(jq -r '.package_count' "$output") packages, anchor $ANCHOR_PACKAGE $anchor_version, digest ${digest:--}" >&2
+
+if [ -n "$unresolved" ]; then
+  echo "gen-evidence: these installed packages are in no repository database:" >&2
+  echo "  ${unresolved%, }" >&2
+  die "the databases moved between the build and this run, so the evidence has holes" \
+    "the packages are named above: installed in the image, absent from every repository database" \
+    "this happens when a package is superseded between the build and this run. Re-run against the same image"
+fi

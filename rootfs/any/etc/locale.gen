@@ -1,0 +1,6 @@
+# Locales generated into the image. locale-gen runs once at build time.
+#
+# Adding one needs only a line here and a locale-gen run. The image ships no
+# NoExtract rule, so the source data under usr/share/i18n is present.
+# See examples/04-add-a-locale.sh.
+en_US.UTF-8 UTF-8

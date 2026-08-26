@@ -1,0 +1,69 @@
+name: CI
+
+# What gates a pull request.
+#
+# The build workflow only runs on a schedule or a dispatch, because it pushes
+# images. This runs on every pull request and pushes nothing, so it is the check
+# branch protection can require without a pull request being able to reach the
+# registry credentials.
+#
+# It is deliberately the same suite the build job runs before building, plus the
+# two linters, so a pull request cannot be green here and red there.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Static suite and linters
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Static suite
+        run: tests/run.sh static
+
+      - name: shellcheck
+        run: |
+          set -euo pipefail
+          # Pinned by digest. A linter that silently changes what it accepts is
+          # the same class of problem as an unpinned base image.
+          # tag: stable
+          docker run --rm -v "$PWD:/mnt:ro" -w /mnt \
+            docker.io/koalaman/shellcheck@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d \
+            --shell=bash --external-sources \
+            tests/run.sh tests/lib/harness.sh tests/static/*.sh tests/image/*.sh \
+            scripts/* bootstrap/any/usr/local/bin/* examples/*.sh
+
+      - name: actionlint
+        run: |
+          set -euo pipefail
+          # -verbose names each file it reads. Exiting 0 without that line means
+          # it found no workflows, which is a pass that proves nothing.
+          #
+          # ⛔ 2>&1 is load-bearing. actionlint writes its findings to stdout and
+          # every -verbose line to stderr. Capturing stdout alone left the file
+          # empty on a clean run, so the guard below failed on every run and this
+          # job, which is the required status check, could never go green.
+          # tag: latest
+          docker run --rm -v "$PWD:/repo:ro" -w /repo \
+            docker.io/rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            -verbose 2>&1 | tee /tmp/actionlint.txt
+          grep -q 'Linting .github/workflows/' /tmp/actionlint.txt

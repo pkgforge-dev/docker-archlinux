@@ -1,0 +1,61 @@
+#!/bin/bash
+#
+# Install packages into a new root, for a container build.
+#
+# Upstream pacstrap mounts the API filesystems and runs arch-chroot, which needs
+# privileges a container build does not have and would run target architecture
+# binaries the builder cannot execute. This does the parts that apply: create
+# the directory skeleton pacman expects, provide /dev/null, and run
+# pacman -r <root> -Sy.
+#
+#   pacstrap-docker <root> <package>...
+#
+# The architecture, the mirrors and NoExtract come from /etc/pacman.conf of the
+# stage this runs in, not from <root>. pacman -r reads the running host's
+# config, which is why the Dockerfile installs the per architecture config as
+# the build stage's own /etc.
+#
+# No package is installed with a name that came from the network. The list is
+# bootstrap/<arch>/etc/bootstrap-packages.txt, copied into the image.
+
+info() {
+  echo "==> $*"
+}
+
+error() {
+  echo "==> ERROR: $*"
+} >&2
+
+die() {
+  error "$@"
+  exit 1
+}
+
+(( $# )) || die "No root directory specified"
+newroot=$1; shift
+pacman_args=("${@:-base}")
+
+if [[ $EUID -ne 0 ]]; then
+	die "This script must be run as root"
+fi
+
+info "Setting up target directory..."
+mkdir -p "$newroot"
+mkdir -p "$newroot"/{var/{cache/pacman/pkg,lib/pacman,log},dev,run,etc,tmp,sys,proc}
+chmod 0755 "$newroot"/{var,var/cache,var/cache/pacman,var/cache/pacman/pkg,var/lib,var/lib/pacman,var/log,dev,run,etc}
+chmod 1777 "$newroot"/tmp
+chmod 0555 "$newroot"/{sys,proc}
+
+info "Setting up /dev/null in new root..."
+mknod "$newroot/dev/null" c 1 3
+trap 'rm -f "$newroot/dev/null"' EXIT
+
+info "Installing packages at $newroot..."
+if ! pacman -r "$newroot" -Sy --noconfirm "${pacman_args[@]}"; then
+  error 'pacman printed the reason above. The three inputs it used, all from this'
+  error 'build stage rather than from the target root:'
+  error '  packages  /etc/bootstrap-packages.txt'
+  error '  mirrors   /etc/pacman.d/mirrorlist'
+  error '  config    /etc/pacman.conf, which sets Architecture and SigLevel'
+  die "Failed to install packages into $newroot"
+fi

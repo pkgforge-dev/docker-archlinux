@@ -1,0 +1,419 @@
+name: 🐬 Builds ArchLinux Images for DockerHub 🐬
+#REF: https://docs.docker.com/build/ci/github-actions/multi-platform/
+#SECRETS: DOCKERHUB_USERNAME || DOCKERHUB_TOKEN
+#URL: https://hub.docker.com/r/pkgforge/archlinux/tags
+#For: https://github.com/pkgforge/devscripts/tree/main/Github/Runners
+#------------------------------------------------------------------------------------#
+# One job per architecture builds and pushes by digest. No tag is created there.
+# A merge job with needs: over the whole matrix creates every tag from those
+# digests, so a run that lost one architecture publishes nothing at all.
+#
+# Run it with dry_run to build against a scratch repository and create no public
+# tag. That is how a branch is tested without a consumer seeing anything.
+#------------------------------------------------------------------------------------#
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Push to a scratch repository and create no public tag
+        type: boolean
+        default: false
+      dry_run_hub:
+        description: With dry_run, also copy to the Docker Hub scratch repository
+        type: boolean
+        default: false
+  schedule:
+    - cron: "30 05 * * *"  # 08:30 PM UTC everyday
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+# A superseded scheduled run is cancelled rather than racing the newer one.
+concurrency:
+  group: build-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/archlinux
+  HUB_IMAGE: pkgforge/archlinux
+  SCRATCH_IMAGE: ghcr.io/${{ github.repository_owner }}/archlinux-ci
+  # The Docker Hub side of a dry run. Copying across registries is the one part
+  # of the publish that a GHCR-only dry run cannot reach, so it needs a scratch
+  # repository of its own on the other registry.
+  HUB_SCRATCH_IMAGE: pkgforge/archlinux-ci
+
+#------------------------------------------------------------------------------------#
+jobs:
+  #----------------------------------------------------------------------------------#
+  # Resolve every input once. Each architecture then builds against the same
+  # version, the same commit and an anchor pinned before any build started, so a
+  # run is reproducible as a unit and not only job by job.
+  #----------------------------------------------------------------------------------#
+  resolve:
+    name: Resolve inputs
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.inputs.outputs.version }}
+      build_date: ${{ steps.inputs.outputs.build_date }}
+      anchors: ${{ steps.inputs.outputs.anchors }}
+      target_image: ${{ steps.inputs.outputs.target_image }}
+      hub_image: ${{ steps.inputs.outputs.hub_image }}
+      publish_hub: ${{ steps.inputs.outputs.publish_hub }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve
+        id: inputs
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          DRY_RUN_HUB: ${{ inputs.dry_run_hub }}
+        run: |
+          set -euo pipefail
+          version="$(date -u +'%Y.%m.%d')"
+          build_date="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+          # ⛔ dry_run_hub only makes sense inside a dry run. Without this guard
+          # a run with dry_run_hub alone would take the real branch and read as
+          # though it had tested something.
+          if [ "${DRY_RUN_HUB:-false}" = "true" ] && [ "${DRY_RUN:-false}" != "true" ]; then
+            echo "dry_run_hub needs dry_run. On its own it would publish to the real repositories." >&2
+            exit 1
+          fi
+
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            target_image="$SCRATCH_IMAGE"
+            hub_image="$HUB_SCRATCH_IMAGE"
+            if [ "${DRY_RUN_HUB:-false}" = "true" ]; then
+              publish_hub=true
+              echo "::notice::dry run into ${SCRATCH_IMAGE} and ${HUB_SCRATCH_IMAGE}, exercising the cross-registry copy, creating no public tag"
+            else
+              publish_hub=false
+              echo "::notice::dry run, building into ${SCRATCH_IMAGE} and creating no public tag"
+            fi
+          else
+            target_image="$GHCR_IMAGE"
+            hub_image="$HUB_IMAGE"
+            publish_hub=true
+          fi
+
+          {
+            echo "version=$version"
+            echo "build_date=$build_date"
+            echo "target_image=$target_image"
+            echo "hub_image=$hub_image"
+            echo "publish_hub=$publish_hub"
+          } >> "$GITHUB_OUTPUT"
+
+          # The anchor names the pinned tag family. The ports are not in
+          # lockstep, so it is resolved per architecture.
+          anchors='{'
+          sep=''
+          for arch in amd64 arm64 armv7 riscv64; do
+            anchor="$(scripts/resolve-anchor "$arch")"
+            anchors="${anchors}${sep}\"${arch}\":\"${anchor}\""
+            sep=','
+            echo "anchor for $arch: $anchor"
+          done
+          anchors="${anchors}}"
+          jq -e . <<< "$anchors" > /dev/null
+          echo "anchors=$anchors" >> "$GITHUB_OUTPUT"
+
+      - name: Check the repository before building it
+        run: tests/run.sh static
+
+  #----------------------------------------------------------------------------------#
+  # Build each architecture and push it by digest. No tag is created here.
+  #
+  # The Dockerfile runs pacman on the builder's own architecture and only the
+  # last few steps are emulated, so QEMU is set up but carries little of the
+  # work. Cache is keyed per architecture: one shared key thrashes.
+  #
+  # There is no runner debloat step. Each job now builds one architecture rather
+  # than four in one job, so the disk pressure that step existed for is much
+  # lower. ⚠ Runner disk use has not been measured on this workflow.
+  #----------------------------------------------------------------------------------#
+  build:
+    name: Build ${{ matrix.docker_arch }}
+    needs: resolve
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      # One run reports every broken architecture. The merge job still refuses
+      # unless all of them passed.
+      fail-fast: false
+      matrix:
+        include:
+          - docker_arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          # Set the ARM64_RUNNER repository variable to a native arm64 label to
+          # take this target out of emulation. ⚠ Whether this repository has
+          # access to those runners is unverified, so the default keeps QEMU.
+          - docker_arch: arm64
+            platform: linux/arm64
+            runner: ${{ vars.ARM64_RUNNER || 'ubuntu-latest' }}
+          - docker_arch: armv7
+            platform: linux/arm/v7
+            runner: ubuntu-latest
+          - docker_arch: riscv64
+            platform: linux/riscv64
+            runner: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Login to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ${{ github.workspace }}
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            IMAGE_VERSION=${{ needs.resolve.outputs.version }}
+            SOURCE_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ needs.resolve.outputs.build_date }}
+          outputs: type=image,name=${{ needs.resolve.outputs.target_image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.docker_arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.docker_arch }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Record the evidence for what was pushed
+        env:
+          IMAGE: ${{ needs.resolve.outputs.target_image }}@${{ steps.build.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
+          DOCKER_ARCH: ${{ matrix.docker_arch }}
+          CONTAINER_RUNTIME: docker
+          SOURCE_COMMIT: ${{ github.sha }}
+          BUILD_DATE: ${{ needs.resolve.outputs.build_date }}
+        run: |
+          set -euo pipefail
+          # --platform is required. provenance and sbom wrap the pushed
+          # manifest in an index, so a bare pull selects the runner's own
+          # architecture and fails with "no matching manifest for linux/amd64".
+          docker pull --platform "$PLATFORM" "$IMAGE"
+          mkdir -p /tmp/evidence
+          # Which package, which version, which size, which checksum, and when
+          # it was built. A record saying the build succeeded is not evidence.
+          scripts/gen-evidence "$DOCKER_ARCH" "$IMAGE" "$PLATFORM" \
+            "/tmp/evidence/evidence-${DOCKER_ARCH}.json"
+
+      - name: Test what was actually pushed
+        env:
+          IMAGE: ${{ needs.resolve.outputs.target_image }}@${{ steps.build.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
+          CONTAINER_RUNTIME: docker
+          EVIDENCE: /tmp/evidence/evidence-${{ matrix.docker_arch }}.json
+        run: |
+          set -euo pipefail
+          # The image suite inspects without starting, so an architecture whose
+          # bootstrap installed nothing still fails with a readable assertion
+          # rather than a runc error.
+          tests/run.sh image
+
+      - name: Upload the evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: evidence-${{ matrix.docker_arch }}
+          path: /tmp/evidence/evidence-${{ matrix.docker_arch }}.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Export the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DIGEST" ]; then
+            echo "the build produced no digest" >&2
+            exit 1
+          fi
+          mkdir -p /tmp/digests
+          printf '%s' "$DIGEST" > "/tmp/digests/${{ matrix.docker_arch }}"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digest-${{ matrix.docker_arch }}
+          path: /tmp/digests/${{ matrix.docker_arch }}
+          if-no-files-found: error
+          retention-days: 1
+
+  #----------------------------------------------------------------------------------#
+  # Create every tag from the digests the matrix produced.
+  #
+  # needs: over the whole matrix is what makes a partial failure publish nothing.
+  # There is no if: always() here on purpose: one architecture failing means no
+  # tag moves, rather than an index with a hole in it.
+  #
+  # The per architecture tags are created first and the index tags last, so
+  # :latest only moves after everything else has succeeded.
+  #----------------------------------------------------------------------------------#
+  publish:
+    name: Create tags
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Login to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        if: needs.resolve.outputs.publish_hub == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create the per architecture tags
+        env:
+          TARGET_IMAGE: ${{ needs.resolve.outputs.target_image }}
+          HUB_TARGET: ${{ needs.resolve.outputs.hub_image }}
+          PUBLISH_HUB: ${{ needs.resolve.outputs.publish_hub }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+          ANCHORS: ${{ needs.resolve.outputs.anchors }}
+        run: |
+          set -euo pipefail
+          images=("$TARGET_IMAGE")
+          if [ "$PUBLISH_HUB" = "true" ]; then
+            images+=("$HUB_TARGET")
+          fi
+          for arch in amd64 arm64 armv7 riscv64; do
+            digest_file="/tmp/digests/$arch"
+            if [ ! -s "$digest_file" ]; then
+              echo "no digest for $arch, refusing to tag a partial release" >&2
+              exit 1
+            fi
+            digest="$(cat "$digest_file")"
+            anchor="$(jq -er --arg a "$arch" '.[$a]' <<< "$ANCHORS")"
+            mapfile -t tags < <(scripts/tag-names arch "$arch" "$VERSION" "$anchor" "${images[@]}")
+            args=()
+            for t in "${tags[@]}"; do
+              args+=(-t "$t")
+            done
+            echo "==> $arch $digest"
+            printf '    %s\n' "${tags[@]}"
+            docker buildx imagetools create "${args[@]}" "$TARGET_IMAGE@$digest"
+          done
+
+      - name: Create the index tags
+        env:
+          TARGET_IMAGE: ${{ needs.resolve.outputs.target_image }}
+          HUB_TARGET: ${{ needs.resolve.outputs.hub_image }}
+          PUBLISH_HUB: ${{ needs.resolve.outputs.publish_hub }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          images=("$TARGET_IMAGE")
+          if [ "$PUBLISH_HUB" = "true" ]; then
+            images+=("$HUB_TARGET")
+          fi
+          sources=()
+          for arch in amd64 arm64 armv7 riscv64; do
+            sources+=("$TARGET_IMAGE@$(cat "/tmp/digests/$arch")")
+          done
+          mapfile -t tags < <(scripts/tag-names index "$VERSION" "${images[@]}")
+          args=()
+          for t in "${tags[@]}"; do
+            args+=(-t "$t")
+          done
+          printf '    %s\n' "${tags[@]}"
+          docker buildx imagetools create "${args[@]}" "${sources[@]}"
+
+      - name: Verify what was published
+        env:
+          TARGET_IMAGE: ${{ needs.resolve.outputs.target_image }}
+          HUB_TARGET: ${{ needs.resolve.outputs.hub_image }}
+          PUBLISH_HUB: ${{ needs.resolve.outputs.publish_hub }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # ⛔ Both registries are verified, not just the one the digests were
+          # staged on. Copying across registries is a separate operation that can
+          # fail on its own, and until this step covered it a Docker Hub tag that
+          # never arrived, or arrived without every platform, ended a green run.
+          verify_index() {
+            local image="$1" dated got expect
+            # The dated index tag carries a leading v. scripts/tag-names is the
+            # authority on the spelling, so it is asked rather than
+            # reconstructed: inspecting a tag the publish job never created
+            # would fail every run.
+            dated="$(scripts/tag-names index "$VERSION" "$image" | grep -v ':latest$')"
+            echo "verifying $dated"
+
+            # The index must carry all four platforms. An index with a hole in
+            # it is the failure this whole topology exists to prevent.
+            got="$(docker buildx imagetools inspect "$dated" --raw \
+              | jq -r '[ .manifests[].platform
+                         | select(.os != "unknown")
+                         | .architecture + (if .variant then "/" + .variant else "" end) ]
+                       | sort | join(" ")')"
+            echo "index platforms: $got"
+
+            # armv7 renders as arm/v7. A bare match on arm would also match
+            # arm64, so the assertion would pass with armv7 missing and mean
+            # nothing.
+            for expect in amd64 arm64 riscv64 arm/v7; do
+              if ! grep -qw -- "$expect" <<< "$got"; then
+                echo "the index for $dated is missing $expect" >&2
+                echo "it carries: $got" >&2
+                echo "the digests were staged on ${TARGET_IMAGE}. If that index is" >&2
+                echo "complete and this one is not, the cross-registry copy is what failed." >&2
+                exit 1
+              fi
+            done
+            echo "::notice::published $dated with platforms $got"
+          }
+
+          verify_index "$TARGET_IMAGE"
+          if [ "$PUBLISH_HUB" = "true" ]; then
+            verify_index "$HUB_TARGET"
+          else
+            echo "::notice::publish_hub is false, so no Docker Hub tag was created or verified"
+          fi

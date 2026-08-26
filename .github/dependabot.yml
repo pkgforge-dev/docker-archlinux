@@ -1,0 +1,41 @@
+version: 2
+
+# Two ecosystems, per the maintenance model: the maintainer merges a pull
+# request occasionally and otherwise does not touch this repository.
+#
+# Both pins in scope are content pins, not tags. github-actions entries are
+# commit hashes with the version in a trailing comment, and the Dockerfile FROM
+# is a sha256 digest. Dependabot updates a hash pin to the new hash and rewrites
+# the trailing comment to the new version, and updates a digest to the new
+# digest. It does not convert either back to a tag.
+#
+# ⚠ That behaviour is asserted by tests/static/50-supply-chain.sh and
+# tests/static/10-bootstrap-not-circular.sh rather than assumed: if a bot ever
+# replaces a hash with a tag, those tests fail on the bot's own pull request
+# before anyone can merge it.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: actions
+    labels:
+      - dependencies
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: docker
+    labels:
+      - dependencies

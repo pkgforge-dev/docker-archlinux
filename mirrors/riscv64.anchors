@@ -1,0 +1,4 @@
+# Well known servers, always written first and never dropped by ranking.
+#
+# riscv.mirror.pkgbuild.com is the Arch RISC-V endpoint on Arch infrastructure.
+Server = https://riscv.mirror.pkgbuild.com/repo/$repo

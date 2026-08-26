@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+#
+# Print the tags for one architecture, or for the multi architecture index.
+#
+#   scripts/tag-names arch <docker-arch> <version> <anchor> <image> [<image>...]
+#   scripts/tag-names index <version> <image> [<image>...]
+#
+# <version> is the build date, 2026.08.26 shape, written without the leading v.
+# <anchor> is the upstream version the pinned family is named after. It is the
+# pacman version, because pacman exists on every port and its version already
+# carries the commit it was built from. The ports are not in lockstep, so the
+# anchor is resolved per architecture and never shared between them.
+#
+# Five families come out of this:
+#
+#   latest                     rolling, index
+#   v<version>                 pinned by build date, index
+#   <uname -m>                 rolling, single architecture
+#   <docker arch>              rolling, single architecture
+#   <alias>-v<version>         pinned by build date, single architecture
+#   <alias>-<anchor>           pinned by upstream version, single architecture
+#
+# The uname -m spellings follow the sibling images in the organisation. The
+# docker architecture spellings are this repository's extension. Aliases share
+# one manifest, so x86_64 and amd64 are two names for one digest.
+set -euo pipefail
+
+die() {
+  echo "tag-names: $*" >&2
+  exit 1
+}
+
+# aliases_for <docker arch>
+# The first name is the uname -m spelling. riscv64 is spelled the same in both
+# families, so it is one name and not two.
+aliases_for() {
+  case "$1" in
+    amd64) printf 'x86_64 amd64\n' ;;
+    arm64) printf 'aarch64 arm64\n' ;;
+    armv7) printf 'armv7l armv7h armv7\n' ;;
+    riscv64) printf 'riscv64\n' ;;
+    *) die "unknown architecture: $1" ;;
+  esac
+}
+
+valid_tag() {
+  printf '%s' "$1" | grep -qE '^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$'
+}
+
+emit() {
+  local tag="$1"
+  shift
+  valid_tag "$tag" || die "not a valid tag: $tag"
+  local image
+  for image in "$@"; do
+    printf '%s:%s\n' "$image" "$tag"
+  done
+}
+
+mode="${1:-}"
+case "$mode" in
+  arch)
+    shift
+    [ "$#" -ge 4 ] || die "usage: tag-names arch <docker-arch> <version> <anchor> <image>..."
+    docker_arch="$1"
+    version="$2"
+    anchor="$3"
+    shift 3
+    [ -n "$version" ] || die "version is empty"
+    [ -n "$anchor" ] || die "anchor is empty"
+    # Assigned rather than expanded inline. A die inside a for list runs in a
+    # subshell, so an unknown architecture would leave the list empty and the
+    # script would exit 0 having printed nothing.
+    alias_list="$(aliases_for "$docker_arch")"
+    for alias in $alias_list; do
+      emit "$alias" "$@"
+      emit "$alias-v$version" "$@"
+      emit "$alias-$anchor" "$@"
+    done
+    ;;
+  index)
+    shift
+    [ "$#" -ge 2 ] || die "usage: tag-names index <version> <image>..."
+    version="$1"
+    shift
+    [ -n "$version" ] || die "version is empty"
+    emit "latest" "$@"
+    emit "v$version" "$@"
+    ;;
+  aliases)
+    shift
+    [ "$#" -eq 1 ] || die "usage: tag-names aliases <docker-arch>"
+    aliases_for "$1"
+    ;;
+  *)
+    die "usage: tag-names <arch|index|aliases> ..."
+    ;;
+esac
