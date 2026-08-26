@@ -94,6 +94,9 @@ REPO_ROOT="$(pwd)" IMAGE=localhost/faulta:test PLATFORM=linux/amd64 bash tests/i
 | --- | --- | --- |
 | a partial failure publishes nothing | `bootstrap/riscv64/etc/bootstrap-packages.txt` set to a package name that does not exist, on a throwaway branch | the riscv64 build fails at `Build and push by digest`, the other three still run because `fail-fast` is off, and the publish job never starts because it needs the whole matrix |
 | the actionlint guard refuses a run that read nothing | pointed actionlint at a tree holding an empty `.github/workflows`, with the `2>&1` fix in place | actionlint prints `no project was found`, the `Linting .github/workflows/` line never appears, and `grep -q` exits 1 so the step fails |
+| the cross-registry copy runs and is verified | run `33001089986`, `dry_run` and `dry_run_hub` both true | all six jobs succeeded. The publish job printed `verifying ghcr.io/pkgforge-dev/archlinux-ci:v2026.08.26` and `verifying pkgforge/archlinux-ci:v2026.08.26`, each with `index platforms: amd64 arm/v7 arm64 riscv64`. 26 tags landed on the Docker Hub scratch repository, which did not exist before the run |
+| a dry run cannot touch a real repository | the same run | both real repositories still hold 161 tags. `pkgforge/archlinux:latest` was last pushed at 17:18:47, by the earlier real publish; the scratch `:latest` moved at 18:47:52 |
+| the index check refuses an incomplete index | ran the step's own jq and grep loop against `pkgforge/archlinux-ci:amd64`, a single-architecture tag, on the real registry | `index platforms: amd64`, then `missing arm64`, `missing riscv64`, `missing arm/v7`, exit 1. The same logic against `:v2026.08.26` exits 0, so it discriminates |
 
 ⚠ **What is still not proven this way.** The publish job's cross-registry copy to
 Docker Hub cannot be exercised by a dry run, because a dry run pushes to one
