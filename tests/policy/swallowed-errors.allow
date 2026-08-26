@@ -1,0 +1,11 @@
+# Justified exceptions to the no-swallowed-errors rule.
+#
+# Format, pipe separated, three fields:
+#   <repo relative path> | <fixed string that must appear in the line> | <reason>
+#
+# A reason is required. An entry that matches nothing fails the test, so this
+# file cannot accumulate dead exceptions.
+#
+# There are no entries. Every construct that hides a failure has been removed
+# rather than excepted. Add one here only with a reason that says why the
+# failure it hides is not a failure.
