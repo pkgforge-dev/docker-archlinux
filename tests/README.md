@@ -35,9 +35,10 @@ reproduces it. Exit status is non-zero when any assertion fails.
 | `20-os-release.sh` | `/etc/os-release` exists and carries `ID` and `VERSION_ID`, and `org.opencontainers.image.version` matches `VERSION_ID` |
 | `30-ca-bundle.sh` | `/etc/ssl/certs/ca-certificates.crt` resolves and holds at least one certificate |
 | `40-evidence.sh` | the evidence file names the image, platform, digest, build time, source commit and anchor, and every package entry carries a name, version, size, sha256 and release date |
+| `50-consumer-contract.sh` | the shipped image still satisfies what the direct consumer patches: the first `SigLevel` line is the global one, `SigLevel` is `Required`, there is no multilib block, the keyring is populated, `locale-gen` and the UTF-8 charmap survive `NoExtract`, and root has no empty password field |
 
-Tests `10`, `20` and `30` create a container without starting it and copy paths
-out. An image whose bootstrap installed nothing cannot execute anything, so a
+Tests `10`, `20`, `30` and `50` create a container without starting it and copy
+paths out. An image whose bootstrap installed nothing cannot execute anything, so a
 test that ran a command inside it would fail with a runc error instead of a
 readable assertion.
 

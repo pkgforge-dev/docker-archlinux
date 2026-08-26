@@ -118,6 +118,42 @@ API, and its own mirror page recommends the single GeoIP endpoint.
 ⭐ This explains the shape of the ARM list this repository shipped, and it is the
 pool the generator now reads.
 
+### 9. Re-mined 2026-08-26, reading comments rather than titles
+
+⚠ The first pass read 62 issues by title only. This pass opened the ones bearing
+on an unreachable or slow source. Two things are new; finding 6 already carried
+the rest of issue 85.
+
+**The maintainer's ruling, verbatim from the issue 85 thread**, which finding 6
+paraphrased:
+
+> If a tool hasn't done what you asked for, it should exit with non-zero code
+> -- this is exactly our case here.
+
+The comments also carry what the title did not: the reporter's suggested
+fallback was declined because a caller cannot tell a silent fallback from a
+successful run. That is the same argument as policy 6, reached independently.
+
+**Issue 13**, closed 2021-11-21, was not in the first pass. The same source
+timing out produced a panic at `src/targets/archlinux.rs:48:10`, on an `unwrap`
+of the request result. The maintainer records it improved in `v0.6.0`.
+
+⭐ **The transferable part is the failure shape**, not the crash: a source that
+answers slowly is a different case from one that answers wrongly, and both are
+different from one that does not answer. D4 collects that class.
+
+⚠ **This repository reads both single sources**, `scripts/gen-mirrorlist:22` and
+`scripts/gen-mirrorlist:23`:
+
+```bash
+grep -n 'ARCH_STATUS_JSON\|ALARM_POOL_URL' scripts/gen-mirrorlist
+```
+
+The exposure is smaller than upstream's because the generator is not part of any
+image build, so an outage delays a monthly pull request rather than breaking a
+build, and `mirrors/<arch>.anchors` is written whatever the pool source does.
+Both are still single sources, which is D5's question rather than this one's.
+
 ## What this study did not do
 
 - No build of the crate, and no run of the binary. The mechanisms were read in
@@ -127,5 +163,7 @@ pool the generator now reads.
   line count quoted without that split is misleading.
 - The country hopping and submarine cable topology in `src/speed_test.rs` was
   read for its shape only. It is not adopted, so it was not studied in depth.
-- Pull request bodies were read for pull request 70 only.
+- Pull request bodies were read for pull request 70 only. Issue bodies and
+  comments were read for issues 13 and 85 on 2026-08-26; the remaining 60 issues
+  are still title only.
 - Nothing was written to the upstream repository. Reads only.

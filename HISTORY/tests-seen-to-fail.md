@@ -57,6 +57,23 @@ Fixtures were built for these rather than modifying a real image.
 | `40` | `anchor.version` set to a version no package carries | `not ok 14 - the anchor appears in the recorded packages` |
 | `40` | `packages` emptied | `not ok 12 - evidence records at least one package` |
 | `40` | a top level key deleted | `not ok 5 - evidence has a top level built` |
+| `50-consumer-contract.sh` | `LocalFileSigLevel` moved above the global `SigLevel` | `not ok 2 - the first SigLevel line in /etc/pacman.conf is the global one` |
+| `50` | every `SigLevel` line deleted | `not ok 2 - /etc/pacman.conf carries a SigLevel line`, `not ok 3 - SigLevel is Required in the shipped /etc/pacman.conf` |
+| `50` | a commented `#[multilib]` block appended to `/etc/pacman.conf` | `not ok 4 - /etc/pacman.conf carries no multilib block` |
+| `50` | `/etc/pacman.d/gnupg/pubring.gpg` truncated to zero bytes | `not ok 5 - the pacman keyring is populated` |
+| `50` | `/usr/bin/locale-gen` removed | `not ok 6 - locale-gen is present` |
+| `50` | `/usr/share/i18n/charmaps/UTF-8.gz` removed, the file the `!` re-include lines keep | `not ok 7 - the UTF-8 charmap survives NoExtract` |
+| `50` | root's password field emptied to `root::`, the CVE-2019-5021 shape | `not ok 8 - root has no empty password field in /etc/shadow` |
+
+The two fixtures for `50` are `.tmp/phased/Containerfile.faultA`, which carries
+six faults at once, and `.tmp/phased/Containerfile.faultB`, which deletes every
+`SigLevel` line to reach the two branches fault A cannot. All 8 assertions pass
+against the published image and 6 then 2 of them fail against the fixtures:
+
+```bash
+podman build --platform linux/amd64 -f .tmp/phased/Containerfile.faultA -t localhost/faulta:test .tmp/phased
+REPO_ROOT="$(pwd)" IMAGE=localhost/faulta:test PLATFORM=linux/amd64 bash tests/image/50-consumer-contract.sh
+```
 
 ## The workflow itself
 
