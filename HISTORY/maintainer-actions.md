@@ -1,11 +1,11 @@
 # Actions only the maintainer can take
 
-Five items. Each is proposed with the reason and the exact command, and none of
-them has been applied. Measured 2026-08-26.
+Five items, measured 2026-08-26. Item 1 is applied. The other four are proposed
+with the reason and the exact command, and none of them has been applied.
 
-## 1. Branch protection on `main`
+## 1. Branch protection on `main`  ⭐ applied
 
-There is none today:
+Before, `main` was unprotected:
 
 ```bash
 gh api repos/pkgforge-dev/docker-archlinux/branches/main/protection
@@ -14,6 +14,19 @@ gh api repos/pkgforge-dev/docker-archlinux/branches/main/protection
 ```
 Branch not protected (HTTP 404)
 ```
+
+It is now:
+
+| setting | value |
+| --- | --- |
+| required check | `Static suite and linters` |
+| branch must be up to date | yes |
+| approving reviews required | 1 |
+| stale reviews dismissed | yes |
+| enforced on admins | no |
+| force pushes | denied |
+| branch deletion | denied |
+| conversations must resolve | yes |
 
 ⛔ **A pull request currently reaches the repository's credentials and packages
 without any review.** The publish job holds `packages: write` and the Docker Hub
@@ -36,7 +49,7 @@ gh api repos/pkgforge-dev/docker-archlinux/collaborators \
 The other 16 collaborators are `read`. So a one reviewer rule draws from four
 people, which is enough for it not to block the maintainer.
 
-⭐ **The proposal**, which requires a passing build before merge and one review
+⭐ **What was applied**, requiring a passing check before merge and one review
 from someone who already has push access:
 
 ```bash
@@ -45,7 +58,7 @@ gh api -X PUT repos/pkgforge-dev/docker-archlinux/branches/main/protection \
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["Resolve inputs"]
+    "contexts": ["Static suite and linters"]
   },
   "enforce_admins": false,
   "required_pull_request_reviews": {
@@ -66,7 +79,7 @@ Why each field:
 
 | field | reason |
 | --- | --- |
-| `required_status_checks.contexts: ["Resolve inputs"]` | the static suite runs there. It is the only check that runs on every pull request quickly enough to gate one |
+| `required_status_checks.contexts: ["Static suite and linters"]` | the job in `.github/workflows/ci.yml`. ⛔ It had to be created first: the build workflow runs only on a schedule or a dispatch, so before it there was no pull request check at all, and requiring one that never runs leaves every pull request pending forever |
 | `strict: true` | a branch behind `main` has to rebase, so the suite that passed is the suite for the merged tree |
 | `enforce_admins: false` | ⚠ deliberate. With it on, an admin cannot merge a Dependabot pull request without a second admin, which is the opposite of very low maintenance |
 | `required_approving_review_count: 1` | drawn from the four above |

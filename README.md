@@ -67,6 +67,17 @@ The `uname -m` spellings follow the sibling images in the organisation. ⚠ The
 Docker platform spellings (`amd64`, `arm64`, `armv7`) are this repository's
 extension and are not an organisation convention.
 
+⚠ A single-architecture tag still records its platform, so pulling one for a
+foreign architecture needs `--platform`. Without it the runtime looks for the
+host architecture and finds nothing:
+
+```bash
+docker pull ghcr.io/pkgforge-dev/archlinux:aarch64
+# no image found in image index for architecture "amd64", variant "", OS "linux"
+
+docker pull --platform=linux/arm64 ghcr.io/pkgforge-dev/archlinux:aarch64
+```
+
 - #### What the pinned tag is pinned to
 
 `x86_64-7.1.0.r9.g54d9411-2` names the version of `pacman` that image contains.
