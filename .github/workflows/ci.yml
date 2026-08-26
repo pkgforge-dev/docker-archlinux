@@ -57,8 +57,13 @@ jobs:
           set -euo pipefail
           # -verbose names each file it reads. Exiting 0 without that line means
           # it found no workflows, which is a pass that proves nothing.
+          #
+          # ⛔ 2>&1 is load-bearing. actionlint writes its findings to stdout and
+          # every -verbose line to stderr. Capturing stdout alone left the file
+          # empty on a clean run, so the guard below failed on every run and this
+          # job, which is the required status check, could never go green.
           # tag: latest
           docker run --rm -v "$PWD:/repo:ro" -w /repo \
             docker.io/rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
-            -verbose | tee /tmp/actionlint.txt
+            -verbose 2>&1 | tee /tmp/actionlint.txt
           grep -q 'Linting .github/workflows/' /tmp/actionlint.txt

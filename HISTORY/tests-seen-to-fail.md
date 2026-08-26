@@ -89,6 +89,7 @@ REPO_ROOT="$(pwd)" IMAGE=localhost/faulta:test PLATFORM=linux/amd64 bash tests/i
 | behaviour | fault injected | result |
 | --- | --- | --- |
 | a partial failure publishes nothing | `bootstrap/riscv64/etc/bootstrap-packages.txt` set to a package name that does not exist, on a throwaway branch | the riscv64 build fails at `Build and push by digest`, the other three still run because `fail-fast` is off, and the publish job never starts because it needs the whole matrix |
+| the actionlint guard refuses a run that read nothing | pointed actionlint at a tree holding an empty `.github/workflows`, with the `2>&1` fix in place | actionlint prints `no project was found`, the `Linting .github/workflows/` line never appears, and `grep -q` exits 1 so the step fails |
 
 ⚠ **What is still not proven this way.** The publish job's cross-registry copy to
 Docker Hub cannot be exercised by a dry run, because a dry run pushes to one
