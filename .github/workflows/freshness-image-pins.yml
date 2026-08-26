@@ -1,0 +1,143 @@
+name: Freshness, pinned container images
+
+# Dependabot's docker ecosystem reads Dockerfiles. It does not read a
+# `docker run image@sha256:...` inside a workflow step, so the two linter pins
+# in ci.yml would have no watcher at all.
+#
+# This checks every digest pinned anywhere in the repository, including the
+# Dockerfile, so the Dockerfile is covered whether or not Dependabot got there
+# first. A duplicate pull request is a smaller problem than an unwatched pin.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "45 04 * * 2"  # Tuesdays, 04:45 UTC
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+concurrency:
+  group: freshness-image-pins
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check the digest pins
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compare every pin against its tag
+        id: check
+        run: |
+          set -uo pipefail
+          # 0 every pin current, 3 at least one behind, 1 the check could not run.
+          scripts/check-image-pins | tee /tmp/pins.txt
+          rc="${PIPESTATUS[0]}"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          case "$rc" in
+            0) echo "::notice::every pinned image is current" ;;
+            3) echo "::warning::at least one pinned image is behind its tag" ;;
+            *) echo "the pin check could not run" >&2; exit 1 ;;
+          esac
+
+      - name: Apply the bumps on a branch
+        if: steps.check.outputs.rc == '3'
+        id: apply
+        run: |
+          set -uo pipefail
+          branch="freshness/image-pins-$(date -u +%Y%m%d)"
+          git switch -c "$branch"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          scripts/check-image-pins --apply | tee /tmp/applied.txt
+          rc="${PIPESTATUS[0]}"
+          if [ "$rc" != "3" ]; then
+            echo "applying the bumps did not report a bump, refusing to open a pull request" >&2
+            exit 1
+          fi
+          git diff --stat
+
+      - name: Set up QEMU
+        if: steps.check.outputs.rc == '3'
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - name: Test the bumps with the tests that guard a normal build
+        if: steps.check.outputs.rc == '3'
+        id: test
+        run: |
+          set -euo pipefail
+          echo "::group::static suite"
+          tests/run.sh static
+          echo "::endgroup::"
+
+          # A base image bump changes what every architecture is built from, so
+          # one is built and inspected rather than trusting the static suite.
+          ver="$(date -u +%Y.%m.%d)"
+          docker build --platform linux/amd64 \
+            --build-arg "IMAGE_VERSION=$ver" \
+            --build-arg "SOURCE_COMMIT=${{ github.sha }}" \
+            --build-arg "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t pin-check:amd64 .
+
+          echo "::group::image suite"
+          SOURCE_COMMIT="${{ github.sha }}" BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            scripts/gen-evidence amd64 pin-check:amd64 linux/amd64 /tmp/evidence-amd64.json
+          IMAGE=pin-check:amd64 PLATFORM=linux/amd64 CONTAINER_RUNTIME=docker \
+            EVIDENCE=/tmp/evidence-amd64.json tests/run.sh image
+          echo "::endgroup::"
+
+          echo "packages=$(jq -r '.package_count' /tmp/evidence-amd64.json)" >> "$GITHUB_OUTPUT"
+          echo "anchor=$(jq -r '.anchor.version' /tmp/evidence-amd64.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Open a pull request carrying the measurement
+        if: steps.check.outputs.rc == '3'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ steps.apply.outputs.branch }}
+          PACKAGES: ${{ steps.test.outputs.packages }}
+          ANCHOR: ${{ steps.test.outputs.anchor }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "pins: bump the stale container image digests"
+          git push --set-upstream origin "$BRANCH"
+
+          # The printf formats are markdown. Backticks inside them are literal
+          # text for the pull request body, not shell expansions.
+          # shellcheck disable=SC2016
+          {
+            printf '## What moved\n\n'
+            printf 'Every digest pinned in the repository was compared against the tag it\n'
+            printf 'was cut from. `scripts/check-image-pins` reports each one:\n\n'
+            printf '```\n'
+            cat /tmp/pins.txt
+            printf '```\n\n'
+            printf 'Each new digest was read from the registry at check time, not copied\n'
+            printf 'from anywhere.\n\n'
+            printf '## What the tests did\n\n'
+            printf -- '- `tests/run.sh static`, the same suite the build job runs first.\n'
+            printf -- '- A full `linux/amd64` build from this branch.\n'
+            printf -- '- `scripts/gen-evidence` then `tests/run.sh image` against it, which\n'
+            printf '  installed `%s` packages at anchor `%s`.\n\n' "$PACKAGES" "$ANCHOR"
+            printf '## ⚠ What this job did NOT verify\n\n'
+            printf -- '- **Only amd64 was built.** arm64, armv7 and riscv64 share the base\n'
+            printf '  image, so a fault specific to one of them would not show here.\n'
+            printf -- '- **The new image contents were not reviewed.** The pin moved to what\n'
+            printf '  the tag points at now, and what changed inside it is upstream.\n'
+            printf -- '- **A linter bump was not checked for new findings.** shellcheck or\n'
+            printf '  actionlint accepting less than before shows up as a red CI run on this\n'
+            printf '  pull request, not as anything this job measured.\n'
+            printf -- '- **No image was published.** The build stayed on the runner.\n'
+          } > /tmp/body.md
+
+          gh pr create --base main --head "$BRANCH" \
+            --title "pins: bump the stale container image digests" --body-file /tmp/body.md

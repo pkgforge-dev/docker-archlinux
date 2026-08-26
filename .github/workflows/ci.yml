@@ -45,6 +45,7 @@ jobs:
           set -euo pipefail
           # Pinned by digest. A linter that silently changes what it accepts is
           # the same class of problem as an unpinned base image.
+          # tag: stable
           docker run --rm -v "$PWD:/mnt:ro" -w /mnt \
             docker.io/koalaman/shellcheck@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d \
             --shell=bash --external-sources \
@@ -56,6 +57,7 @@ jobs:
           set -euo pipefail
           # -verbose names each file it reads. Exiting 0 without that line means
           # it found no workflows, which is a pass that proves nothing.
+          # tag: latest
           docker run --rm -v "$PWD:/repo:ro" -w /repo \
             docker.io/rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
             -verbose | tee /tmp/actionlint.txt

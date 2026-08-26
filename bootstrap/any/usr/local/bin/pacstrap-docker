@@ -1,4 +1,22 @@
 #!/bin/bash
+#
+# Install packages into a new root, for a container build.
+#
+# Upstream pacstrap mounts the API filesystems and runs arch-chroot, which needs
+# privileges a container build does not have and would run target architecture
+# binaries the builder cannot execute. This does the parts that apply: create
+# the directory skeleton pacman expects, provide /dev/null, and run
+# pacman -r <root> -Sy.
+#
+#   pacstrap-docker <root> <package>...
+#
+# The architecture, the mirrors and NoExtract come from /etc/pacman.conf of the
+# stage this runs in, not from <root>. pacman -r reads the running host's
+# config, which is why the Dockerfile installs the per architecture config as
+# the build stage's own /etc.
+#
+# No package is installed with a name that came from the network. The list is
+# bootstrap/<arch>/etc/bootstrap-packages.txt, copied into the image.
 
 info() {
   echo "==> $*"

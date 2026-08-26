@@ -7,6 +7,10 @@
 # this repository publishes, so a build does not inherit the previous build's
 # defects and can be reproduced without trusting this project's own output.
 #------------------------------------------------------------------------------------#
+# scripts/check-image-pins reads the marker below and compares this digest
+# against what that tag resolves to now. A Dockerfile instruction takes no
+# trailing comment, so the marker sits on its own line directly above.
+# tag: latest
 FROM --platform=$BUILDPLATFORM docker.io/library/archlinux@sha256:b860afd5823683f7ea389ba5f00d812f4fe55f6f286dea329d2abeefa535e309 AS bootstrap
 
 ARG TARGETARCH
@@ -32,6 +36,9 @@ COPY rootfs/${TARGETARCH}${TARGETVARIANT} /rootfs
 # it from a pinned fingerprint, which is what lets SigLevel stay Required.
 RUN install-alarm-keyring
 
+# bootstrap/<arch>/etc/bootstrap-packages.txt is one package name per line and
+# carries no comments, because xargs has no comment syntax: a leading # would
+# arrive as a package named "#". tests/static/90-package-lists.sh enforces that.
 RUN <<EOS
   set -eu
   if [ ! -s /etc/bootstrap-packages.txt ]; then

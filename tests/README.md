@@ -25,6 +25,7 @@ reproduces it. Exit status is non-zero when any assertion fails.
 | `60-tag-families.sh` | `scripts/tag-names` emits every alias for each architecture on both registry names, each with a rolling, a dated and a pinned shape, plus the `latest` and `v<version>` index tags, with no alias claimed twice and an unknown architecture or empty version refused |
 | `70-executable-bits.sh` | every file the workflows and the Dockerfile invoke as a command is tracked and mode `100755` **in the git index**, which is what CI checks out |
 | `80-docs-claims.sh` | every `examples/*.sh` and every fenced `bash` block in the three README files parses, the README links to the repository that exists and names both publish targets, the documented tag names and the ones `scripts/tag-names` emits are the same set, and every path the README says is not extracted has a `NoExtract` rule |
+| `90-package-lists.sh` | every `bootstrap/<arch>/etc/bootstrap-packages.txt` holds only package names, one list exists per matrix architecture, and the two ARM ports name `archlinuxarm-keyring`. xargs has no comment syntax, so a `#` line becomes a package named `#` |
 
 ## Image suite
 
