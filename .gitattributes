@@ -1,0 +1,40 @@
+# Line endings are normalised to LF in the repository, on every platform. The
+# rule travels with the repository, so a machine configured differently still
+# produces correct commits.
+#
+# This matters here because the tree ships files that Linux parses directly.
+# A CRLF in bootstrap/any/usr/local/bin/pacstrap-docker turns its shebang into
+# "/bin/bash\r", which fails inside the image as "bad interpreter". pacman
+# reads the .hook files literally, and pacman.conf and mirrorlist the same way.
+#
+# Verify with `git ls-files --eol`. The INDEX column decides what a commit
+# contains, and every tracked text file should read i/lf. The working-tree
+# column does not have to be uniform.
+
+* text=auto eol=lf
+
+# Named so the intent survives any later change to the catch-all above.
+Dockerfile      text eol=lf
+pacstrap-docker text eol=lf
+mirrorlist      text eol=lf
+*.hook          text eol=lf
+*.conf          text eol=lf
+*.sh            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.json          text eol=lf
+*.md            text eol=lf
+*.txt           text eol=lf
+.gitattributes  text eol=lf
+.gitignore      text eol=lf
+
+# Exact bytes are the content, so no translation may be applied. Nothing here
+# is tracked today. The entries exist before the files do, because a signature
+# or an archive normalised on the way in is corrupt and looks committed.
+*.sig           binary
+*.gpg           binary
+*.tar           binary
+*.gz            binary
+*.xz            binary
+*.zst           binary
+*.db            binary
