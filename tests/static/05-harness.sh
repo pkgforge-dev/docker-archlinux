@@ -135,7 +135,7 @@ case "$(uname -o 2>/dev/null)" in
     check "host_path converts to a windows path on MSYS" "a windows path" "$r"
     ;;
   *)
-    check "host_path passes the path through unchanged elsewhere" "0|/tmp;" "$hp"
+    check "host_path passes the path through unchanged elsewhere" "0|/tmp" "$hp"
     ;;
 esac
 
