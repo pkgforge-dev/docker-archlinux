@@ -1,0 +1,22 @@
+# Arch Linux ARM package signing trust root.
+#
+# Arch Linux ARM signs its packages with a key that archlinux-keyring does not
+# carry, so a build host that only trusts archlinux-keyring rejects every ARM
+# package. Pinning the keyring package and its master key fingerprint here lets
+# SigLevel = Required stay on with no signature weakening.
+#
+# master is the fingerprint listed in the keyring package's own
+# archlinuxarm-trusted file. It is the trust anchor and is verified on every
+# build. sha256 covers the package that carries it.
+#
+# To re-derive, from any host:
+#   curl -sSL -o k.pkg.tar.xz http://mirror.archlinuxarm.org/aarch64/core/<package>
+#   sha256sum k.pkg.tar.xz
+#   bsdtar -xOf k.pkg.tar.xz usr/share/pacman/keyrings/archlinuxarm-trusted
+#
+# Adopted 2026-08-26. Verified on that date against
+# http://mirror.archlinuxarm.org/aarch64/core/.
+
+package = archlinuxarm-keyring-20240419-2-any.pkg.tar.xz
+sha256  = 3cb36869edfe413672a6e932cc55d7f8386e1a9d3b38663cfb3bc6fe0d146e21
+master  = 68B3537F39A313B3E574D06777193F152BDBE6A6

@@ -1,0 +1,38 @@
+#!/bin/bash
+#
+# Write /etc/os-release into a bootstrapped root.
+#
+# No package owns /etc/os-release. The filesystem package ships
+# /usr/lib/os-release, and Arch's release tooling writes /etc/os-release as a
+# real file with a release id injected. A pacstrap bootstrap never creates it,
+# and no Arch port ships a VERSION_ID of its own, so the value comes from the
+# build.
+#
+#   write-os-release <root> <version>
+set -euo pipefail
+
+root="${1:?usage: write-os-release <root> <version>}"
+version="${2:?usage: write-os-release <root> <version>}"
+
+src="$root/usr/lib/os-release"
+dst="$root/etc/os-release"
+
+if [ ! -f "$src" ]; then
+  echo "write-os-release: $src is missing, so the filesystem package did not install" >&2
+  exit 1
+fi
+
+if grep -qE '^VERSION_ID=' "$src"; then
+  echo "write-os-release: $src already carries VERSION_ID, refusing to guess which wins" >&2
+  exit 1
+fi
+
+install -Dm644 "$src" "$dst"
+{
+  printf 'VERSION_ID=%s\n' "$version"
+  printf 'IMAGE_ID=archlinux\n'
+  printf 'IMAGE_VERSION=%s\n' "$version"
+} >> "$dst"
+
+id="$(awk -F= '$1 == "ID" { print $2; exit }' "$dst")"
+echo "==> wrote $dst with ID=$id VERSION_ID=$version"

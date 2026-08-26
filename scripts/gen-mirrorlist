@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+#
+# Generate rootfs/<arch>/etc/pacman.d/mirrorlist.
+#
+# A few well known anchors are always written. The rest of the list is built
+# from an upstream candidate pool, probed, and ranked by connection time. Only
+# servers that answered for the repository this architecture actually uses are
+# written.
+#
+#   scripts/gen-mirrorlist amd64
+#   scripts/gen-mirrorlist all
+#
+# This is not part of an image build. Upstream mirror ranking tools decline to
+# ship a timer for this because of the load it puts on mirrors, and that
+# reasoning applies here. Run it on an infrequent schedule that opens a pull
+# request. The mechanisms and their sources are recorded in
+# HISTORY/references/rate-mirrors.mechanisms.md.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+ARCH_STATUS_JSON="${ARCH_STATUS_JSON:-https://archlinux.org/mirrors/status/json/}"
+ALARM_POOL_URL="${ALARM_POOL_URL:-https://raw.githubusercontent.com/archlinuxarm/PKGBUILDs/master/core/pacman-mirrorlist/mirrorlist}"
+
+# Identify the traffic. A mirror operator seeing these probes can tell what
+# sent them and where to raise it.
+UA="${MIRROR_PROBE_UA:-docker-archlinux-mirrorlist/1 (+https://github.com/pkgforge-dev/docker-archlinux)}"
+
+MIN_SERVERS="${MIN_SERVERS:-2}"
+MAX_SERVERS="${MAX_SERVERS:-12}"
+POOL_LIMIT="${POOL_LIMIT:-40}"
+CONCURRENCY="${CONCURRENCY:-8}"
+PROBE_TIMEOUT="${PROBE_TIMEOUT:-25}"
+CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-10}"
+MAX_SYNC_DELAY="${MAX_SYNC_DELAY:-86400}"
+MIN_COMPLETION="${MIN_COMPLETION:-1}"
+
+die() {
+  echo "gen-mirrorlist: $*" >&2
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null || die "$1 is required"
+}
+need curl
+need awk
+
+count_lines() {
+  awk 'NF { n++ } END { print n+0 }'
+}
+
+strip_server() {
+  sed 's/^Server[[:space:]]*=[[:space:]]*//'
+}
+
+read_servers() {
+  awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[[:space:]]*/, ""); print }' "$1"
+}
+
+#---------------------------------------------------------------------------#
+# substitute the two variables pacman expands, then probe
+#---------------------------------------------------------------------------#
+probe_url() {
+  local u="${1//\$repo/core}"
+  u="${u//\$arch/$2}"
+  printf '%s/core.db\n' "$u"
+}
+
+probe_once() {
+  local url="$1" res
+  res="$(curl -s -o /dev/null -w '%{http_code} %{time_connect}' \
+      -A "$UA" \
+      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$PROBE_TIMEOUT" \
+      --retry 2 --retry-delay 2 --retry-all-errors \
+      -L "$url")" || res="000 99"
+  printf '%s\n' "$res"
+}
+
+# probe SERVER ARCH OUTFILE
+# Writes "<code> <connect_ms> <server>". A mirror that fails to answer is a
+# result rather than an error, so the code is recorded and the run continues.
+#
+# An http candidate is tried over https first and the https form is kept when
+# it answers, so a host that offers both is written as https. Not every mirror
+# offers TLS: Arch Linux ARM serves its own balanced endpoint over http only.
+probe() {
+  local server="$1" arch="$2" out="$3" candidate res code connect
+  local -a forms=()
+  case "$server" in
+    http://*) forms+=("https://${server#http://}") ;;
+  esac
+  forms+=("$server")
+
+  for candidate in "${forms[@]}"; do
+    res="$(probe_once "$(probe_url "$candidate" "$arch")")"
+    code="${res%% *}"
+    connect="${res##* }"
+    if [ "$code" = "200" ]; then
+      connect="$(awk -v t="$connect" 'BEGIN { printf "%06d", t * 1000 }')"
+      printf '%s %s %s\n' "$code" "$connect" "$candidate" > "$out"
+      return 0
+    fi
+  done
+  connect="$(awk -v t="$connect" 'BEGIN { printf "%06d", t * 1000 }')"
+  printf '%s %s %s\n' "$code" "$connect" "$server" > "$out"
+}
+
+# probe_all ARCH, servers on stdin, "code ms server" lines on stdout
+probe_all() {
+  local arch="$1" dir n=0 server spec
+  dir="$(mktemp -d)"
+  while IFS= read -r server; do
+    [ -n "$server" ] || continue
+    probe "$server" "$arch" "$dir/probe.$n" &
+    n=$((n + 1))
+    if [ $((n % CONCURRENCY)) -eq 0 ]; then
+      wait
+    fi
+  done
+  wait
+  for spec in "$dir"/probe.*; do
+    [ -e "$spec" ] || continue
+    cat "$spec"
+  done
+  rm -rf "$dir"
+}
+
+#---------------------------------------------------------------------------#
+# candidate pools
+#---------------------------------------------------------------------------#
+pool_amd64() {
+  local json
+  need jq
+  json="$(mktemp)"
+  # This endpoint answers 429 under load and has been unreachable during
+  # incidents, so a failure has to stop the job rather than yield a short list.
+  if ! curl -sSfL -A "$UA" --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
+       -o "$json" "$ARCH_STATUS_JSON"; then
+    rm -f "$json"
+    die "cannot fetch $ARCH_STATUS_JSON"
+  fi
+  if ! jq -e '.urls | length > 0' "$json" >/dev/null; then
+    rm -f "$json"
+    die "$ARCH_STATUS_JSON returned no mirrors"
+  fi
+  # Filtering on sync completion and sync delay follows the reference. The
+  # active field is this repository's own addition.
+  jq -r --argjson c "$MIN_COMPLETION" --argjson d "$MAX_SYNC_DELAY" '
+    [ .urls[]
+      | select(.protocol == "https" and .active == true
+               and .completion_pct != null and .completion_pct >= $c
+               and .delay != null and .delay <= $d
+               and .score != null) ]
+    | sort_by(.score) | .[] | .url' "$json" \
+    | head -n "$POOL_LIMIT" \
+    | sed -e 's|/*$|/|' \
+    | { # shellcheck disable=SC2016
+        # $repo and $arch stay literal here. pacman expands them, not the shell.
+        sed -e 's|$|$repo/os/$arch|'; }
+  rm -f "$json"
+}
+
+pool_alarm() {
+  local out
+  out="$(mktemp)"
+  if ! curl -sSfL -A "$UA" --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
+       -o "$out" "$ALARM_POOL_URL"; then
+    rm -f "$out"
+    die "cannot fetch $ALARM_POOL_URL"
+  fi
+  # Commented entries are candidates. Upstream ships the regional mirrors
+  # commented out and only the balanced endpoint active.
+  awk '/^[[:space:]]*#?[[:space:]]*Server[[:space:]]*=/ { sub(/^[[:space:]]*#?[[:space:]]*/, ""); print }' "$out" \
+    | strip_server
+  rm -f "$out"
+}
+
+pool_from_file() {
+  [ -f "$1" ] || die "no candidate pool at $1"
+  read_servers "$1" | strip_server
+}
+
+#---------------------------------------------------------------------------#
+# one architecture
+#---------------------------------------------------------------------------#
+generate() {
+  local dir="$1"
+  local conf="$REPO_ROOT/rootfs/$dir/etc/pacman.conf"
+  local dest="$REPO_ROOT/rootfs/$dir/etc/pacman.d/mirrorlist"
+  local anchors_file="$REPO_ROOT/mirrors/$dir.anchors"
+
+  [ -f "$conf" ] || die "no pacman.conf for $dir"
+  [ -f "$anchors_file" ] || die "no anchors for $dir at mirrors/$dir.anchors"
+
+  local arch
+  arch="$(awk -F= '/^[[:space:]]*Architecture[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$conf")"
+  [ -n "$arch" ] || die "$conf has no Architecture line"
+
+  echo "==> $dir, Architecture = $arch"
+
+  local anchors anchor_servers anchor_count
+  anchors="$(read_servers "$anchors_file")"
+  [ -n "$anchors" ] || die "mirrors/$dir.anchors lists no Server"
+  anchor_servers="$(printf '%s\n' "$anchors" | strip_server)"
+  anchor_count="$(printf '%s\n' "$anchor_servers" | count_lines)"
+
+  # An anchor that stops answering is a fault to report, not a line to drop.
+  local dead_anchors
+  dead_anchors="$(printf '%s\n' "$anchor_servers" | probe_all "$arch" \
+    | awk '$1 != "200" { print $3 " (HTTP " $1 ")" }')"
+  if [ -n "$dead_anchors" ]; then
+    echo "gen-mirrorlist: an anchor did not answer for $dir:" >&2
+    printf '  %s\n' "$dead_anchors" >&2
+    die "refusing to generate a list whose anchor is down"
+  fi
+  echo "    anchors: $anchor_count verified"
+
+  local pool
+  case "$dir" in
+    amd64) pool="$(pool_amd64)" ;;
+    arm64 | armv7) pool="$(pool_alarm)" ;;
+    *) pool="$(pool_from_file "$REPO_ROOT/mirrors/$dir.pool")" ;;
+  esac
+  pool="$(printf '%s\n' "$pool" | awk 'NF' | sort -u)"
+
+  # An anchor is not also a pool candidate. Done with awk rather than grep -v,
+  # because grep exits 1 when nothing survives the filter and that is a normal
+  # result here, not a failure.
+  local anchor_list pool_list candidates candidate_count
+  anchor_list="$(mktemp)"
+  pool_list="$(mktemp)"
+  printf '%s\n' "$anchor_servers" > "$anchor_list"
+  printf '%s\n' "$pool" > "$pool_list"
+  candidates="$(awk 'NR == FNR { anchor[$0]; next } NF && !($0 in anchor)' "$anchor_list" "$pool_list")"
+  rm -f "$anchor_list" "$pool_list"
+  candidate_count="$(printf '%s\n' "$candidates" | count_lines)"
+  echo "    pool: $candidate_count candidates"
+
+  local ranked="" live
+  if [ "$candidate_count" -gt 0 ]; then
+    ranked="$(printf '%s\n' "$candidates" | awk 'NF' | probe_all "$arch" \
+      | awk '$1 == "200" { print $2 " " $3 }' | sort -n | awk '{ print $2 }')"
+  fi
+  live="$(printf '%s\n' "$ranked" | count_lines)"
+  echo "    live: $live of $candidate_count"
+
+  local total=$((anchor_count + live))
+  if [ "$total" -lt "$MIN_SERVERS" ]; then
+    die "only $total server(s) reachable for $dir, the floor is $MIN_SERVERS, leaving $dest alone"
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  {
+    printf '##\n'
+    printf '## Arch mirror list for %s, Architecture = %s\n' "$dir" "$arch"
+    printf '## Generated on %s by scripts/gen-mirrorlist\n' "$(date -u +%Y-%m-%d)"
+    printf '## Every server below answered 200 for core.db when it was written.\n'
+    printf '## The first %s is an anchor and is not ranked.\n' "$anchor_count"
+    printf '##\n'
+    printf '\n'
+    printf '%s\n' "$anchors"
+    if [ "$live" -gt 0 ]; then
+      printf '\n'
+      printf '## Ranked by connection time, fastest first.\n'
+      printf '%s\n' "$ranked" | awk 'NF' | head -n "$MAX_SERVERS" | sed 's|^|Server = |'
+    fi
+  } > "$tmp"
+
+  # Check the artefact before it replaces anything, then move it into place in
+  # one step. A streamed write can leave the destination empty or truncated.
+  local written
+  written="$(grep -c '^Server' "$tmp" | tr -d '[:space:]')"
+  if [ "$written" -lt "$MIN_SERVERS" ]; then
+    rm -f "$tmp"
+    die "the generated list for $dir has $written server(s), the floor is $MIN_SERVERS"
+  fi
+
+  mv "$tmp" "$dest"
+  chmod 0644 "$dest"
+  echo "    wrote $written servers to rootfs/$dir/etc/pacman.d/mirrorlist"
+}
+
+case "${1:-}" in
+  "")
+    die "usage: scripts/gen-mirrorlist <amd64|arm64|armv7|riscv64|all>"
+    ;;
+  all)
+    for d in amd64 arm64 armv7 riscv64; do
+      generate "$d"
+    done
+    ;;
+  *)
+    generate "$1"
+    ;;
+esac

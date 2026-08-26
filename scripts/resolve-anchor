@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+#
+# Print the anchor package version for one architecture.
+#
+#   scripts/resolve-anchor <amd64|arm64|armv7|riscv64>
+#
+# The anchor is pacman. It exists on every port, and its version already carries
+# the major, minor and patch numbers, the commits since the tag and the commit
+# hash it was built from. Arch is rolling and no port ships a VERSION_ID, so
+# there is nothing else to name a pinned tag after.
+#
+# The ports are not in lockstep. pacman has differed by pkgrel between them, so
+# this resolves per architecture and the result is never shared between two.
+#
+# The version is read from the repository database rather than from a built
+# image, so one run can pin every architecture to the same inputs before any
+# build starts.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+ANCHOR_PACKAGE="${ANCHOR_PACKAGE:-pacman}"
+UA="${MIRROR_PROBE_UA:-docker-archlinux-mirrorlist/1 (+https://github.com/pkgforge-dev/docker-archlinux)}"
+
+die() {
+  echo "resolve-anchor: $*" >&2
+  exit 1
+}
+
+dir="${1:-}"
+[ -n "$dir" ] || die "usage: resolve-anchor <amd64|arm64|armv7|riscv64>"
+
+conf="$REPO_ROOT/rootfs/$dir/etc/pacman.conf"
+list="$REPO_ROOT/rootfs/$dir/etc/pacman.d/mirrorlist"
+[ -f "$conf" ] || die "no pacman.conf for $dir"
+[ -f "$list" ] || die "no mirrorlist for $dir"
+
+arch="$(awk -F= '/^[[:space:]]*Architecture[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$conf")"
+[ -n "$arch" ] || die "$conf has no Architecture line"
+
+# Try each server in turn. A single mirror being slow or mid sync must not
+# decide the version for a whole release.
+while IFS= read -r server; do
+  [ -n "$server" ] || continue
+  url="${server//\$repo/core}"
+  url="${url//\$arch/$arch}"
+
+  # A mirror that does not answer is a normal result, so the reason is reported
+  # and the next server is tried. Nothing is discarded silently.
+  db="$(mktemp)"
+  if ! fetch_error="$(curl -sSL -A "$UA" --connect-timeout 10 --max-time 120 \
+      -o "$db" "$url/core.db" 2>&1)"; then
+    echo "resolve-anchor: cannot fetch $url/core.db: ${fetch_error:-no error text}" >&2
+    rm -f "$db"
+    continue
+  fi
+
+  if ! entries="$(tar -tzf "$db" 2>&1)"; then
+    echo "resolve-anchor: $url/core.db is not a readable archive: $(head -1 <<< "$entries")" >&2
+    rm -f "$db"
+    continue
+  fi
+  rm -f "$db"
+
+  version="$(awk -v p="$ANCHOR_PACKAGE" \
+    'index($0, p "-") == 1 { sub("^" p "-", ""); sub("/$", ""); if ($0 ~ /^[0-9]/) { print; exit } }' \
+    <<< "$entries")"
+  if [ -n "$version" ]; then
+    printf '%s\n' "$version"
+    exit 0
+  fi
+  echo "resolve-anchor: $ANCHOR_PACKAGE not found in $url/core.db, trying the next server" >&2
+done < <(awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); print }' "$list")
+
+die "could not resolve the $ANCHOR_PACKAGE version for $dir from any server in rootfs/$dir/etc/pacman.d/mirrorlist"

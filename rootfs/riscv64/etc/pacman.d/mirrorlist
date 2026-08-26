@@ -1,18 +1,16 @@
 ##
-## Arch Linux RISC-V repository mirrorlist
+## Arch mirror list for riscv64, Architecture = riscv64
+## Generated on 2026-08-26 by scripts/gen-mirrorlist
+## Every server below answered 200 for core.db when it was written.
+## The first 1 is an anchor and is not ranked.
 ##
 
-## Worldwide
 Server = https://riscv.mirror.pkgbuild.com/repo/$repo
 
-## Canada
-#Server = https://archriscv.felixc.at/repo/$repo
-
-## China
-#Server = https://mirror.iscas.ac.cn/archriscv/repo/$repo
-#Server = https://mirrors.sustech.edu.cn/archriscv/repo/$repo
-#Server = https://mirror.nju.edu.cn/archriscv/repo/$repo
-#Server = https://mirrors.wsyu.edu.cn/archriscv/repo/$repo
-
-## Finland
-#Server = https://mirrors.felixc.at/archriscv/repo/$repo
+## Ranked by connection time, fastest first.
+Server = https://archriscv.felixc.at/repo/$repo
+Server = https://mirror.iscas.ac.cn/archriscv/repo/$repo
+Server = https://mirrors.felixc.at/archriscv/repo/$repo
+Server = https://mirror.nju.edu.cn/archriscv/repo/$repo
+Server = https://mirrors.wsyu.edu.cn/archriscv/repo/$repo
+Server = https://mirrors.sustech.edu.cn/archriscv/repo/$repo

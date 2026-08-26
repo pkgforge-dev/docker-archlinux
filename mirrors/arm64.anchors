@@ -1,0 +1,6 @@
+# Well known servers, always written first and never dropped by ranking.
+#
+# mirror.archlinuxarm.org is the endpoint Arch Linux ARM recommends on its own
+# mirrors page, GeoIP balanced across their mirrors. It is the only active entry
+# in the mirror list they ship. That host serves plain HTTP only.
+Server = http://mirror.archlinuxarm.org/$arch/$repo

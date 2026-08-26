@@ -1,0 +1,12 @@
+# Candidate pool for Arch RISC-V.
+#
+# Arch RISC-V publishes no mirror status API and no canonical mirror list file,
+# so the pool is kept here. Every entry is probed before it is written, and an
+# entry that stops answering is dropped from the generated list rather than
+# removed from this file, so it can come back.
+Server = https://archriscv.felixc.at/repo/$repo
+Server = https://mirror.iscas.ac.cn/archriscv/repo/$repo
+Server = https://mirrors.sustech.edu.cn/archriscv/repo/$repo
+Server = https://mirror.nju.edu.cn/archriscv/repo/$repo
+Server = https://mirrors.wsyu.edu.cn/archriscv/repo/$repo
+Server = https://mirrors.felixc.at/archriscv/repo/$repo

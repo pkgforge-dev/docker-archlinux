@@ -1,72 +1,109 @@
-#FROM ghcr.io/fwcd/archlinux:latest AS bootstrap
-FROM pkgforge/archlinux:latest AS bootstrap
-
 #------------------------------------------------------------------------------------#
-##Build Args
+## Bootstrap
+#
+# This stage runs on the builder's own architecture and tells pacman which
+# architecture to install for, so the packages are the target's and nothing here
+# is emulated. It starts from official Arch pinned by digest, never from an image
+# this repository publishes, so a build does not inherit the previous build's
+# defects and can be reproduced without trusting this project's own output.
+#------------------------------------------------------------------------------------#
+FROM --platform=$BUILDPLATFORM docker.io/library/archlinux@sha256:b860afd5823683f7ea389ba5f00d812f4fe55f6f286dea329d2abeefa535e309 AS bootstrap
+
 ARG TARGETARCH
 ARG TARGETVARIANT
-#------------------------------------------------------------------------------------#
+ARG IMAGE_VERSION
 
-#------------------------------------------------------------------------------------#
-##Bootstrap
-COPY /bootstrap/any /
-COPY /bootstrap/${TARGETARCH}${TARGETVARIANT} /
-COPY /rootfs/any /rootfs
-COPY /rootfs/${TARGETARCH}${TARGETVARIANT} /rootfs
-#------------------------------------------------------------------------------------#
+COPY bootstrap/any /
+COPY bootstrap/${TARGETARCH}${TARGETVARIANT} /
+COPY bootstrap/keyrings/archlinuxarm.pin /usr/local/share/docker-archlinux/archlinuxarm.pin
 
-#------------------------------------------------------------------------------------#
-##Install the base packages
-RUN cat /etc/bootstrap-packages.txt | xargs pacstrap-docker /rootfs 2>/dev/null || true
-#------------------------------------------------------------------------------------#
+# pacman -r reads /etc/pacman.conf from the running host, never from the target
+# root, so the per architecture config has to be installed here. It carries
+# Architecture, the mirrors and NoExtract, which is what makes all three take
+# effect during the bootstrap.
+COPY rootfs/${TARGETARCH}${TARGETVARIANT}/etc /etc
 
-#------------------------------------------------------------------------------------#
-##Fixes
-# Fix marginal trust errors on Arch Linux ARM
+# The same files ship in the image, so a consumer reads and changes the config
+# that actually built it.
+COPY rootfs/any /rootfs
+COPY rootfs/${TARGETARCH}${TARGETVARIANT} /rootfs
+
+# Arch Linux ARM signs with a key archlinux-keyring does not carry. This trusts
+# it from a pinned fingerprint, which is what lets SigLevel stay Required.
+RUN install-alarm-keyring
+
 RUN <<EOS
-  set +e
-  sed -i 's/^\(GPG_PACMAN=(.*\))/\1 --allow-weak-key-signatures)/g' "/rootfs/usr/bin/pacman-key" 2>/dev/null || true
-  rm /rootfs/var/lib/pacman/sync/* 2>/dev/null || true
-  sed 's/DownloadUser/#DownloadUser/g' -i "/etc/pacman.conf" 2>/dev/null || true
+  set -eu
+  if [ ! -s /etc/bootstrap-packages.txt ]; then
+    echo "bootstrap: /etc/bootstrap-packages.txt is empty or missing" >&2
+    exit 1
+  fi
+  xargs -r -a /etc/bootstrap-packages.txt pacstrap-docker /rootfs
+EOS
+
+RUN <<EOS
+  set -eu
+  # No package owns /etc/os-release, so the build writes it.
+  write-os-release /rootfs "${IMAGE_VERSION}"
+  # The synced databases are rebuilt by the consumer's first pacman -Sy. The
+  # directory stays, because that is what the published image has.
+  find /rootfs/var/lib/pacman/sync -mindepth 1 -delete
 EOS
 
 #------------------------------------------------------------------------------------#
-
+## The image
 #------------------------------------------------------------------------------------#
-##Copy the bootstrapped rootfs
 FROM scratch
+
+ARG IMAGE_VERSION
+ARG SOURCE_COMMIT
+ARG BUILD_DATE
+
 COPY --from=bootstrap /rootfs /
-#------------------------------------------------------------------------------------#
 
 #------------------------------------------------------------------------------------#
-##Initialize
+## Initialize
 # Set up pacman-key without distributing the lsign key
 # See https://gitlab.archlinux.org/archlinux/archlinux-docker/-/blob/301942f9e5995770cb5e4dedb4fe9166afa4806d/README.md#principles
 # Source: https://gitlab.archlinux.org/archlinux/archlinux-docker/-/blob/301942f9e5995770cb5e4dedb4fe9166afa4806d/Makefile#L22
-RUN <<EOS
-  set +e
-  pacman-key --init 2>/dev/null || true
-  pacman-key --populate 2>/dev/null || true
-  bash -c "rm -rf etc/pacman.d/gnupg/{openpgp-revocs.d/,private-keys-v1.d/,pubring.gpg~,gnupg.S.}*" 2>/dev/null || true
-  sed 's/DownloadUser/#DownloadUser/g' -i "/etc/pacman.conf" 2>/dev/null || true
-EOS
 #------------------------------------------------------------------------------------#
+RUN <<EOS
+  set -eu
+  pacman-key --init
+  pacman-key --populate
+  rm -rf /etc/pacman.d/gnupg/openpgp-revocs.d /etc/pacman.d/gnupg/private-keys-v1.d
+  rm -f /etc/pacman.d/gnupg/pubring.gpg~
+  find /etc/pacman.d/gnupg -maxdepth 1 -name 'S.gpg-agent*' -delete
+EOS
 
 #------------------------------------------------------------------------------------#
-#ENV
+## Locale
+# locale.conf and locale.gen ship from rootfs/any, so only the generation runs
+# here. Appending the same lines again would put each entry in the file twice.
+#------------------------------------------------------------------------------------#
 RUN <<EOS
- #Locale
-  echo "LC_ALL=en_US.UTF-8" | tee -a "/etc/environment"
-  echo "en_US.UTF-8 UTF-8" | tee -a "/etc/locale.gen"
-  echo "LANG=en_US.UTF-8" | tee -a "/etc/locale.conf"
-  locale-gen "en_US.UTF-8"
+  set -eu
+  echo "LC_ALL=en_US.UTF-8" >> /etc/environment
+  locale-gen
+  locale -a | grep -qx 'en_US.utf8'
 EOS
+
 ENV LANG="en_US.UTF-8"
 ENV LANGUAGE="en_US:en"
 ENV LC_ALL="en_US.UTF-8"
-#------------------------------------------------------------------------------------#
 
 #------------------------------------------------------------------------------------#
-#Entrypoint
-CMD ["/usr/bin/bash"]
+## Provenance
 #------------------------------------------------------------------------------------#
+LABEL org.opencontainers.image.title="archlinux"
+LABEL org.opencontainers.image.description="Multi-platform Arch Linux container images"
+LABEL org.opencontainers.image.source="https://github.com/pkgforge-dev/docker-archlinux"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.version="${IMAGE_VERSION}"
+LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}"
+LABEL org.opencontainers.image.created="${BUILD_DATE}"
+
+#------------------------------------------------------------------------------------#
+## Entrypoint
+#------------------------------------------------------------------------------------#
+CMD ["/usr/bin/bash"]
