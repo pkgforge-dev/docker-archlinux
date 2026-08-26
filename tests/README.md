@@ -20,7 +20,7 @@ reproduces it. Exit status is non-zero when any assertion fails.
 | `10-bootstrap-not-circular.sh` | no `FROM` names an image this repository publishes, and every non-scratch base is pinned by digest |
 | `20-no-swallowed-errors.sh` | no `continue-on-error`, `\|\| true`, `set +e` or `2>/dev/null` in the workflows, the Dockerfile or `scripts/`, outside `tests/policy/swallowed-errors.allow` |
 | `30-signature-checking-on.sh` | every shipped `pacman.conf` sets `SigLevel = Required` and none sets any SigLevel to `Never` |
-| `40-mirrors-reachable.sh` | every active `Server` answers 200, each list carries a generation date and is within the age bound, each architecture has a fallback server and at least one over https |
+| `40-mirrors-reachable.sh` | each list carries a generation date and is within the age bound, ships a fallback server and at least one over https, and keeps at least two reachable servers and at least half of what it ships. Every entry that does not answer 200 is named as a diagnostic |
 | `50-supply-chain.sh` | every action is pinned to a commit hash and names its version, nothing pipes a remote script into a shell, no opaque binary is fetched and made executable, no deprecated workflow command, every workflow declares least-privilege `permissions` |
 | `60-tag-families.sh` | `scripts/tag-names` emits every alias for each architecture on both registry names, each with a rolling, a dated and a pinned shape, plus the `latest` and `v<version>` index tags, with no alias claimed twice and an unknown architecture or empty version refused |
 | `70-executable-bits.sh` | every file the workflows and the Dockerfile invoke as a command is tracked and mode `100755` **in the git index**, which is what CI checks out |

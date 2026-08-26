@@ -118,35 +118,71 @@ for spec in "$resdir"/spec.*; do
 done
 wait
 
-# Pass three: report.
-dead=0
-alive=0
-for spec in "$resdir"/spec.*; do
-  case "$spec" in *.code) continue ;; esac
-  [ -e "$spec" ] || continue
-  rel="$(cut -f1 < "$spec")"
-  server="$(cut -f2 < "$spec")"
-  url="$(cut -f3 < "$spec")"
-  if [ -f "${spec}.code" ]; then
-    code="$(cat "${spec}.code")"
-  else
-    code="probe-did-not-run"
-  fi
-  if [ "$code" = "200" ]; then
-    alive=$((alive + 1))
-  else
-    fail "mirror answers: $server" \
-      "in $rel" \
-      "HTTP $code for $url" \
-      "reproduce: curl -s -o /dev/null -w '%{http_code}' -L '$url'"
-    dead=$((dead + 1))
-  fi
-done
+# Pass three: report, per architecture.
+#
+# ⚠ The assertion is a floor per list, not "every entry answers". A mirror list
+# exists so pacman can fall through, and a single entry failing does not produce
+# a wrong image. Mirrors also block by source network: one entry in the amd64
+# list answers 200 from a workstation and 403 from a GitHub runner, so a
+# strict rule would make the repository unbuildable for a reason outside it.
+#
+# The defect this guards is the one that caused the outage: riscv64 shipped with
+# a single active server and nothing to fall through to. So each list must keep
+# at least MIN_SERVERS reachable, and at least half of what it ships. Every dead
+# entry is still named, because a list quietly decaying towards the floor is the
+# thing worth seeing early.
+dead_total=0
+alive_total=0
+while IFS= read -r list; do
+  [ -n "$list" ] || continue
+  rel="${list#"$REPO_ROOT/"}"
+  archdir="$(basename "$(dirname "$(dirname "$(dirname "$list")")")")"
+  dead=0
+  alive=0
+  for spec in "$resdir"/spec.*; do
+    case "$spec" in *.code) continue ;; esac
+    [ -e "$spec" ] || continue
+    [ "$(cut -f1 < "$spec")" = "$rel" ] || continue
+    server="$(cut -f2 < "$spec")"
+    url="$(cut -f3 < "$spec")"
+    if [ -f "${spec}.code" ]; then
+      code="$(cat "${spec}.code")"
+    else
+      code="probe-did-not-run"
+    fi
+    if [ "$code" = "200" ]; then
+      alive=$((alive + 1))
+    else
+      dead=$((dead + 1))
+      diag "$rel: HTTP $code from $server"
+      diag "  reproduce: curl -s -o /dev/null -w '%{http_code}' -L '$url'"
+    fi
+  done
 
-if [ "$dead" -eq 0 ]; then
-  ok "all $alive mirror entries answer 200"
+  total=$((alive + dead))
+  [ "$total" -gt 0 ] || continue
+  # at least MIN_SERVERS, and at least half the list
+  floor="$MIN_SERVERS"
+  half=$(((total + 1) / 2))
+  [ "$half" -gt "$floor" ] && floor="$half"
+
+  if [ "$alive" -ge "$floor" ]; then
+    ok "$rel: $alive of $total servers answer 200, floor is $floor"
+  else
+    fail "$rel keeps at least $floor reachable servers" \
+      "reachable: $alive of $total" \
+      "a list at or below the floor is how the riscv64 outage started" \
+      "regenerate with: scripts/gen-mirrorlist $archdir"
+  fi
+
+  dead_total=$((dead_total + dead))
+  alive_total=$((alive_total + alive))
+done <<< "$lists"
+
+if [ "$dead_total" -eq 0 ]; then
+  ok "every one of the $alive_total mirror entries answers 200"
 else
-  diag "$dead of $((dead + alive)) mirror entries did not answer 200"
+  diag "$dead_total of $((dead_total + alive_total)) entries did not answer 200, named above"
 fi
 
 summary
