@@ -98,6 +98,9 @@ REPO_ROOT="$(pwd)" IMAGE=localhost/faulta:test PLATFORM=linux/amd64 bash tests/i
 | a dry run cannot touch a real repository | the same run | both real repositories still hold 161 tags. `pkgforge/archlinux:latest` was last pushed at 17:18:47, by the earlier real publish; the scratch `:latest` moved at 18:47:52 |
 | the index check refuses an incomplete index | ran the step's own jq and grep loop against `pkgforge/archlinux-ci:amd64`, a single-architecture tag, on the real registry | `index platforms: amd64`, then `missing arm64`, `missing riscv64`, `missing arm/v7`, exit 1. The same logic against `:v2026.08.26` exits 0, so it discriminates |
 
-⚠ **What is still not proven this way.** The publish job's cross-registry copy to
-Docker Hub cannot be exercised by a dry run, because a dry run pushes to one
-registry by design. It is covered only by a real run.
+⚠ **What is still not proven this way.** The cross-registry copy is no longer in
+this list: run `33001089986` exercised it against scratch repositories on both
+registries. What remains unproven is a copy that fails **partway**. The index
+check refuses an incomplete index, tested above against a real
+single-architecture tag, but a copy interrupted midway through a multi-tag run
+has not been produced deliberately.
