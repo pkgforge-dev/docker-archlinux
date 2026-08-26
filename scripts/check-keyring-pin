@@ -113,11 +113,11 @@ mkdir -p "$work/x"
 unpack "$work/k.pkg" "$work/x"
 trusted="$work/x/usr/share/pacman/keyrings/archlinuxarm-trusted"
 [ -f "$trusted" ] || die "$new_pkg carries no archlinuxarm-trusted file"
-new_fpr="$(cut -d: -f1 < "$trusted" | head -n 1)"
+new_fpr="$(awk -F: 'NR == 1 { print $1 }' "$trusted")"
 [ -n "$new_fpr" ] || die "$new_pkg lists no master key fingerprint"
 
 new_size="$(stat -c%s "$work/k.pkg")"
-master_count="$(grep -c . "$trusted")"
+master_count="$(awk 'NF { n++ } END { print n + 0 }' "$trusted")"
 
 echo "new sha256     : $new_sha"
 echo "new master     : $new_fpr"

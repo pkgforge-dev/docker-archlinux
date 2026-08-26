@@ -77,7 +77,7 @@ while IFS= read -r list; do
     fail "$rel offers a fallback server" \
       "active servers: $count, minimum: $MIN_SERVERS" \
       "with one entry there is nothing to fall through to when it fails" \
-      "reproduce: grep -c '^Server' $rel"
+      "reproduce: awk '/^Server/ { c++ } END { print c + 0 }' $rel"
   else
     ok "$rel offers $count active servers"
   fi

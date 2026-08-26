@@ -20,6 +20,9 @@ fault, and pointing `REPO_ROOT` at that directory.
 | `10-bootstrap-not-circular.sh` | `FROM docker.io/library/archlinux:latest`, a digest rewritten to a tag | `not ok 1 - every base image is pinned by digest` |
 | `20-no-swallowed-errors.sh` | `\|\| true` appended to the pacstrap line in the Dockerfile | `not ok 1 - no swallowed error at Dockerfile:41` |
 | `20` | `continue-on-error: true` on a workflow step | `not ok 1 - no swallowed error at .github/workflows/ci.yml:41` |
+| `25-pipeline-traps.sh` | `\| head -n "$LIMIT"` in a script that sets pipefail | `not ok 1 - none of the N pipefail scripts uses a pipeline that fails on a normal result`, naming `scripts/faulty:3` |
+| `25` | the `grep -c` form restored at `scripts/gen-mirrorlist:278` | `not ok 1`, naming the file and line |
+| `25` | the `grep -c` form restored at `.github/workflows/freshness-mirrors.yml:47` | `not ok 2 - none of the 5 workflows uses a pipeline that fails on a normal result` |
 | `30-signature-checking-on.sh` | `SigLevel = Never` in `rootfs/riscv64/etc/pacman.conf` | `not ok 7 - does not disable signature checking`, `not ok 8 - sets SigLevel = Required` |
 | `40-mirrors-reachable.sh` | the riscv64 list cut to one server, which is the shape that caused the outage | `not ok 11 - offers a fallback server`, `not ok 16 - keeps at least 2 reachable servers` |
 | `40` | ten of thirteen amd64 servers replaced with unresolvable hosts | `not ok 13 - keeps at least 7 reachable servers` |

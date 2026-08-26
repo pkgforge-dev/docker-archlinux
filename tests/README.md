@@ -19,6 +19,7 @@ reproduces it. Exit status is non-zero when any assertion fails.
 | `00-workflow-branch-buildable.sh` | the workflow builds the triggering ref, through `actions/checkout` pinned to a commit hash, with no hand-clone |
 | `10-bootstrap-not-circular.sh` | no `FROM` names an image this repository publishes, and every non-scratch base is pinned by digest |
 | `20-no-swallowed-errors.sh` | no `continue-on-error`, `\|\| true`, `set +e` or `2>/dev/null` in the workflows, the Dockerfile or `scripts/`, outside `tests/policy/swallowed-errors.allow` |
+| `25-pipeline-traps.sh` | no script that sets `pipefail`, and no workflow `run` block, pipes into `head` or counts with a `grep` count flag. Both fail on a result that is normal, and both stop the script with no message |
 | `30-signature-checking-on.sh` | every shipped `pacman.conf` sets `SigLevel = Required` and none sets any SigLevel to `Never` |
 | `40-mirrors-reachable.sh` | each list carries a generation date and is within the age bound, ships a fallback server and at least one over https, and keeps at least two reachable servers and at least half of what it ships. Every entry that does not answer 200 is named as a diagnostic |
 | `50-supply-chain.sh` | every action is pinned to a commit hash and names its version, nothing pipes a remote script into a shell, no opaque binary is fetched and made executable, no deprecated workflow command, every workflow declares least-privilege `permissions` |

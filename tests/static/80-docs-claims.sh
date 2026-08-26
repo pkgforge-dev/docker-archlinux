@@ -41,7 +41,7 @@ else
     rel="${ex#"$REPO_ROOT/"}"
     if ! err="$(bash -n "$ex" 2>&1)"; then
       fail "$rel parses as bash" \
-        "bash -n said: $(printf '%s\n' "$err" | head -1)" \
+        "bash -n said: $(printf '%s\n' "$err" | awk 'NR == 1')" \
         "reproduce: bash -n $rel"
       bad=1
     fi
@@ -70,7 +70,7 @@ if [ -n "$shell_examples" ]; then
     # Likewise, only real commands: a commented example of the trap is fine.
     hits="$(grep_matches '^[[:space:]]*[^#[:space:]][^#]*\|[[:space:]]*(head|tail[[:space:]]+-[0-9n]|grep[[:space:]]+-[a-zA-Z]*q)' "$ex")"
     if [ -n "$hits" ]; then
-      trapped="$trapped $rel:$(printf '%s\n' "$hits" | head -1 | cut -d: -f1)"
+      trapped="$trapped $rel:$(printf '%s\n' "$hits" | awk -F: 'NR == 1 { print $1 }')"
     fi
   done <<< "$shell_examples"
   if [ -z "$trapped" ]; then
@@ -122,7 +122,7 @@ if [ -f "$work/index" ]; then
     total_blocks=$((total_blocks + 1))
     if ! err="$(bash -n "$file" 2>&1)"; then
       fail "$doc bash block $num parses" \
-        "bash -n said: $(printf '%s\n' "$err" | head -1)" \
+        "bash -n said: $(printf '%s\n' "$err" | awk 'NR == 1')" \
         "first line of the block: $(head -1 "$file")"
       bad_blocks=$((bad_blocks + 1))
     fi
@@ -148,7 +148,7 @@ if [ -f "$readme" ]; then
   wrong="$(grep_matches 'github\.com/pkgforge/docker-archlinux' "$readme")"
   if [ -n "$wrong" ]; then
     fail "README does not link to github.com/pkgforge/docker-archlinux" \
-      "found: $(printf '%s\n' "$wrong" | head -1)" \
+      "found: $(printf '%s\n' "$wrong" | awk 'NR == 1')" \
       "that path is a 404, the repository is pkgforge-dev/docker-archlinux"
   else
     ok "README links to the repository that exists"

@@ -44,7 +44,7 @@ jobs:
           # are measured with one instrument.
           total=0
           for a in amd64 arm64 armv7 riscv64; do
-            n="$(grep -c '^Server' "rootfs/$a/etc/pacman.d/mirrorlist")"
+            n="$(awk '/^Server/ { c++ } END { print c + 0 }' "rootfs/$a/etc/pacman.d/mirrorlist")"
             echo "$a: $n servers"
             total=$((total + n))
           done
@@ -75,7 +75,7 @@ jobs:
 
           total=0
           for a in amd64 arm64 armv7 riscv64; do
-            n="$(grep -c '^Server' "rootfs/$a/etc/pacman.d/mirrorlist")"
+            n="$(awk '/^Server/ { c++ } END { print c + 0 }' "rootfs/$a/etc/pacman.d/mirrorlist")"
             echo "$a: $n servers"
             total=$((total + n))
           done
@@ -125,7 +125,7 @@ jobs:
             printf '| active servers, all four lists | %s | %s |\n\n' "$BEFORE" "$AFTER"
             printf 'Per architecture, after regeneration:\n\n'
             for a in amd64 arm64 armv7 riscv64; do
-              printf -- '- `%s`: %s servers\n' "$a" "$(grep -c '^Server' "rootfs/$a/etc/pacman.d/mirrorlist")"
+              printf -- '- `%s`: %s servers\n' "$a" "$(awk '/^Server/ { c++ } END { print c + 0 }' "rootfs/$a/etc/pacman.d/mirrorlist")"
             done
             printf '\nThe hand maintained `mirrors/riscv64.pool` had **%s** entries that did\n' "$POOL_DEAD"
             printf 'not answer when this ran. Nothing else watches that file.\n\n'

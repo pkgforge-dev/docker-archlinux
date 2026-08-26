@@ -40,7 +40,7 @@ repro() {
 if img_extract "$cid" /etc/pacman.conf "$work/pacman.conf" >/dev/null 2>>"$work/err"; then
   ok "/etc/pacman.conf exists in $IMAGE on $PLATFORM"
 
-  first="$(grep -n 'SigLevel' "$work/pacman.conf" | head -1 || true)"
+  first="$(grep_matches 'SigLevel' "$work/pacman.conf" | awk 'NR == 1')"
   case "$first" in
     *'LocalFileSigLevel'* | *'RemoteFileSigLevel'*)
       fail "the first SigLevel line in /etc/pacman.conf is the global one" \
@@ -65,7 +65,7 @@ if img_extract "$cid" /etc/pacman.conf "$work/pacman.conf" >/dev/null 2>>"$work/
     ok "SigLevel is Required in the shipped /etc/pacman.conf"
   else
     fail "SigLevel is Required in the shipped /etc/pacman.conf" \
-      "found: $(grep -E '^[[:space:]]*SigLevel' "$work/pacman.conf" | head -1)" \
+      "found: $(grep_matches '^[[:space:]]*SigLevel' "$work/pacman.conf" | awk 'NR == 1')" \
       "reproduce: $(repro /etc/pacman.conf), then grep -E '^SigLevel'"
   fi
 
@@ -157,7 +157,9 @@ fi
 # not present here, and this assertion is what keeps it that way.
 #---------------------------------------------------------------------------#
 if img_extract "$cid" /etc/shadow "$work/shadow" >/dev/null 2>>"$work/err"; then
-  rootline="$(grep '^root:' "$work/shadow" | head -1 || true)"
+  # awk on the file, not grep_matches, because the field positions matter here
+  # and grep_matches prefixes a line number.
+  rootline="$(awk '/^root:/ && !seen { print; seen = 1 }' "$work/shadow")"
   hash="$(printf '%s' "$rootline" | cut -d: -f2)"
   case "$hash" in
     '')

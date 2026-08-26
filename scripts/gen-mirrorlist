@@ -153,7 +153,7 @@ pool_amd64() {
                and .delay != null and .delay <= $d
                and .score != null) ]
     | sort_by(.score) | .[] | .url' "$json" \
-    | head -n "$POOL_LIMIT" \
+    | awk -v n="$POOL_LIMIT" 'NR <= n' \
     | sed -e 's|/*$|/|' \
     | { # shellcheck disable=SC2016
         # $repo and $arch stay literal here. pacman expands them, not the shell.
@@ -264,14 +264,18 @@ generate() {
     if [ "$live" -gt 0 ]; then
       printf '\n'
       printf '## Ranked by connection time, fastest first.\n'
-      printf '%s\n' "$ranked" | awk 'NF' | head -n "$MAX_SERVERS" | sed 's|^|Server = |'
+      printf '%s\n' "$ranked" \
+        | awk -v n="$MAX_SERVERS" 'NF && ++kept <= n { print "Server = " $0 }'
     fi
   } > "$tmp"
 
   # Check the artefact before it replaces anything, then move it into place in
   # one step. A streamed write can leave the destination empty or truncated.
+  # Counted with awk rather than grep -c. grep -c exits 1 on a count of zero,
+  # which under set -e killed this function before it could reach the die below,
+  # so the one case the floor exists to catch produced no message at all.
   local written
-  written="$(grep -c '^Server' "$tmp" | tr -d '[:space:]')"
+  written="$(awk '/^Server/ { n++ } END { print n + 0 }' "$tmp")"
   if [ "$written" -lt "$MIN_SERVERS" ]; then
     rm -f "$tmp"
     die "the generated list for $dir has $written server(s), the floor is $MIN_SERVERS"

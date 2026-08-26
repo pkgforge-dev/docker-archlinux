@@ -102,7 +102,12 @@ while IFS= read -r file; do
     [ -n "$hit" ] || continue
     lineno="${hit%%:*}"
     text="${hit#*:}"
-    ref="$(printf '%s\n' "$text" | grep -oE '[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}' | head -1)"
+    # awk, not grep -o piped into head. grep -o exits 1 when nothing matches and
+    # head closing the pipe makes it take SIGPIPE, and pipefail turns either into
+    # a script that stops with no message. A line with no pin is a normal result.
+    ref="$(printf '%s\n' "$text" \
+      | awk 'match($0, /[a-z0-9][a-z0-9._\/-]*@sha256:[0-9a-f]{64}/) {
+               print substr($0, RSTART, RLENGTH) }')"
     [ -n "$ref" ] || continue
     name="${ref%@*}"
     have="${ref#*@}"
