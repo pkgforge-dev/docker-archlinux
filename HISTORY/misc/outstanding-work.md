@@ -24,7 +24,11 @@ Architectures: `amd64`, `arm64`, `armv7`, `riscv64`. ⚠ Those are the Docker
 platform names. Tags also use the `uname -m` spelling, and the two differ for
 every architecture except riscv64.
 
-87 tracked files, 6 scripts, 5 workflows, 19 test files, 7 examples.
+107 tracked files, 7 scripts, 5 workflows, 24 test files, 7 examples.
+
+```bash
+git ls-files | wc -l
+```
 
 ### The image stays vanilla
 
@@ -144,8 +148,8 @@ Summaries. Each line points at the artefact that proves it.
 | cross-registry copy | exercised against scratch repositories on **both** registries via `dry_run` plus `dry_run_hub`, and both registries are verified after publishing. Run `33001089986` |
 | evidence | `scripts/gen-evidence` writes a per-platform file: every package, version, size, sha256, release date. `tests/image/40-evidence.sh` |
 | freshness | three workflows, keyring weekly, image pins weekly, mirrors monthly. All three fired once: runs `33001871256`, `33001881101`, `33001891317` |
-| tests | 14 static files, 5 image files. Every assertion has a recorded fault in [`../tests-seen-to-fail.md`](../tests-seen-to-fail.md) |
-| failure messages | every `fail` in `tests/` carries a `reproduce:` line, 103 of 103, enforced by `tests/static/15-actionable-failures.sh`. `die` gained action lines |
+| tests | 18 static files, 6 image files. Every assertion has a recorded fault in [`../tests-seen-to-fail.md`](../tests-seen-to-fail.md) |
+| failure messages | every `fail` in `tests/` carries a `reproduce:` line, 175 of 175, enforced by `tests/static/15-actionable-failures.sh`. `die` gained action lines |
 | pipeline traps | 17 sites removed across six files. `tests/static/25-pipeline-traps.sh` fails on either shape |
 | harness | `tests/lib/harness.sh` has a test that does not report through it. `tests/static/05-harness.sh` |
 | references | five studied with verdicts, in [`../references/`](../references/): the methodology template, `pkgforge/devscripts`, `archlinux/archlinux-docker`, `fwcd/docker-archlinux`, `westandskif/rate-mirrors` |
@@ -153,16 +157,53 @@ Summaries. Each line points at the artefact that proves it.
 | architectures | ppc64le and i686 excluded, each with the measurement, in [`../removed-architectures.md`](../removed-architectures.md) |
 | branch protection | applied. One review, `Static suite and linters` required, no force pushes, no deletions, `enforce_admins: false` |
 | history | `main` is one root commit, `Rewrite Project v.0.0.1`. Everything before it is on `history-archive`, tip `9d1e142`. See [`../rewrite.md`](../rewrite.md) |
-| reviews | eight, each with its lens, its findings and what it did not look at, in [`../reviews/`](../reviews/) |
-| upstream defect parity | issue 55's class is fixed here and guarded. 1 path missing of 49035, against 25508 of 49027 in the official Arch image |
+| reviews | thirteen, each with its lens, its findings and what it did not look at, in [`../reviews/`](../reviews/). 9 found and closed a hole in the rollback guard, 11 mapped the eleven places that name the architecture set |
+| upstream defect parity | all 79 upstream issues triaged, 19 in 14 classes measured against this image, in [`../defect-parity.md`](../defect-parity.md). Two defects found here and fixed: a build-time `/etc/machine-id` shipped in every image, and two `DisableSandbox` comments missing from all four `pacman.conf`. 51 assertions across `tests/image/60-defect-parity.sh` and `tests/static/45-pacman-conf-shape.sh`, each seen to fail. Issue 55: 1 path missing of 49035, against 25508 of 49027 in the official Arch image |
+| ARM rollback | decided. Plain http mirrors stay, and `scripts/check-anchor-floor` refuses a build whose anchor is older than one already published. No state file: the floor is read from the public tag list. `vercmp` comes from the digest already pinned in the `Dockerfile`. Measured in [`../arm-rollback.md`](../arm-rollback.md) |
+| a command outside PATH | upstream issue 80 fixed with `PATH` untouched. A pacman hook links an executable from the perl bindirs into `/usr/local/bin`, never shadowing a name that already resolves. `tests/static/55-shipped-hooks.sh`, and section 9 of `tests/image/60-defect-parity.sh` |
+| transfer policy | every fetch in `scripts/`, the workflows and `bootstrap/any` sets `--connect-timeout` and `--max-time`. `tests/static/65-fetch-policy.sh` |
+| mangled responses | five shapes this project has been served, fed to `scripts/resolve-anchor`: zero byte, wrong compression, an error page, a truncated gzip, missing. It steps over all five and reaches the one that works. `tests/static/67-mangled-responses.sh` |
 
-### Two defects found late, both fixed
+### Defects found and fixed
 
 - ⛔ **CI had never passed.** The actionlint step piped only stdout into `tee`,
   and `-verbose` writes to stderr, so the guard's `grep` failed on every run.
   That job is the required status check, so branch protection could not be
   satisfied by anything. Measured: stdout 0 bytes, stderr 1402 bytes.
 - ⛔ **A downstream consumer broke** on `NoExtract`. See decision 5 above.
+- ⛔ **`/etc/machine-id` was written at build time and shipped**, so every
+  container from one published tag and architecture carried the same ID. The
+  `Dockerfile` truncates it. [`../defect-parity.md`](../defect-parity.md).
+- ⛔ **A diagnostic that was empty in every case it existed for.**
+  `resolve-anchor` printed the first line of tar's output as the reason a
+  database was unreadable, and tar puts a blank line ahead of what gzip said.
+- ⛔ **Two scripts fetched without `-f`**, so a mirror answering 403 returned
+  exit 0 with an error page in the file, and the failure surfaced two steps
+  later as a corrupt archive.
+
+### Loose ends from finished work
+
+Small, none of them blocking. Kept here because each one is a thing the next
+session would otherwise re-derive.
+
+- ⚠ **One piece of stale wording.** `tests/image/50-consumer-contract.sh` still
+  describes decision 6 in its comments and names assertion 7 `the UTF-8 charmap
+  survives NoExtract`. ⛔ `NoExtract` was removed. The assertion is still correct
+  about what it checks, so nothing is broken. ⚠ Renaming it makes the recorded
+  fault in [`../tests-seen-to-fail.md`](../tests-seen-to-fail.md) stale, so
+  rename and re-record in one change, or leave both.
+- ⚠ **Measured but not asserted.** Upstream issue 103, the pacman sandbox on a
+  kernel without landlock, needs a seccomp profile and a package install over
+  the network, which does not belong in the image suite. It is not reproducible
+  on pacman 7.1.0. Re-run it by hand from the commands in
+  [`../defect-parity.md`](../defect-parity.md) when pacman's major version
+  changes.
+- ⚠ **Blob existence was sampled, not swept.** 7 tags of 161 on each registry,
+  and tag resolution swept in full on both. A full sweep is roughly 2600
+  requests per registry, which is a job rather than a measurement.
+- ⚠ **The `docker` runtime path is unverified locally.** This machine has
+  podman only. CI sets `CONTAINER_RUNTIME: docker`, and the new image test
+  starts the image the same way `scripts/gen-evidence` already does there.
 
 ---
 
@@ -170,66 +211,285 @@ Summaries. Each line points at the artefact that proves it.
 
 ⛔ **The order below is the order to take them in.**
 
-### 1. Defect parity: check ours against every known upstream defect
+### 1. Two more architectures
 
-⛔ **This is not about upstream and owes them nothing.** Their tracker is a list
-of failure modes somebody already found and paid for. Each one is a question
-about **this** image, and each answer belongs in a test.
+⭐ **Set by the maintainer 2026-08-27.** Two ports, and they are not the same
+shape of problem. ⛔ Read [`../removed-architectures.md`](../removed-architectures.md)
+first: `ppc64le` was removed from this repository once, and the reason it was
+removed is the reason one of these two is hard.
 
-⭐ **One is already fixed here and must stay fixed.**
+#### 1a. loongarch64, `loong64`
 
-`archlinux/archlinux-docker` issue 55,
-`https://gitlab.archlinux.org/archlinux/archlinux-docker/-/issues/55`, open since
-2020-12-06: the image withholds files the package database still lists. Measured
-on 2026-08-26, same command, same packages:
+⭐ **This one is ready to attempt.** Measured 2026-08-27.
 
 ```bash
-podman run --rm --platform linux/amd64 <image> bash -c '
-  pacman -Sy --noconfirm --needed qt6-base >/dev/null 2>&1
-  echo "listed : $(pacman -Qlq | wc -l)"
-  echo "missing: $(pacman -Qlq | while read -r p; do [ -e "$p" ] || printf x; done | wc -c)"'
+for m in https://mirrors.pku.edu.cn/loongarch/archlinux \
+         https://mirrors.nju.edu.cn/loongarch/archlinux \
+         https://mirrors.wsyu.edu.cn/loongarch/archlinux \
+         https://mirror.iscas.ac.cn/loongarch/archlinux \
+         https://loongarchlinux.lcpu.dev/loongarch/archlinux; do
+  curl -sS -o /dev/null -w "%{http_code} $m\n" --connect-timeout 15 --max-time 60 \
+    -L "$m/core/os/loong64/core.db"
+done
 ```
 
-| image | listed | missing |
-| --- | --- | --- |
-| `docker.io/pkgforge/archlinux:latest` | 49035 | **1** |
-| `docker.io/library/archlinux:latest` | 49027 | 25508 |
-
-The one is `/var/lock`, a symlink to `../run/lock` that only systemd creates.
-`tests/static/80-docs-claims.sh` fails on any `NoExtract` line in any shipped
-config, so it cannot come back by accident.
-
-⭐ **Also already checked here.** Issue 106, xattrs and acls not preserved:
-`/usr/bin/newgidmap` and `/usr/bin/newuidmap` carry `security.capability` in this
-image. Verified with `getfattr -d -m -`. ⚠ Not guarded by a test yet, so it can
-regress. Add one.
-
-⛔ **Not yet checked against this image.** Each needs a measurement and, where it
-applies, a test:
-
-| issue | what to check here |
+| fact | value |
 | --- | --- |
-| 72, a locale that cannot be generated | `locale-gen` for a non-Latin locale, for example `ja_JP.UTF-8`. Should now work with no preparation; confirm and add it to `tests/image/` |
-| 60, `/etc/hosts` and `/etc/resolv.conf` | whether the container runtime's versions survive, and whether anything here would clobber them |
-| 67 and 56, `failed to initialize alpm library` | pacman on an older host kernel, or one without the syscalls it expects. Relevant to consumers on old runners |
-| 66, tags outliving the artefact they name | whether any published tag can point at a manifest whose blobs are gone |
-| 80, a package binary not on `PATH` | whether `/usr/sbin` being a symlink to `/usr/bin` holds in this image |
-| 110, systemd in rootless containers | out of scope unless a consumer asks; record the decision |
+| mirrors answering 200 | 5 of 5, all https, `core.db` about 90 KB |
+| packages in `core` | 293 |
+| `pacman` | `7.1.0.r9.g54d9411-2`, ⭐ **the same anchor this repository already publishes** |
+| `base` | `base-3-3` |
+| packages carry a detached `.sig` | yes. `bash`, `pacman` and the keyring all answer 200 for `.sig` |
+| `core.db.sig` | 404, which is normal. Arch proper and Arch RISC-V are the same, and `DatabaseOptional` is what that is for |
+| ⭐ **a keyring package** | **yes**, two: `archlinux-keyring-20260727-1` and `archlinux-lcpu-keyring-20241126-1` |
 
-⚠ Read them with the GitLab API; `gh` does not reach GitLab:
+⭐ **The keyring is the whole difference.** `ppc64le` was refused because no
+keyring package existed and the signing key could not be verified
+independently, so `SigLevel = Required` could not stay on. `loong64` ships
+`archlinux-lcpu-keyring`, which is the same shape as `archlinuxarm-keyring`,
+and this repository already has the pattern for exactly that:
+
+- `bootstrap/keyrings/archlinuxarm.pin`, a sha256 and a master fingerprint
+- `bootstrap/any/usr/local/bin/install-alarm-keyring`
+- `scripts/check-keyring-pin`, and the weekly freshness workflow that watches it
+
+What it owes, in order:
+
+1. ⛔ **Verify the `archlinux-lcpu-keyring` signing key independently** before
+   anything else, and write down how. That is the step `ppc64le` failed. If it
+   cannot be done, `loong64` stops here and the reason is recorded.
+2. `rootfs/loong64/etc/pacman.conf` with `Architecture = loong64`, and a
+   mirrorlist from the five servers above.
+3. `bootstrap/loong64/etc/bootstrap-packages.txt`, naming the keyring package
+   the way the two ARM ports name `archlinuxarm-keyring`.
+   ⚠ `tests/static/90-package-lists.sh` asserts one list per matrix
+   architecture and will need the new one.
+4. The pin, and a generalisation of `install-alarm-keyring`. ⚠ Two keyrings
+   installed by two scripts that differ only in a name is the shape that rots.
+5. The build matrix, `scripts/tag-names` aliases, `scripts/gen-mirrorlist`, and
+   the freshness workflows.
+6. ⚠ `tests/static/60-tag-families.sh` has 24 assertions over `tag-names` and
+   every one of them changes.
+
+⚠ **Open questions, none of them answered yet:**
+
+- **The alias family.** `loong64` is the pacman architecture. `loongarch64` is
+  the `uname -m` spelling. Decision 4 says publish both families, so this is
+  probably two aliases, but the org precedent has not been checked.
+- **Emulation.** `podman run --platform linux/loong64` was **not** tested. The
+  Dockerfile bootstraps on the builder's architecture and only the last few
+  steps are emulated, so what matters is whether QEMU on the runner can run
+  `pacman-key --init` and `locale-gen` for `loong64`. ⛔ Verify before wiring
+  the matrix, or the build fails four steps in.
+- **`docker/setup-qemu-action` support for `loong64`**, and whether the OCI
+  platform string the registries accept is `linux/loong64` or `linux/loongarch64`.
+- **A pre-built image exists**, `ghcr.io/loongarchlinux/archlinux:latest`, built
+  by `lcpu-club/loongarchlinux-dockerfile`. ⛔ Policy 11: mine that repository
+  before writing anything, capture the commit first, and give it a verdict.
+  ⛔ Policy 8 forbids bootstrapping from it.
+- **`pacman-mirrorlist-loong64`.** The port recommends shipping its mirrors as
+  a separate file and adding a second `Include` to `pacman.conf`, to avoid
+  colliding with Arch upstream's list. ⚠ That would make `loong64`'s config the
+  only one with two `Include` lines, and
+  `tests/static/45-pacman-conf-shape.sh` holds the four `[options]` blocks
+  identical. The repository section is already per port, so this may be free,
+  but check it rather than assume.
+
+#### 1b. powerpc, powerpc64, powerpc64le
+
+⚠ **Blocked on the same thing that removed it last time, until proven
+otherwise.** ArchPOWER is live. Measured 2026-08-27:
 
 ```bash
-B="https://gitlab.archlinux.org/api/v4/projects/archlinux%2Farchlinux-docker"
-curl -sS "$B/issues?state=all&per_page=100" | jq -r '.[] | "\(.iid)\t[\(.state)]\t\(.title)"'
+for r in base stage testing; do
+  for a in any powerpc powerpc64 powerpc64le; do
+    curl -sS -o /dev/null -w "%{http_code} $r/$a\n" --connect-timeout 15 --max-time 60 \
+      -L "https://repo.archlinuxpower.org/$r/$a/$r.db"
+  done
+done
 ```
 
-⛔ **Comments need authentication and this account has none.** `$B/issues/55/notes`
-returns `{"message":"401 Unauthorized"}`, so every issue is readable by title and
-description only. Say so in anything written from them.
+| repository | `any` | `powerpc` | `powerpc64` | `powerpc64le` |
+| --- | --- | --- | --- | --- |
+| `base` | 404 | 200 | 200 | 200 |
+| `stage` | 404 | 200 | 200 | 200 |
+| `testing` | 404 | 200 | 200 | 200 |
 
-⛔ **Reads only.** Policy 1: nothing is filed, commented or proposed upstream.
+⛔ **What has not changed since the removal.** The measurement in
+[`../removed-architectures.md`](../removed-architectures.md) found no keyring
+package in `base` or `testing`, and the key that signed the packages,
+`D201F92AE42528456537C3F9B96775F34689694C`, was not in `archlinux-keyring` and
+could not be verified independently. ⚠ **That was not re-measured today.**
+Re-measure it first: if a keyring package has appeared, this becomes the same
+job as `loong64`. If it has not, `SigLevel = Required` cannot stay on and
+policy 5 refuses the trade.
 
-### 2. Static pacman, everywhere, and in the releases
+⚠ **Three architectures, not one.** `powerpc` is 32 bit big endian, `powerpc64`
+is 64 bit big endian, `powerpc64le` is little endian. They are three separate
+matrix entries, three mirrorlists and three tag families.
+
+⚠ **No mirrors.** `repo.archlinuxpower.org` is one host. There is no mirror
+list to generate and no second source, which is a redundancy problem before it
+is a build problem. See section 3.
+
+⚠ `Link4Electronics/archpower-packages` is `PKGBUILD`s, not built packages, so
+it is not a second source for anything.
+
+References not yet mined, ⛔ all of them under policy 11: `kth5/archpower`,
+`kth5/archiso`, `lcpu-club/loongarch-packages`,
+`lcpu-club/loongshot/tree/main/scripts`.
+
+### 2. Outage and CVE resilience
+
+⭐ **Two of the four are done**, summarised in "What is done". The transfer
+policy is set and asserted, and the mangled response shapes are fed to
+`scripts/resolve-anchor` by `tests/static/67-mangled-responses.sh`. These two
+are left.
+
+- **Emergency CVE patch.** There is no path to publish faster than the daily
+  cron, and no way to rebuild one architecture without rebuilding all four.
+  Consider a `workflow_dispatch` input naming a single architecture and a
+  reason, publishing only that architecture's tags and leaving the index alone
+  until all four agree. ⛔ **The invariant it has to respect**: a run that loses
+  one architecture publishes nothing. A single architecture path is a hole in
+  that on purpose, so it has to be impossible to take by accident, and the
+  index must not move until all four agree.
+- **Every mirror for one architecture down.** Today the build fails, which is
+  correct but total. Consider a pinned last-known-good package set as a fallback
+  producing an image with a loud annotation saying it is not current.
+  ⚠ **Weigh it against what a consumer pulling `:latest` gets.** A stale image
+  that says it is stale, in a label nobody reads, may be worse than a build that
+  failed loudly and left yesterday's image in place. Record the decision either
+  way. ⚠ This overlaps section 8: a pinned package set is most of a bootstrap
+  set.
+
+### 3. Redundancy for the things with one of something
+
+| single point | today |
+| --- | --- |
+| the `FROM` digest | one image, one registry |
+| the Arch Linux ARM keyring | one mirror path, one package name |
+| the anchor package | `pacman` only |
+| the riscv64 pool | six hand maintained servers in `mirrors/riscv64.pool` |
+| GHCR as the digest staging area | the whole publish depends on it |
+| `archlinux.org/mirrors/status/json/` | `scripts/gen-mirrorlist:22`, the only amd64 pool source |
+| `raw.githubusercontent.com` ARM mirrorlist | `scripts/gen-mirrorlist:23`, the only ARM pool source |
+
+For each: is a second source possible, and is the failure loud?
+
+⚠ The last two are known to fail. `rate-mirrors` issue 85 records the Arch status
+endpoint returning 429 and being unreachable during an infrastructure incident.
+The exposure here is bounded because the generator is not part of any image
+build, and `mirrors/<arch>.anchors` is written whatever the pool source does.
+
+### 4. More container formats and non-container consumers
+
+⭐ **The framing was "so other tools can import, extract and reuse without
+container tooling".** None attempted.
+
+⚠ **Ships together with task 2.** The static `pacman` per architecture and the
+bootstrap guide are release assets too, so build the release once and put all of
+it in the same place rather than adding a second mechanism later.
+
+- A release asset per architecture carrying the **rootfs tarball**, with a sha256
+  and the evidence file beside it. That is the artefact ArchPOWER, Arch Linux ARM
+  and Arch RISC-V all publish and this project does not.
+- The **bootstrap set** as a release asset: the resolved package list with
+  versions and hashes, so a third party can rebuild the same root without this
+  repository's tooling. ⭐ `scripts/gen-evidence` already produces most of it.
+- An **OCI layout directory** or `docker save` archive for air-gapped consumers.
+- A **manifest of manifests**: one small JSON at a stable URL listing every tag,
+  its digest, its platform and its anchor version.
+- ⚠ Check what `pkgforge/alpine` and the sibling images publish before inventing
+  a shape. Matching the org is worth more than being clever.
+
+⭐ **The release mechanics are mined.** `pkgforge-dev/cross-libc-dlopen`
+`.github/workflows/release.yml`, 250 lines, is the pattern to follow:
+
+- triggers on `tags: ['v*']`; a `workflow_dispatch` run builds and uploads for
+  inspection and **stops**, so a manual run cannot create a release;
+- ⛔ **the body is generated**, by `scripts/release-notes.sh` reading
+  `build-manifest.json`, so the release and the manifest cannot disagree. Nothing
+  in the body is typed at release time;
+- it refuses a tag whose commit never reached the default branch;
+- `fetch-depth: 0`, because the changelog is `git log` between this tag and the
+  one before it;
+- `permissions: contents: write` only on the publishing job.
+
+⚠ **This repository has no releases yet**, so there is nothing to fix, only to
+build. ⚠ With a single-commit history a `git log` changelog is degenerate until
+there is a second tag; generate the body from the manifest, as the reference
+does.
+
+### 5. Faster CI
+
+Baseline: **245 seconds** wall clock on run `32992678276`, four builds in
+parallel, no disk pressure. Optimise against that number, not a guess.
+
+- **Native arm64 runners.** `vars.ARM64_RUNNER` is unset and the matrix already
+  reads it. ⚠ An unavailable label queues forever, so verify access first.
+- **Skip publishing when nothing changed.** The cron runs daily and tags by date,
+  so an unchanged package set still mints a new tag for a byte-identical image.
+  ⭐ The largest cheap saving available. Compare the resolved package set against
+  the last published build and skip when it matches. ⚠ Cache the inputs, never
+  the verdict. A cached "this passed" is not a pass.
+- **A shared package cache across the matrix.** Four jobs download overlapping
+  sets. ⛔ But every job in one run must build against the same pinned set, or the
+  four architectures are no longer one coherent release.
+
+### 6. The items only the maintainer can apply
+
+[`../maintainer-actions.md`](../maintainer-actions.md) is the list. ⛔ **Do not
+apply these without being asked.**
+
+- ⛔ **The GitGuardian secret.** Ask, do not create. Once `GITGUARDIAN_API_KEY`
+  exists, add the scanning workflow. ⛔ Do not add the workflow first: one that
+  fails every run for a missing secret trains people to ignore a red mark.
+- ⛔ **A freshness pull request carries no status check.** Its run is created and
+  held at `action_required` because the pull request is opened with the built-in
+  `GITHUB_TOKEN`. The required check never reports, so merging takes two
+  deliberate actions. Fixing it needs a personal access token or a GitHub App
+  installation token, which is a credential and so the maintainer's. Measured in
+  `maintainer-actions.md` section 4.
+- `default_workflow_permissions` is `write`. Every workflow declares its own, so
+  narrowing the default to `read` is safe in principle and untested in practice.
+- The `debug` branch holds nothing unique. Proposed for deletion, not deleted.
+- ⚠ **Forks.** The maintainer is contacting fork owners so the repository can be
+  detached. ⛔ Nothing in the repository changes for it.
+
+### 7. Reviews
+
+⛔ **Three is the floor, five is better**, once the work is done and CI is green.
+Each review states its lens, what it looked at, what it found, and what it did
+**not** look at. ⭐ **A review that finds nothing must say what it ruled out**, or
+it is not a review. ⭐ Each also carries a change summary: files touched, lines
+added and removed.
+
+Thirteen lenses are used, in [`../reviews/`](../reviews/). ⛔ **Do not repeat
+them:**
+
+1. a consumer who upgrades blind
+2. an attacker at build time
+3. the day upstream breaks
+4. a maintainer six months from now
+5. the tests themselves
+6. somebody auditing a repository with one commit
+7. a consumer who reads the package database
+8. the next session, starting cold
+9. an operator during a mirror outage
+10. a consumer whose transaction runs our hook
+11. adding the fifth architecture
+12. this file, read by somebody with no repository
+13. this file, checked line by line against the tree
+
+⭐ **Lenses that fit the work still outstanding**, none of them used: a consumer
+who never touches a registry, once releases exist; whoever holds the static
+`pacman` and no base image, once section 8 lands; and somebody who has to
+revert one of this project's releases.
+
+---
+
+### 8. Static pacman, everywhere, and in the releases
 
 ⛔ **Promoted from "consider" to a requirement.** The trust root today is one
 container image plus working mirrors. A statically linked `pacman` removes the
@@ -280,11 +540,17 @@ pinned key is a defensible alternative, but write down which was chosen and why.
 
 ⚠ **Three cautions, all measured or read:**
 
-- ⛔ **Licence.** The repository carries **no LICENSE file**; the `PKGBUILD`
-  declares `GPL-2.0-or-later` for what it builds, which is pacman's own licence.
-  Policy 1's vendor-then-patch does not apply cleanly: copying that `PKGBUILD`
-  into this MIT repository needs a decision, and **distributing a GPL binary
-  from a release carries a source offer**. Settle both before building.
+- ⛔ **Licence. Settled 2026-08-27, by the maintainer.** The repository carries
+  **no LICENSE file**; the `PKGBUILD` declares `GPL-2.0-or-later` for what it
+  builds, which is pacman's own licence. ⭐ **Ruled: do not vendor it. Build our
+  own recipe from pacman's own sources**, and use that `PKGBUILD` as a studied
+  reference only. Nothing of theirs is copied, so the missing LICENSE file stops
+  being a question.
+  ⚠ **The source offer is a separate obligation and is not settled.** The binary
+  is pacman, so it is `GPL-2.0-or-later` however it was built, and a release
+  asset carries a source offer with it. Decide the shape of that offer, the
+  pinned source tarball beside the binary being the obvious one, before the
+  first release is published.
 - ⚠ **Their CI does not transfer.** It builds one architecture on a Manjaro
   runner with `chrootbuild`. This project has four architectures and GitHub
   runners, so the build recipe transfers and the pipeline does not.
@@ -311,201 +577,6 @@ keyring is pinned and verified rather than absent. Full write-up in
 hashes. That solves reproducibility, not the trust root, and it is Arch only: the
 ARM and RISC-V ports publish no equivalent archive. See
 [`../references/archlinux-docker.md`](../references/archlinux-docker.md).
-
-### 3. The ARM rollback decision
-
-Measured and **not decided**. This is the smallest outstanding item and the one
-with a recorded obligation: ⭐ **a recorded decision is an acceptable outcome,
-silence is not.**
-
-The exposure, re-measured 2026-08-26:
-
-```bash
-for a in amd64 arm64 armv7 riscv64; do
-  printf '%-9s http=%s https=%s\n' "$a" \
-    "$(awk '/^Server[[:space:]]*=[[:space:]]*http:\/\//' rootfs/$a/etc/pacman.d/mirrorlist | wc -l)" \
-    "$(awk '/^Server[[:space:]]*=[[:space:]]*https:\/\//' rootfs/$a/etc/pacman.d/mirrorlist | wc -l)"
-done
-```
-
-```
-amd64     http=0   https=13
-arm64     http=10  https=3
-armv7     http=10  https=3
-riscv64   http=0   https=7
-```
-
-20 of 46 entries are plain http, all on the two ARM ports. An on-path attacker
-there can serve a **stale but validly signed** package set, which is a rollback.
-Packages are signed and `SigLevel = Required` catches forgery, so injection is
-not the risk; freezing is.
-
-⭐ **Two corrections to the original framing, both measured.**
-
-- The unsigned repository database is **not** ARM-specific. `core.db.sig` is 404
-  on Arch proper and Arch RISC-V too, which is what `DatabaseOptional` exists
-  for. The differentiator is transport, not signing.
-- Dropping plain http is more costly than it looks. The ARM **anchor** is
-  `http://mirror.archlinuxarm.org`, which offers no https at all (`https://`
-  returns a connection failure), and it is the endpoint Arch Linux ARM
-  recommends and the only active entry in the mirror list they ship. The three
-  https servers are `fl.us`, `ca.us` and `de3`, all nodes of that same operator.
-  So dropping http means dropping the recommended anchor and depending on one
-  operator's three nodes.
-
-The options:
-
-- **Drop the plain-http mirrors.** Costs the anchor and geographic spread, as
-  above.
-- **Add a version floor on the anchor**, so a build refuses to go backwards.
-  Groundwork done: the published tag family already carries the anchor version
-  (`aarch64-7.1.0.r9.g54d9411-2`), which can be read anonymously from the
-  registry, so no state file is needed. `vercmp` is in the Arch image and returns
-  1 when the first argument is newer. ⚠ Open questions: the resolve job runs on
-  `ubuntu-latest` which has no `vercmp`, so it must come from a container using
-  the digest already pinned in the `Dockerfile`; and a legitimate upstream
-  downgrade would block the daily publish, which argues for an explicit
-  `workflow_dispatch` override rather than a silent pass.
-- **Record it and move on.**
-
-### 4. Outage, slow mirror and CVE resilience
-
-- **Every mirror for one architecture down.** Today the build fails, which is
-  correct but total. Consider a pinned last-known-good package set as a fallback
-  producing an image with a loud annotation saying it is not current.
-- **Slow mirrors.** Decide the transfer policy deliberately: connect timeout,
-  total timeout, retries, and how many servers pacman may fall through.
-- **Emergency CVE patch.** There is no path to publish faster than the daily
-  cron, and no way to rebuild one architecture without rebuilding all four.
-  Consider a `workflow_dispatch` input naming a single architecture and a reason,
-  publishing only that architecture's tags and leaving the index alone until all
-  four agree.
-- **Mangled and blocked responses.** Seen in this project: a 301 that `-L`
-  followed to a 29 second dead end; a `.sig` that was 404 and became a zero byte
-  file; a `base.db` that was Zstandard where every sibling is gzip; a mirror
-  answering 403 for one path; and a mirror answering 200 from one network and
-  403 from another. ⛔ **Every fetch should assume the response is wrong, not
-  just absent.** Add tests that feed each shape to the scripts.
-
-### 5. Redundancy for the things with one of something
-
-| single point | today |
-| --- | --- |
-| the `FROM` digest | one image, one registry |
-| the Arch Linux ARM keyring | one mirror path, one package name |
-| the anchor package | `pacman` only |
-| the riscv64 pool | six hand maintained servers in `mirrors/riscv64.pool` |
-| GHCR as the digest staging area | the whole publish depends on it |
-| `archlinux.org/mirrors/status/json/` | `scripts/gen-mirrorlist:22`, the only amd64 pool source |
-| `raw.githubusercontent.com` ARM mirrorlist | `scripts/gen-mirrorlist:23`, the only ARM pool source |
-
-For each: is a second source possible, and is the failure loud?
-
-⚠ The last two are known to fail. `rate-mirrors` issue 85 records the Arch status
-endpoint returning 429 and being unreachable during an infrastructure incident.
-The exposure here is bounded because the generator is not part of any image
-build, and `mirrors/<arch>.anchors` is written whatever the pool source does.
-
-### 6. More container formats and non-container consumers
-
-⭐ **The framing was "so other tools can import, extract and reuse without
-container tooling".** None attempted.
-
-⚠ **Ships together with task 2.** The static `pacman` per architecture and the
-bootstrap guide are release assets too, so build the release once and put all of
-it in the same place rather than adding a second mechanism later.
-
-- A release asset per architecture carrying the **rootfs tarball**, with a sha256
-  and the evidence file beside it. That is the artefact ArchPOWER, Arch Linux ARM
-  and Arch RISC-V all publish and this project does not.
-- The **bootstrap set** as a release asset: the resolved package list with
-  versions and hashes, so a third party can rebuild the same root without this
-  repository's tooling. ⭐ `scripts/gen-evidence` already produces most of it.
-- An **OCI layout directory** or `docker save` archive for air-gapped consumers.
-- A **manifest of manifests**: one small JSON at a stable URL listing every tag,
-  its digest, its platform and its anchor version.
-- ⚠ Check what `pkgforge/alpine` and the sibling images publish before inventing
-  a shape. Matching the org is worth more than being clever.
-
-⭐ **The release mechanics are mined.** `pkgforge-dev/cross-libc-dlopen`
-`.github/workflows/release.yml`, 250 lines, is the pattern to follow:
-
-- triggers on `tags: ['v*']`; a `workflow_dispatch` run builds and uploads for
-  inspection and **stops**, so a manual run cannot create a release;
-- ⛔ **the body is generated**, by `scripts/release-notes.sh` reading
-  `build-manifest.json`, so the release and the manifest cannot disagree. Nothing
-  in the body is typed at release time;
-- it refuses a tag whose commit never reached the default branch;
-- `fetch-depth: 0`, because the changelog is `git log` between this tag and the
-  one before it;
-- `permissions: contents: write` only on the publishing job.
-
-⚠ **This repository has no releases yet**, so there is nothing to fix, only to
-build. ⚠ With a single-commit history a `git log` changelog is degenerate until
-there is a second tag; generate the body from the manifest, as the reference
-does.
-
-### 7. Faster CI
-
-Baseline: **245 seconds** wall clock on run `32992678276`, four builds in
-parallel, no disk pressure. Optimise against that number, not a guess.
-
-- **Native arm64 runners.** `vars.ARM64_RUNNER` is unset and the matrix already
-  reads it. ⚠ An unavailable label queues forever, so verify access first.
-- **Skip publishing when nothing changed.** The cron runs daily and tags by date,
-  so an unchanged package set still mints a new tag for a byte-identical image.
-  ⭐ The largest cheap saving available. Compare the resolved package set against
-  the last published build and skip when it matches. ⚠ Cache the inputs, never
-  the verdict. A cached "this passed" is not a pass.
-- **A shared package cache across the matrix.** Four jobs download overlapping
-  sets. ⛔ But every job in one run must build against the same pinned set, or the
-  four architectures are no longer one coherent release.
-
-### 8. The items only the maintainer can apply
-
-[`../maintainer-actions.md`](../maintainer-actions.md) is the list. ⛔ **Do not
-apply these without being asked.**
-
-- ⛔ **The GitGuardian secret.** Ask, do not create. Once `GITGUARDIAN_API_KEY`
-  exists, add the scanning workflow. ⛔ Do not add the workflow first: one that
-  fails every run for a missing secret trains people to ignore a red mark.
-- ⛔ **A freshness pull request carries no status check.** Its run is created and
-  held at `action_required` because the pull request is opened with the built-in
-  `GITHUB_TOKEN`. The required check never reports, so merging takes two
-  deliberate actions. Fixing it needs a personal access token or a GitHub App
-  installation token, which is a credential and so the maintainer's. Measured in
-  `maintainer-actions.md` section 4.
-- `default_workflow_permissions` is `write`. Every workflow declares its own, so
-  narrowing the default to `read` is safe in principle and untested in practice.
-- The `debug` branch holds nothing unique. Proposed for deletion, not deleted.
-- ⚠ **Forks.** The maintainer is contacting fork owners so the repository can be
-  detached. ⛔ Nothing in the repository changes for it.
-
-### 9. Reviews
-
-⛔ **Three is the floor, five is better**, once the work is done and CI is green.
-Each review states its lens, what it looked at, what it found, and what it did
-**not** look at. ⭐ **A review that finds nothing must say what it ruled out**, or
-it is not a review. ⭐ Each also carries a change summary: files touched, lines
-added and removed.
-
-Eight lenses are used, in [`../reviews/`](../reviews/). ⛔ **Do not repeat them:**
-
-1. a consumer who upgrades blind
-2. an attacker at build time
-3. the day upstream breaks
-4. a maintainer six months from now
-5. the tests themselves
-6. somebody auditing a repository with one commit
-7. a consumer who reads the package database
-8. the next session, starting cold
-
-⭐ **Lenses that fit the work still outstanding**, none of them used: a consumer
-who never touches a registry, once releases exist; whoever holds the static
-`pacman` and no base image, once task 2 lands; and an operator during a mirror
-outage, once task 4 is decided.
-
----
 
 ## Working notes
 
@@ -559,6 +630,17 @@ IMAGE=localhost/archlinux:amd64 PLATFORM=linux/amd64 EVIDENCE=.tmp/ev.json bash 
 
 ⛔ **The image suite needs `EVIDENCE`.** ⚠ `40-mirrors-reachable.sh` needs network
 and takes about 45 seconds.
+
+⚠ **`tests/image/60-defect-parity.sh` starts the image**, where every other
+image test creates a container without starting it. It sends one probe over
+stdin and reads `key=value` back. On `linux/riscv64` under emulation the whole
+file takes about 32 seconds. The reason it does this, and why a `cp` based check
+would pass on Windows for the wrong reason, is in the file's own header.
+
+⚠ **The static suite needs `tar`.** `67-mangled-responses.sh` builds gzip
+fixtures. It needs no network and no server: the image the suite also runs in
+ships no python, no `nc` and no busybox, so every mangled mirror is a local
+file.
 
 ⭐ **Run the static suite on Linux before pushing**, not only on Windows. One
 assertion passed on Windows and failed in CI because only the Windows branch was

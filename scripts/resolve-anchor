@@ -58,7 +58,11 @@ while IFS= read -r server; do
   # A mirror that does not answer is a normal result, so the reason is reported
   # and the next server is tried. Nothing is discarded silently.
   db="$(mktemp)"
-  if ! fetch_error="$(curl -sSL -A "$UA" --connect-timeout 10 --max-time 120 \
+  # ⚠ -f is load-bearing. Without it a mirror answering 403 or serving an error
+  # page returns exit 0 with an HTML body, and the failure surfaces two steps
+  # later as "not a readable archive", which sends the reader looking for a
+  # corrupt database instead of a blocked path.
+  if ! fetch_error="$(curl -sSfL -A "$UA" --connect-timeout 10 --max-time 120 \
       -o "$db" "$url/core.db" 2>&1)"; then
     echo "resolve-anchor: cannot fetch $url/core.db: ${fetch_error:-no error text}" >&2
     rm -f "$db"
@@ -66,7 +70,11 @@ while IFS= read -r server; do
   fi
 
   if ! entries="$(tar -tzf "$db" 2>&1)"; then
-    echo "resolve-anchor: $url/core.db is not a readable archive: $(head -1 <<< "$entries")" >&2
+    # ⛔ The first non-empty line, not the first line. tar puts a blank line
+    # ahead of what gzip printed, so taking line 1 made this diagnostic empty
+    # in every case it exists for: "not in gzip format" and "unexpected end of
+    # file" are both on line 2.
+    echo "resolve-anchor: $url/core.db is not a readable archive: $(awk 'NF { print; exit }' <<< "$entries")" >&2
     rm -f "$db"
     continue
   fi

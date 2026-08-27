@@ -51,6 +51,14 @@ jobs:
             --shell=bash --external-sources \
             tests/run.sh tests/lib/harness.sh tests/static/*.sh tests/image/*.sh \
             scripts/* bootstrap/any/usr/local/bin/* examples/*.sh
+          # What ships inside the image, checked as sh rather than bash. It runs
+          # from a pacman hook in a consumer's container, where the only thing
+          # guaranteed is /bin/sh, so a bashism here is a defect the bash pass
+          # above would accept.
+          # tag: stable
+          docker run --rm -v "$PWD:/mnt:ro" -w /mnt \
+            docker.io/koalaman/shellcheck@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d \
+            --shell=sh rootfs/any/usr/local/lib/docker-archlinux/*
 
       - name: actionlint
         run: |

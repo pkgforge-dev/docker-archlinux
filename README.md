@@ -124,6 +124,31 @@ docker run --rm -it -e LANG=de_DE.UTF-8 -e LC_ALL=de_DE.UTF-8 -e LANGUAGE=de ghc
 
 [`examples/04-add-a-locale.sh`](examples/04-add-a-locale.sh) shows both.
 
+- #### An installed command is callable by name
+
+Arch puts perl scripts in `/usr/bin/vendor_perl`, `/usr/bin/site_perl` and
+`/usr/bin/core_perl`. None is on `PATH`. The `perl` package adds them through
+`/etc/profile.d/perlbin.sh`, which only a login shell reads, so an installed
+command is not callable without one.
+
+```bash
+docker run --rm ghcr.io/pkgforge-dev/archlinux:latest sh -c 'pacman -Sy --noconfirm perl-image-exiftool >/dev/null 2>&1; exiftool -ver'
+```
+
+That prints a version here. A pacman hook symlinks such a command into
+`/usr/local/bin`, which is on `PATH`.
+
+⛔ `PATH` is unchanged. It is byte for byte the official image's, and nothing
+that resolved before resolves anywhere new: a name already claimed under
+`/usr/bin` is never linked, and a link goes as soon as its target does.
+
+Undo it with:
+
+```bash
+rm /etc/pacman.d/hooks/bindir-links.hook
+find /usr/local/bin -lname '/usr/bin/*_perl/*' -delete
+```
+
 - #### Provenance
 
 Every image carries a build provenance attestation and an SBOM. Each build also

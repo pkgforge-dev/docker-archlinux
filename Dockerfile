@@ -84,6 +84,26 @@ RUN <<EOS
 EOS
 
 #------------------------------------------------------------------------------------#
+## Machine identity
+# systemd's post_install runs systemd-machine-id-setup, so the bootstrap leaves a
+# real machine ID behind and every container from one published tag would carry
+# the same one. machine-id(5) asks an image for an empty file: the container
+# provisions its own on start, and sd_id128_get_machine_app_specific derives
+# application identifiers from it, so a shared value is a shared seed.
+#
+# The file stays. Removing it is its own defect, measured in
+# HISTORY/defect-parity.md, and tests/image/60-defect-parity.sh asserts both
+# halves: present, and empty.
+#------------------------------------------------------------------------------------#
+RUN <<EOS
+  set -eu
+  : > /etc/machine-id
+  # A truncate that silently did nothing would leave the ID in the image and
+  # still report success.
+  [ ! -s /etc/machine-id ]
+EOS
+
+#------------------------------------------------------------------------------------#
 ## Locale
 # locale.conf and locale.gen ship from rootfs/any, so only the generation runs
 # here. Appending the same lines again would put each entry in the file twice.

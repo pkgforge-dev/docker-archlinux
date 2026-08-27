@@ -22,6 +22,15 @@ on:
         description: With dry_run, also copy to the Docker Hub scratch repository
         type: boolean
         default: false
+      # ⛔ The rollback guard's only way through. A stale but validly signed
+      # package set is what an on-path attacker on a plain http ARM mirror can
+      # serve, and signatures do not catch it. A legitimate upstream revert
+      # exists too, so the override is a named, deliberate act rather than a
+      # silent pass. HISTORY/arm-rollback.md.
+      allow_anchor_downgrade:
+        description: Publish even though an anchor version went backwards
+        type: boolean
+        default: false
   schedule:
     - cron: "30 05 * * *"  # 08:30 PM UTC everyday
 
@@ -124,6 +133,24 @@ jobs:
           anchors="${anchors}}"
           jq -e . <<< "$anchors" > /dev/null
           echo "anchors=$anchors" >> "$GITHUB_OUTPUT"
+
+      # ⛔ A build whose anchor went backwards is refused here, before anything
+      # is built or pushed. 20 of the 46 shipped mirrors are plain http, all on
+      # the two ARM ports, because the mirror Arch Linux ARM recommends offers
+      # no https. An on-path attacker there cannot forge a package, and can
+      # serve a stale but validly signed set. Signatures do not catch that.
+      #
+      # The floor is what this repository already published, read from the
+      # public tag list with no token and no state file. FLOOR_IMAGE is the
+      # real repository even in a dry run: the floor is a fact about the
+      # packages, not about where this run intends to push.
+      - name: Refuse a build whose anchor went backwards
+        env:
+          ANCHORS: ${{ steps.inputs.outputs.anchors }}
+          FLOOR_IMAGE: ${{ env.GHCR_IMAGE }}
+          ALLOW_ANCHOR_DOWNGRADE: ${{ inputs.allow_anchor_downgrade && '1' || '0' }}
+          CONTAINER_RUNTIME: docker
+        run: scripts/check-anchor-floor "$ANCHORS"
 
       - name: Check the repository before building it
         run: tests/run.sh static

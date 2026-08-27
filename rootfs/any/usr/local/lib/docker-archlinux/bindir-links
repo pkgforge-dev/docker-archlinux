@@ -1,0 +1,138 @@
+#!/bin/sh
+#
+# Make an executable that a package installed outside PATH callable by name.
+#
+# Arch installs perl scripts into /usr/bin/vendor_perl, /usr/bin/site_perl and
+# /usr/bin/core_perl, none of which is on PATH. The perl package adds them
+# through /etc/profile.d/perlbin.sh, which only a login shell reads, and a
+# container is not a login shell:
+#
+#   podman run <image> exiftool            command not found
+#   podman run <image> bash -lc exiftool   /usr/bin/vendor_perl/exiftool
+#
+# That is upstream issue 80. It is a property of the packaging rather than of
+# this image, and the official image has it identically.
+#
+# ⛔ PATH is not the fix. This image's PATH is byte for byte the official
+# image's, consumer tooling reads it, and changing it would make this image
+# disagree with a normal Arch install. So the executables come to PATH instead.
+# A symlink in /usr/local/bin, which is on PATH, is owned by filesystem, holds
+# nothing any package ships, and is the location FHS reserves for this.
+#
+# ⛔ Nothing is ever shadowed. A name that already resolves is left alone, so
+# no command that resolved before this ran resolves anywhere new. That is
+# policy 7: more is possible, nothing changed.
+#
+# ⭐ Undoable, which is the test this repository applies to any default:
+#
+#   rm /etc/pacman.d/hooks/bindir-links.hook
+#   find /usr/local/bin -lname '/usr/bin/*_perl/*' -delete
+#
+# Run from /etc/pacman.d/hooks/bindir-links.hook after a transaction that
+# touches /usr/bin. It reconciles rather than appends, so running it by hand at
+# any time is safe and running it twice changes nothing the first run did not.
+set -eu
+
+LINKDIR=/usr/local/bin
+
+# The directories under /usr/bin that hold executables and are not on PATH.
+# ⚠ Space separated, and no path here may contain whitespace.
+BINDIRS="/usr/bin/core_perl /usr/bin/site_perl /usr/bin/vendor_perl"
+
+# Where a name already resolving means no link may be made. /usr/sbin, /sbin
+# and /bin are symlinks to /usr/bin, so /usr/bin covers all three, and
+# tests/image/60-defect-parity.sh asserts those links hold.
+SEARCHDIRS="/usr/local/sbin /usr/bin"
+
+[ -d "$LINKDIR" ] || exit 0
+
+linked=0
+pruned=0
+
+# in_bindir PATH -> 0 when PATH names something inside one of BINDIRS
+in_bindir() {
+  for d in $BINDIRS; do
+    case "$1" in
+      "$d"/*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# resolves NAME -> 0 when NAME is already reachable without LINKDIR
+resolves() {
+  for d in $SEARCHDIRS; do
+    if [ -e "$d/$1" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+#---------------------------------------------------------------------------#
+# 1. Prune.
+#
+# A link this script made goes when its target is gone, and when the name has
+# since been claimed by a package. The second case is what keeps the no
+# shadowing rule true over time: a package that later installs /usr/bin/exiftool
+# has to win, not a symlink left behind here.
+#
+# ⛔ Only links pointing into BINDIRS are touched. Everything else in
+# /usr/local/bin belongs to the consumer.
+#---------------------------------------------------------------------------#
+for link in "$LINKDIR"/*; do
+  if [ ! -L "$link" ]; then
+    continue
+  fi
+  if ! in_bindir "$(readlink "$link")"; then
+    continue
+  fi
+  name="${link##*/}"
+  # -e follows the link, so a false here is a dangling link.
+  if [ ! -e "$link" ] || resolves "$name"; then
+    rm -f "$link"
+    pruned=$((pruned + 1))
+  fi
+done
+
+#---------------------------------------------------------------------------#
+# 2. Link what is not reachable by name.
+#---------------------------------------------------------------------------#
+for dir in $BINDIRS; do
+  if [ ! -d "$dir" ]; then
+    continue
+  fi
+  for f in "$dir"/*; do
+    if [ ! -f "$f" ] || [ ! -x "$f" ]; then
+      continue
+    fi
+    name="${f##*/}"
+    if resolves "$name"; then
+      continue
+    fi
+    if [ -L "$LINKDIR/$name" ]; then
+      current="$(readlink "$LINKDIR/$name")"
+      # Already correct. ⛔ Re-making it would count as work every run and
+      # print a line on a transaction where nothing changed.
+      if [ "$current" = "$f" ]; then
+        continue
+      fi
+      # A link to somewhere else entirely is the consumer's, not this
+      # script's, and is left exactly as it is.
+      if ! in_bindir "$current"; then
+        continue
+      fi
+    elif [ -e "$LINKDIR/$name" ]; then
+      # A real file here is the consumer's.
+      continue
+    fi
+    ln -sfn "$f" "$LINKDIR/$name"
+    linked=$((linked + 1))
+  done
+done
+
+# Quiet when there was nothing to do. A hook that prints on every transaction
+# whether or not it acted teaches a reader to skip its output.
+if [ "$linked" -gt 0 ] || [ "$pruned" -gt 0 ]; then
+  printf '  %d linked, %d pruned in %s\n' "$linked" "$pruned" "$LINKDIR"
+fi

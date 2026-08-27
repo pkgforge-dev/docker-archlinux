@@ -32,6 +32,12 @@ must_be_executable() {
   if [ -d bootstrap/any/usr/local/bin ]; then
     find bootstrap/any/usr/local/bin -type f
   fi
+  # rootfs/any ships into the image. The hook that runs this names the
+  # interpreter, so it survives a lost bit, but its own header tells a reader
+  # they may run it by hand and that path needs the mode to be right.
+  if [ -d rootfs/any/usr/local/lib/docker-archlinux ]; then
+    find rootfs/any/usr/local/lib/docker-archlinux -type f
+  fi
   # the suite entry point, and every test file
   if [ -f tests/run.sh ]; then
     printf '%s\n' tests/run.sh

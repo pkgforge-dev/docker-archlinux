@@ -128,4 +128,44 @@ else
   fi
 fi
 
+#---------------------------------------------------------------------------#
+# The rollback guard.
+#
+# 20 of the 46 shipped mirrors are plain http, all on the two ARM ports. An
+# on-path attacker there cannot forge a package and can serve a stale but
+# validly signed set, which signatures do not catch. scripts/check-anchor-floor
+# refuses a build whose anchor is older than one already published.
+#
+# ⛔ Deleting one line from the workflow turns that off, and every run stays
+# green. That is what these assert. HISTORY/arm-rollback.md.
+#---------------------------------------------------------------------------#
+if [ -n "$(grep_matches 'scripts/check-anchor-floor' "$WF")" ]; then
+  ok "the workflow runs scripts/check-anchor-floor"
+else
+  fail "the workflow runs scripts/check-anchor-floor" \
+    "no step calls it, so a build whose anchor went backwards publishes normally" \
+    "a stale package set is validly signed, so nothing else in the run would notice" \
+    "reproduce: grep -n check-anchor-floor .github/workflows/build-deploy.yml"
+fi
+
+# The override has to exist and has to be an input, so taking one is a named
+# act. An env default, or a hardcoded 1, would be the same thing switched off.
+if [ -n "$(grep_matches '^[[:space:]]+allow_anchor_downgrade:' "$WF")" ]; then
+  ok "allow_anchor_downgrade is a workflow_dispatch input"
+else
+  fail "allow_anchor_downgrade is a workflow_dispatch input" \
+    "not declared, so a legitimate upstream revert has no way through but editing the workflow" \
+    "reproduce: grep -n allow_anchor_downgrade .github/workflows/build-deploy.yml"
+fi
+
+hardcoded="$(grep_matches '^[[:space:]]*ALLOW_ANCHOR_DOWNGRADE:[[:space:]]*.?1' "$WF")"
+if [ -z "$hardcoded" ]; then
+  ok "the override is not switched on in the workflow itself"
+else
+  fail "the override is not switched on in the workflow itself" \
+    "found: $(printf '%s' "$hardcoded" | tr '\n' ' ')" \
+    "a guard that always passes is the same as no guard, and reads as one that works" \
+    "reproduce: grep -n ALLOW_ANCHOR_DOWNGRADE .github/workflows/build-deploy.yml"
+fi
+
 summary

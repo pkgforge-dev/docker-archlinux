@@ -137,7 +137,10 @@ for repo in $repos; do
     url="${server//\$repo/$repo}"
     url="${url//\$arch/$arch}"
     db="$work/$repo.db"
-    if ! fetch_error="$(curl -sSL -A "$UA" --connect-timeout 10 --max-time 300 \
+    # ⚠ -f, so a mirror answering 403 says so. Without it curl exits 0 with the
+    # error page in the file and the failure surfaces below as an unreadable
+    # archive, which reads as corruption rather than as a blocked path.
+    if ! fetch_error="$(curl -sSfL -A "$UA" --connect-timeout 10 --max-time 300 \
         -o "$db" "$url/$repo.db" 2>&1)"; then
       echo "gen-evidence: cannot fetch $url/$repo.db: ${fetch_error:-no error text}" >&2
       rm -f "$db"

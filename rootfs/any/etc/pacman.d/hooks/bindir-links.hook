@@ -1,0 +1,31 @@
+# Make an executable a package installed outside PATH callable by name.
+#
+# See /usr/local/lib/docker-archlinux/bindir-links for what it does and why
+# PATH is not the answer. Upstream issue 80.
+#
+# The trigger is every path under /usr/bin, not only the perl directories, so
+# that a package claiming a name later prunes the link that would have shadowed
+# it. Both glob shapes are listed because a pattern with no slash after the
+# star does not reach a file one directory deeper.
+#
+# ⭐ Exec names the interpreter rather than the script, deliberately. git on
+# Windows does not record an execute bit, so a mode that is right in a checkout
+# is not right in the index unless somebody remembers. A hook whose Exec is not
+# executable fails every transaction the consumer runs, so the one thing this
+# must not depend on is that bit. tests/static/70-executable-bits.sh sets it
+# anyway, and this makes the hook correct even if it is ever lost.
+
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Path
+Target = usr/bin/*
+Target = usr/bin/*/*
+
+[Action]
+Description = Linking executables installed outside PATH...
+Depends = coreutils
+Depends = bash
+When = PostTransaction
+Exec = /bin/sh /usr/local/lib/docker-archlinux/bindir-links
