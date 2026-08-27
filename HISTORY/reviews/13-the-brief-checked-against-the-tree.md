@@ -86,7 +86,7 @@ which is evidence enough that they are current: a doubled backslash arrived
 halved twice while editing this very file, and native `jq` writing CRLF turned a
 161 tag sweep into 161 identical failures that looked like 161 missing tags.
 
-⚠ **The file grew, from 675 lines to 747.** Review 12 covers why and says
+⚠ **The file grew, from 675 lines to 788.** Review 12 covers why and says
 plainly that a reduction was asked for and did not happen in total, only in the
 finished sections.
 

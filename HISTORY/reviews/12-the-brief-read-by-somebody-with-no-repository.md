@@ -69,7 +69,7 @@ so. ⚠ It is still the thing most likely to send somebody looking for a file th
 is not there, and no test can tell a path that is elsewhere from a path that is
 wrong.
 
-⚠ **The file is 747 lines and it grew today**, from 675. It was asked to shrink.
+⚠ **The file is 788 lines and it grew today**, from 675. It was asked to shrink.
 It did shrink where it was asked to, in the finished sections, and it grew more
 than that in section 1, which is a new task described from scratch. ⭐ The rule
 the file states is about *kind*, not size: finished work summarised, unfinished

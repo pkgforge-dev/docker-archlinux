@@ -157,7 +157,7 @@ Summaries. Each line points at the artefact that proves it.
 | architectures | ppc64le and i686 excluded, each with the measurement, in [`../removed-architectures.md`](../removed-architectures.md) |
 | branch protection | applied. One review, `Static suite and linters` required, no force pushes, no deletions, `enforce_admins: false` |
 | history | `main` is one root commit, `Rewrite Project v.0.0.1`. Everything before it is on `history-archive`, tip `9d1e142`. See [`../rewrite.md`](../rewrite.md) |
-| reviews | thirteen, each with its lens, its findings and what it did not look at, in [`../reviews/`](../reviews/). 9 found and closed a hole in the rollback guard, 11 mapped the eleven places that name the architecture set |
+| reviews | thirteen, each with its lens, its findings and what it did not look at, in [`../reviews/`](../reviews/). 9 found and closed a hole in the rollback guard, 11 mapped the 15 places that name the architecture set, 8 of which fail silently |
 | upstream defect parity | all 79 upstream issues triaged, 19 in 14 classes measured against this image, in [`../defect-parity.md`](../defect-parity.md). Two defects found here and fixed: a build-time `/etc/machine-id` shipped in every image, and two `DisableSandbox` comments missing from all four `pacman.conf`. 51 assertions across `tests/image/60-defect-parity.sh` and `tests/static/45-pacman-conf-shape.sh`, each seen to fail. Issue 55: 1 path missing of 49035, against 25508 of 49027 in the official Arch image |
 | ARM rollback | decided. Plain http mirrors stay, and `scripts/check-anchor-floor` refuses a build whose anchor is older than one already published. No state file: the floor is read from the public tag list. `vercmp` comes from the digest already pinned in the `Dockerfile`. Measured in [`../arm-rollback.md`](../arm-rollback.md) |
 | a command outside PATH | upstream issue 80 fixed with `PATH` untouched. A pacman hook links an executable from the perl bindirs into `/usr/local/bin`, never shadowing a name that already resolves. `tests/static/55-shipped-hooks.sh`, and section 9 of `tests/image/60-defect-parity.sh` |
@@ -201,9 +201,12 @@ session would otherwise re-derive.
 - ⚠ **Blob existence was sampled, not swept.** 7 tags of 161 on each registry,
   and tag resolution swept in full on both. A full sweep is roughly 2600
   requests per registry, which is a job rather than a measurement.
-- ⚠ **The `docker` runtime path is unverified locally.** This machine has
-  podman only. CI sets `CONTAINER_RUNTIME: docker`, and the new image test
-  starts the image the same way `scripts/gen-evidence` already does there.
+- ⭐ **The `docker` runtime path is verified.** This machine has podman only,
+  so it was closed in CI instead: dry run `33038310288` on 2026-08-27 ran the
+  image suite with `CONTAINER_RUNTIME: docker` on all four architectures under
+  QEMU, and `60-defect-parity.sh` passed 35 of 35 on `riscv64`. The same run
+  exercised `scripts/check-anchor-floor`, which read 161 tags and reported all
+  four architectures at the floor.
 
 ---
 
@@ -217,6 +220,42 @@ session would otherwise re-derive.
 shape of problem. ⛔ Read [`../removed-architectures.md`](../removed-architectures.md)
 first: `ppc64le` was removed from this repository once, and the reason it was
 removed is the reason one of these two is hard.
+
+⛔ **Do this first, before either port.** Review 11
+([`../reviews/11-adding-the-fifth-architecture.md`](../reviews/11-adding-the-fifth-architecture.md))
+mapped every place that names the architecture set. There are **15, in 6
+files**, and they do not fail the same way. ⚠ The count is occurrences, not
+files, because each one has to be edited:
+
+```bash
+grep -rn 'amd64 arm64 armv7 riscv64' scripts tests .github Dockerfile
+```
+
+| file | places | if the new architecture is missed there |
+| --- | --- | --- |
+| `.github/workflows/build-deploy.yml` | the matrix at 182, and the loops at 127, 353, 384 | not built, no anchor, no tags, and the index check never looks for it. ⛔ **All four silent** |
+| `.github/workflows/freshness-mirrors.yml` | 46, 77, 127 | its mirrorlist is never refreshed or probed. ⛔ **Silent** |
+| `scripts/gen-mirrorlist` | the `all` loop at 317, and the usage string at 314 | `gen-mirrorlist all` skips it. ⛔ **Silent** |
+| `scripts/tag-names` | the alias table at 38 to 41 | ⭐ **loud.** An unknown architecture is a `die` |
+| `tests/static/60-tag-families.sh` | 53, 98, and a `reproduce:` line at 104 | ⭐ loud, but only for the four names it hardcodes |
+| `tests/static/80-docs-claims.sh` | 184 | ⭐ loud, documented tags and emitted tags must be one set |
+| `tests/static/90-package-lists.sh` | 68 | ⭐ loud, one bootstrap list per matrix architecture |
+
+⭐ **The scripts and the tests are loud. The workflows are silent.** 8 of the 15
+fail silently, and 7 of those 8 are a `for` loop over the same four names in
+YAML. Missing one publishes a release that looks complete and is not.
+
+⭐ **So the first commit of this task is a test, not a port.** Add a static test
+asserting the same architecture set appears in every one of those places. It
+fails immediately, names the ones that disagree, and it is what makes the rest
+of this section safe. ⛔ Doing it the other way round means finding out from a
+release.
+
+⚠ Three things are deliberately absent from that table. The `Dockerfile` takes
+`TARGETARCH` and `TARGETVARIANT` from buildx and names no architecture.
+`scripts/resolve-anchor` and `scripts/gen-evidence` carry no list either: they
+`die` when `rootfs/<arch>/` is not there. All three are loud by construction and
+need nothing added.
 
 #### 1a. loongarch64, `loong64`
 
@@ -267,7 +306,8 @@ What it owes, in order:
 4. The pin, and a generalisation of `install-alarm-keyring`. ⚠ Two keyrings
    installed by two scripts that differ only in a name is the shape that rots.
 5. The build matrix, `scripts/tag-names` aliases, `scripts/gen-mirrorlist`, and
-   the freshness workflows.
+   the freshness workflows. ⛔ All 15 places from the table above, and the test
+   written first is what tells you when one is missed.
 6. ⚠ `tests/static/60-tag-families.sh` has 24 assertions over `tag-names` and
    every one of them changes.
 
@@ -387,9 +427,10 @@ build, and `mirrors/<arch>.anchors` is written whatever the pool source does.
 ⭐ **The framing was "so other tools can import, extract and reuse without
 container tooling".** None attempted.
 
-⚠ **Ships together with task 2.** The static `pacman` per architecture and the
-bootstrap guide are release assets too, so build the release once and put all of
-it in the same place rather than adding a second mechanism later.
+⚠ **Ships together with section 8.** The static `pacman` per architecture and
+the bootstrap guide are release assets too. ⛔ Section 8 is now last, so do not
+wait for it: build the release mechanism here so a static `pacman` asset can be
+added to it later without a second mechanism.
 
 - A release asset per architecture carrying the **rootfs tarball**, with a sha256
   and the evidence file beside it. That is the artefact ArchPOWER, Arch Linux ARM
