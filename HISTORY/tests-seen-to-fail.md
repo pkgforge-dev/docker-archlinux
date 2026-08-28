@@ -58,6 +58,22 @@ fault, and pointing `REPO_ROOT` at that directory.
 | `67` | the archive check removed altogether | ⭐ **nothing failed, correctly.** The version extraction finds no `pacman-` line in an error page either, so the mirror is still refused and the good one still answers. What changes is the wording of the complaint, not the outcome. Recorded because a fault that does not fail a test is worth knowing about |
 | `70-executable-bits.sh` | `git update-index --chmod=-x scripts/tag-names` | `not ok 1 - every invoked file is executable in the index` |
 | `70` | a test file present on disk but not added to git | `not ok 2 - every invoked file is tracked by git` |
+| `75-architecture-set.sh` | ⭐ **a fifth architecture, `loong64`, added to the build matrix and nowhere else.** The whole reason the file exists | 17 of 24 assertions, naming all 13 loop sites by file and line, plus `not ok 16`, `it exits non-zero for: loong64`, `not ok 17` for the usage string, `not ok 21 - loong64 has all 4 of its per architecture files` listing all four, and `not ok 24` for the tag family coverage |
+| `75` | `riscv64` dropped from the loop at `freshness-mirrors.yml:46` | `not ok 6 - .github/workflows/freshness-mirrors.yml:46 names the whole architecture set`, `missing: riscv64` |
+| `75` | `riscv64` replaced with `ppc64le` at `gen-mirrorlist:317`, a removed architecture left behind | `not ok 9 - scripts/gen-mirrorlist:317 names architectures and nothing else`, `not a spelling of any architecture in the matrix: ppc64le` |
+| `75` | an `arch-subset:` marker put above a loop that names the whole set | `not ok 10 - tests/static/60-tag-families.sh:54 is marked a subset and is one` |
+| `75` | the list at `gen-mirrorlist:317` continued onto a second line with a backslash | `not ok 9 - scripts/gen-mirrorlist:317 keeps its architecture list on one line`, `read so far: amd64 arm64` |
+| `75` | the scanner's own `for` pattern changed to `forx`, so it matches nothing | `not ok 2 - the scan found the architecture loops` |
+| `75` | a `ppc64le)` case added to `aliases_for` in `tag-names` | `not ok 16 - scripts/tag-names has an alias set for exactly the 4 matrix architectures`, `has an alias set and is not built: ppc64le` |
+| `75` | `aliases_for` rewritten as an if chain, so it still answers and has no case labels | `not ok 16 - the alias table in scripts/tag-names can be read` |
+| `75` | `riscv64` given a second matrix entry | `not ok 1 - each architecture appears once in the build matrix` |
+| `75` | the `platform:` line deleted from the `armv7` matrix entry | `not ok 1 - every matrix entry carries a platform`, `no platform: line for: armv7` |
+| `75` | `docker_arch:` renamed throughout the matrix | `not ok 1 - the build matrix names its architectures`, and the file stops there rather than measuring 22 assertions against nothing |
+| `75` | `.github/workflows/build-deploy.yml` deleted | `not ok 1 - the build workflow exists` |
+| `75` | `rootfs/ppc64le/` created | `not ok 22 - no rootfs or bootstrap directory belongs to an architecture the matrix does not build`, `not in the matrix: rootfs/ppc64le` |
+| `75` | the usage string cut to `gen-mirrorlist ARCH` | `not ok 17 - the gen-mirrorlist usage string names the architectures it takes` |
+| `75` | every `expect_alias_count` call commented out in `60-tag-families.sh` | `not ok 23 - 60-tag-families.sh checks an alias count per architecture` |
+| `75` | `chmod -x scripts/tag-names` | `not ok 16 - scripts/tag-names is executable`. ⚠ Injected in the container. MSYS reports every file executable, so this fault cannot be made on Windows at all |
 | `80-docs-claims.sh` | the usage block the README shipped before, where `!#` is not a comment | `not ok 2 - README.md bash block 9 parses` |
 | `80` | the badge pointed back at `github.com/pkgforge/docker-archlinux` | `not ok 3 - README does not link to github.com/pkgforge/docker-archlinux` |
 | `80` | every mention of GHCR removed from the README | `not ok 4 - README names the publish target ghcr.io/pkgforge-dev/archlinux` |
@@ -66,6 +82,16 @@ fault, and pointing `REPO_ROOT` at that directory.
 | `80` | an example with a shell syntax error | `not ok 1 - examples/99-broken.sh parses as bash` |
 | `80` | `examples/` deleted | `not ok 1 - examples/ exists` |
 | `80` | `set -euo pipefail` restored above a pipeline piping into `head` | `not ok 2 - no example sets pipefail alongside a pipeline that exits early` |
+
+⭐ **One of these faults found a defect in the test rather than in the tree.**
+`75-architecture-set.sh` first reported a list running onto a second line by
+sending the word `continued` in place of the words it had read. The caller
+counts recognised architecture names to decide whether a loop is about
+architectures at all, `continued` is not one, so the count was zero and the
+loop was skipped before it could be reported. The assertion could not fail. It
+now carries the words it did read alongside a flag, and the fault above is what
+exposed that. ⛔ A test written and never broken on purpose would have shipped
+saying nothing.
 
 ## Image suite
 

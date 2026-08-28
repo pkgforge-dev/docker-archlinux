@@ -77,6 +77,9 @@ done
 
 # The two ARM ports need the Arch Linux ARM keyring in the target root, because
 # the packages there are signed by a key archlinux-keyring does not carry.
+#
+# arch-subset: the ARM ports, the only ones needing a second keyring. Read by
+# 75-architecture-set.sh, which otherwise requires the whole set here.
 for arch in arm64 armv7; do
   list="$REPO_ROOT/bootstrap/$arch/etc/bootstrap-packages.txt"
   [ -f "$list" ] || continue

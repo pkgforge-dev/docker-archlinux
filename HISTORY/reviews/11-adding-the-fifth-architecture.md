@@ -47,6 +47,19 @@ are loops over the same four names. There is no single list, so adding a fifth
 means finding all of them, and missing one of the silent eight produces a
 release that looks complete and is not.
 
+⚠ **Both numbers in the line above are wrong, and are left recorded rather than
+quietly corrected**, the same way this review already treats its first table.
+The count is **16 places across 7 files**, and **9** of them are silent. The
+table above this line already lists 7 files; the prose said 6. The missing
+sixteenth place is `.github/workflows/build-deploy.yml:429`, the loop that
+checks the published index, which is the only site written in the OCI spelling
+where `armv7` renders `arm/v7`. Found by `tests/static/75-architecture-set.sh`,
+which discovers the sites rather than listing them:
+
+```bash
+REPO_ROOT="$PWD" bash tests/static/75-architecture-set.sh
+```
+
 ⚠ **This was not fixed here, deliberately.** Two reasons. The obvious fix is one
 list read by everything, and the workflow matrix cannot read a shell variable:
 it needs the list at expression time, which means a job output or a checked in
