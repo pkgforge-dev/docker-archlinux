@@ -229,6 +229,30 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      # ⛔ The databases the build resolved against, taken from the build rather
+      # than fetched again. A package superseded upstream between the two is
+      # installed in the image and absent from every current database, so the
+      # evidence has a hole and the build fails. Scheduled run 33094128354 lost
+      # amd64 to exactly that: its build step began at 16:37:48Z and the second
+      # read of core.db landed at 16:38:51Z, 63 seconds of window, and
+      # ca-certificates-mozilla moved from 3.127-1 to 3.128-1 inside it.
+      #
+      # The bootstrap stage is already in the builder from the step above, so
+      # this exports files rather than installing anything again. A cache miss
+      # would resolve against newer databases, and gen-evidence still names any
+      # package it cannot account for, so the check is unchanged either way.
+      # HISTORY/evidence-race.md.
+      - name: Export the databases the build resolved against
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ${{ github.workspace }}
+          platforms: ${{ matrix.platform }}
+          target: dbsnapshot
+          build-args: |
+            IMAGE_VERSION=${{ needs.resolve.outputs.version }}
+          outputs: type=local,dest=/tmp/dbsnapshot
+          cache-from: type=gha,scope=${{ matrix.docker_arch }}
+
       - name: Record the evidence for what was pushed
         env:
           IMAGE: ${{ needs.resolve.outputs.target_image }}@${{ steps.build.outputs.digest }}
@@ -237,6 +261,10 @@ jobs:
           CONTAINER_RUNTIME: docker
           SOURCE_COMMIT: ${{ github.sha }}
           BUILD_DATE: ${{ needs.resolve.outputs.build_date }}
+          # Read where the build left them. gen-evidence refuses to start when
+          # this directory is missing a database for an enabled repository, so
+          # an export that silently produced nothing cannot pass as a fetch.
+          DB_SNAPSHOT: /tmp/dbsnapshot
         run: |
           set -euo pipefail
           # --platform is required. provenance and sbom wrap the pushed

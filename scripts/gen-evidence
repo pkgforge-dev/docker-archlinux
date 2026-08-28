@@ -14,6 +14,12 @@
 # date come from the repository databases, because the local database does not
 # carry a checksum and does not carry the download size for every package.
 #
+# DB_SNAPSHOT names a directory holding the repository databases the build
+# resolved against, exported from the Dockerfile's dbsnapshot target. Set, they
+# are read from there and nothing is fetched. Unset, they are fetched, which
+# races upstream: a package superseded between the build and this run is
+# installed in the image and in no current database. HISTORY/evidence-race.md.
+#
 # SOURCE_COMMIT and BUILD_DATE are read from the environment when set, so the
 # evidence records the same values the image labels do.
 #
@@ -87,6 +93,35 @@ repos="$(awk '/^[[:space:]]*\[/ { name = $0
                                   if (name != "options") print name }' "$conf")"
 [ -n "$repos" ] || die "$conf enables no repository"
 
+#---------------------------------------------------------------------------#
+# The databases the build resolved against, when the caller kept them.
+#
+# ⛔ Fetching them again races upstream. A package superseded between the build
+# and this run is installed in the image and absent from every current
+# database, so the join below has a hole in it and this script refuses to
+# write partial evidence. That is what failed the daily publish on 2026-08-27.
+#
+# The Dockerfile's dbsnapshot target carries the databases pacstrap actually
+# used. DB_SNAPSHOT names the directory they were exported to. Unset, they are
+# fetched, which is the local path and still carries the race.
+#
+# ⛔ Validated here, before the image is run, so a wrong path is reported in
+# under a second rather than after a pull.
+#---------------------------------------------------------------------------#
+snapshot="${DB_SNAPSHOT:-}"
+if [ -n "$snapshot" ]; then
+  [ -d "$snapshot" ] || die "DB_SNAPSHOT names $snapshot, which is not a directory" \
+    "it must name the directory the dbsnapshot build target was exported to" \
+    "export it with: docker buildx build --platform $platform --target dbsnapshot --output type=local,dest=$snapshot ." \
+    "or leave DB_SNAPSHOT unset to fetch the databases, which races upstream"
+  for repo in $repos; do
+    [ -f "$snapshot/$repo.db" ] || die "DB_SNAPSHOT $snapshot carries no $repo.db" \
+      "$conf enables $repo, so the snapshot has to hold its database" \
+      "it holds: $(find "$snapshot" -mindepth 1 -maxdepth 1 -printf '%f ')" \
+      "export it again with: docker buildx build --platform $platform --target dbsnapshot --output type=local,dest=$snapshot ."
+  done
+fi
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -126,36 +161,78 @@ echo "    $installed_count packages installed" >&2
 #---------------------------------------------------------------------------#
 # 2. what the repositories say about those artefacts
 #
-# Each repository database is tried against every server in turn. One mirror
-# being mid sync must not decide the evidence for a whole release.
+# With DB_SNAPSHOT the databases the build resolved against are read where the
+# build left them, and nothing is fetched, so nothing can have moved since.
+#
+# Without it each repository database is tried against every server in turn.
+# One mirror being mid sync must not decide the evidence for a whole release.
 #---------------------------------------------------------------------------#
+
+# db_sources REPO -> one candidate source per line, best first
+#
+# A snapshot has exactly one candidate and it is not allowed to fail: the build
+# exported it, so an unreadable one is a build fault rather than a mirror having
+# a bad day. Without a snapshot the candidates are the mirrorlist, in its order.
+db_sources() {
+  if [ -n "$snapshot" ]; then
+    printf '%s\n' "$snapshot/$1.db"
+    return 0
+  fi
+  awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); print }' "$list"
+}
+
+# read_desc FILE LABEL -> writes the desc stream to $work/desc.txt
+#
+# LABEL is what the reader is told the database came from. Returns 1, having
+# left nothing behind, when FILE is not a readable gzip archive, so a caller
+# working down a mirrorlist can step over one that is mid sync.
+read_desc() {
+  local file="$1" label="$2" descs
+  # The desc members are streamed rather than extracted. extra carries
+  # roughly 15000 of them, and writing that many small files costs minutes
+  # where the stream costs seconds. %FILENAME% opens every record.
+  if ! descs="$(tar -xzOf "$file" --wildcards '*/desc' 2>&1 >"$work/desc.txt")"; then
+    echo "gen-evidence: $label is not a readable gzip archive: ${descs:-no error text}" >&2
+    rm -f "$work/desc.txt"
+    return 1
+  fi
+}
+
 : > "$work/repo.tsv"
 for repo in $repos; do
   got=0
-  while IFS= read -r server; do
-    [ -n "$server" ] || continue
-    url="${server//\$repo/$repo}"
-    url="${url//\$arch/$arch}"
-    db="$work/$repo.db"
-    # ⚠ -f, so a mirror answering 403 says so. Without it curl exits 0 with the
-    # error page in the file and the failure surfaces below as an unreadable
-    # archive, which reads as corruption rather than as a blocked path.
-    if ! fetch_error="$(curl -sSfL -A "$UA" --connect-timeout 10 --max-time 300 \
-        -o "$db" "$url/$repo.db" 2>&1)"; then
-      echo "gen-evidence: cannot fetch $url/$repo.db: ${fetch_error:-no error text}" >&2
-      rm -f "$db"
-      continue
-    fi
+  from=""
+  while IFS= read -r source; do
+    [ -n "$source" ] || continue
 
-    # The desc members are streamed rather than extracted. extra carries
-    # roughly 15000 of them, and writing that many small files costs minutes
-    # where the stream costs seconds. %FILENAME% opens every record.
-    if ! descs="$(tar -xzOf "$db" --wildcards '*/desc' 2>&1 >"$work/desc.txt")"; then
-      echo "gen-evidence: $url/$repo.db is not a readable gzip archive: ${descs:-no error text}" >&2
-      rm -f "$db" "$work/desc.txt"
-      continue
+    if [ -n "$snapshot" ]; then
+      # Read where it lies. Removing it would delete the build's own record.
+      read_desc "$source" "$source" \
+        || die "the $repo database in DB_SNAPSHOT is unreadable" \
+          "$source is what the dbsnapshot build target exported, so this is a build fault" \
+          "the reason tar gave is printed above" \
+          "reproduce: tar -tzf $source"
+      from="$source"
+    else
+      url="${source//\$repo/$repo}"
+      url="${url//\$arch/$arch}"
+      db="$work/$repo.db"
+      # ⚠ -f, so a mirror answering 403 says so. Without it curl exits 0 with the
+      # error page in the file and the failure surfaces below as an unreadable
+      # archive, which reads as corruption rather than as a blocked path.
+      if ! fetch_error="$(curl -sSfL -A "$UA" --connect-timeout 10 --max-time 300 \
+          -o "$db" "$url/$repo.db" 2>&1)"; then
+        echo "gen-evidence: cannot fetch $url/$repo.db: ${fetch_error:-no error text}" >&2
+        rm -f "$db"
+        continue
+      fi
+      if ! read_desc "$db" "$url/$repo.db"; then
+        rm -f "$db"
+        continue
+      fi
+      rm -f "$db"
+      from="$url/$repo.db"
     fi
-    rm -f "$db"
 
     awk '
       function flush() {
@@ -180,10 +257,10 @@ for repo in $repos; do
     rm -f "$work/desc.txt"
     got=1
     break
-  done < <(awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); print }' "$list")
+  done < <(db_sources "$repo")
 
   [ "$got" -eq 1 ] || die "could not fetch the $repo database for $dir from any server in rootfs/$dir/etc/pacman.d/mirrorlist"
-  echo "    $repo database read" >&2
+  echo "    $repo database read from $from" >&2
 done
 
 #---------------------------------------------------------------------------#
@@ -296,10 +373,22 @@ jq -e . "$output" > /dev/null || die "the generated evidence file is not valid J
 echo "==> wrote $output" >&2
 echo "    $(jq -r '.package_count' "$output") packages, anchor $ANCHOR_PACKAGE $anchor_version, digest ${digest:--}" >&2
 
+# ⛔ Two different faults reach here and they need different words. Without a
+# snapshot it is the race: upstream moved while the build ran. With one the
+# databases cannot have moved, so the snapshot is not the one this image was
+# installed from, which is what a build cache miss looks like. A diagnostic that
+# names the wrong cause sends the reader to the wrong place.
 if [ -n "$unresolved" ]; then
   echo "gen-evidence: these installed packages are in no repository database:" >&2
   echo "  ${unresolved%, }" >&2
+  if [ -n "$snapshot" ]; then
+    die "$snapshot is not the snapshot this image was installed from" \
+      "the packages are named above: installed in the image, absent from the exported databases" \
+      "the export resolved against a different set, which is what a build cache miss looks like" \
+      "export it again from the same build: docker buildx build --platform $platform --target dbsnapshot --output type=local,dest=$snapshot ."
+  fi
   die "the databases moved between the build and this run, so the evidence has holes" \
     "the packages are named above: installed in the image, absent from every repository database" \
-    "this happens when a package is superseded between the build and this run. Re-run against the same image"
+    "this happens when a package is superseded between the build and this run" \
+    "set DB_SNAPSHOT to the databases the build resolved against, which is what removes the race"
 fi

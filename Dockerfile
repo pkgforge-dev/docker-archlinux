@@ -48,6 +48,27 @@ RUN <<EOS
   xargs -r -a /etc/bootstrap-packages.txt pacstrap-docker /rootfs
 EOS
 
+# ⛔ The databases pacstrap resolved against, copied out before the next step
+# empties the directory. Order is the whole point: after the delete this would
+# export nothing and every later check would still pass.
+#
+# scripts/gen-evidence reads these rather than fetching its own. A package
+# superseded upstream between this build and the evidence run is installed here
+# and absent from every current database, and evidence with a hole in it is
+# worse than none. HISTORY/evidence-race.md.
+#
+# This is its own layer, ahead of the one that uses IMAGE_VERSION, so the
+# snapshot is cached with the install rather than with the version string.
+#
+# /dbsnapshot is outside /rootfs and the image stage copies /rootfs only, so the
+# image carries nothing new. Measured: the same 33086 paths and the same 137
+# packages before and after. HISTORY/evidence-race.md.
+RUN <<EOS
+  set -eu
+  mkdir -p /dbsnapshot
+  cp -a /rootfs/var/lib/pacman/sync/*.db /dbsnapshot/
+EOS
+
 RUN <<EOS
   set -eu
   # No package owns /etc/os-release, so the build writes it.
@@ -56,6 +77,20 @@ RUN <<EOS
   # directory stays, because that is what the published image has.
   find /rootfs/var/lib/pacman/sync -mindepth 1 -delete
 EOS
+
+#------------------------------------------------------------------------------------#
+## The databases the bootstrap resolved against
+#
+# Built only with --target dbsnapshot. Nothing in the image stage depends on it,
+# so an ordinary build never materialises it and the image is unaffected.
+#
+# The build job exports it with --output type=local and hands the directory to
+# scripts/gen-evidence as DB_SNAPSHOT. That is what removes the race between
+# what the build installed and what the repositories carry minutes later.
+#------------------------------------------------------------------------------------#
+FROM scratch AS dbsnapshot
+
+COPY --from=bootstrap /dbsnapshot /
 
 #------------------------------------------------------------------------------------#
 ## The image

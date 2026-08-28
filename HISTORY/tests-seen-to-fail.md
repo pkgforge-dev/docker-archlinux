@@ -5,8 +5,9 @@ pass because the thing it guards is healthy, or because it asserts nothing. The
 two look identical in a green run.
 
 Each row below records a fault that was injected into a scratch copy of the
-tree, and the assertion that caught it. Measured 2026-08-26, and the `45` and
-`60` rows on 2026-08-27. Nothing here was injected into the repository itself.
+tree, and the assertion that caught it. Measured 2026-08-26, the `45` and `60`
+rows on 2026-08-27, and the `68` and `gen-evidence` rows on 2026-08-28. Nothing
+here was injected into the repository itself.
 
 ⚠ A quoted failure message is what that run printed. Counts inside one, such as
 the number of `fail` calls, are the value at the time and are not kept current.
@@ -56,6 +57,11 @@ fault, and pointing `REPO_ROOT` at that directory.
 | `67-mangled-responses.sh` | the old `head -1` restored in `resolve-anchor`, which took tar's blank first line | `not ok 8 - every complaint names a reason`, printing the four complaints that end at the colon |
 | `67` | `continue` changed to `break`, so one bad mirror stops the search | `not ok 1 - resolve-anchor survives five mangled mirrors and exits 0`, `not ok 2 - it falls through to the one good mirror`, four `not ok` for mirrors never reached, and `not ok 9`, `counted 2 complaints, expected 5`. ⚠ 7 of the 9 |
 | `67` | the archive check removed altogether | ⭐ **nothing failed, correctly.** The version extraction finds no `pacman-` line in an error page either, so the mirror is still refused and the good one still answers. What changes is the wording of the complaint, not the outcome. Recorded because a fault that does not fail a test is worth knowing about |
+| `68-evidence-snapshot.sh` | `FROM scratch AS dbsnapshot` deleted from the Dockerfile | `not ok 1 - the Dockerfile declares a dbsnapshot stage` |
+| `68` | the copy into `/dbsnapshot` moved below the line that empties the sync directory | `not ok 3 - the databases are copied out before the directory is emptied`, `the copy is at line 76, the delete at line 75` |
+| `68` | `target: dbsnapshot` deleted from the build workflow | `not ok 4 - the build job builds the dbsnapshot target` |
+| `68` | `DB_SNAPSHOT` deleted from the evidence step | `not ok 5 - the evidence step is given DB_SNAPSHOT` |
+| `68` | the whole `DB_SNAPSHOT` validation block removed from `scripts/gen-evidence` | `not ok 6` and `not ok 7`, both reporting the runtime error instead of a refusal. ⭐ Assertion 8, the control, stays green, because without the validation the run reaches the image and dies there, so nothing names DB_SNAPSHOT at all. A control that flipped here would be measuring the wrong thing |
 | `70-executable-bits.sh` | `git update-index --chmod=-x scripts/tag-names` | `not ok 1 - every invoked file is executable in the index` |
 | `70` | a test file present on disk but not added to git | `not ok 2 - every invoked file is tracked by git` |
 | `75-architecture-set.sh` | ⭐ **a fifth architecture, `loong64`, added to the build matrix and nowhere else.** The whole reason the file exists | 17 of 24 assertions, naming all 13 loop sites by file and line, plus `not ok 16`, `it exits non-zero for: loong64`, `not ok 17` for the usage string, `not ok 21 - loong64 has all 4 of its per architecture files` listing all four, and `not ok 24` for the tag family coverage |
@@ -114,6 +120,9 @@ Fixtures were built for these rather than modifying a real image.
 | `40` | `packages` emptied | `not ok 12 - evidence records at least one package` |
 | `40` | a top level key deleted | `not ok 5 - evidence has a top level built` |
 | `40` | one package removed from `.packages`, leaving `package_count` untouched | `not ok 12 - the evidence records every package the image reports installed`, `the image says 137, the evidence records 136`. ⭐ The check asks pacman inside the image, so it is not the derived `package_count` comparison, which could never disagree |
+| `40` | ⛔ both of the two above re-run on 2026-08-28, against evidence written from a snapshot rather than from a fetch, to show the change did not soften the check | `not ok 14 - every package entry has a name, a version, a positive size, a sha256 and a release date`, `incomplete entries: bash`, and `not ok 12`, `the image says 137, the evidence records 136` |
+| `scripts/gen-evidence` | one installed package removed from the snapshot `core.db`, and that snapshot handed to it as `DB_SNAPSHOT` | exit 1, `these installed packages are in no repository database: bash 5.3.15-1`, then `.tmp/holed/snap is not the snapshot this image was installed from`. ⭐ The completeness check survives the change, which is the point of making it |
+| `scripts/gen-evidence` | the same holed `core.db` served from a `file://` mirrorlist, with `DB_SNAPSHOT` unset | exit 1, and the other branch of the diagnostic: `the databases moved between the build and this run, so the evidence has holes`, advising `set DB_SNAPSHOT`. ⭐ Found by injecting the first fault: one message served both causes and told a snapshot reader to re-run against the same image, which fixes nothing |
 | `50-consumer-contract.sh` | `LocalFileSigLevel` moved above the global `SigLevel` | `not ok 2 - the first SigLevel line in /etc/pacman.conf is the global one` |
 | `50` | every `SigLevel` line deleted | `not ok 2 - /etc/pacman.conf carries a SigLevel line`, `not ok 3 - SigLevel is Required in the shipped /etc/pacman.conf` |
 | `50` | a commented `#[multilib]` block appended to `/etc/pacman.conf` | `not ok 4 - /etc/pacman.conf carries no multilib block` |
@@ -199,6 +208,7 @@ REPO_ROOT="$(pwd)" IMAGE=localhost/parity-faulta:test PLATFORM=linux/amd64 bash 
 | the cross-registry copy runs and is verified | run `33001089986`, `dry_run` and `dry_run_hub` both true | all six jobs succeeded. The publish job printed `verifying ghcr.io/pkgforge-dev/archlinux-ci:v2026.08.26` and `verifying pkgforge/archlinux-ci:v2026.08.26`, each with `index platforms: amd64 arm/v7 arm64 riscv64`. 26 tags landed on the Docker Hub scratch repository, which did not exist before the run |
 | the rollback floor runs in the publish path | none. Dry run `33038310288`, the first run carrying the step | `Resolve inputs` printed `read 161 tags from ghcr.io/pkgforge-dev/archlinux` and `ok` for all four architectures, before anything was built. ⭐ The step had never executed in CI before this run |
 | the image suite passes under docker on every architecture | none. The same dry run | all four builds green, and `60-defect-parity.sh` reported `passed 35 of 35` on `riscv64` under QEMU with `CONTAINER_RUNTIME: docker`, which is the one runtime this machine cannot exercise |
+| the evidence resolves against the databases the build used | none. Dry run `33162764880`, the first run carrying the export step | all six jobs green. `gh run view 33162764880 --log \| grep "database read from"` shows every enabled repository read from `/tmp/dbsnapshot` on all four architectures, four of them on each ARM port, and no fetch anywhere. The export step took 1 to 2 seconds, `CACHED` on every layer |
 | a dry run cannot touch a real repository | the same run | both real repositories still hold 161 tags. `pkgforge/archlinux:latest` was last pushed at 17:18:47, by the earlier real publish; the scratch `:latest` moved at 18:47:52 |
 | the index check refuses an incomplete index | ran the step's own jq and grep loop against `pkgforge/archlinux-ci:amd64`, a single-architecture tag, on the real registry | `index platforms: amd64`, then `missing arm64`, `missing riscv64`, `missing arm/v7`, exit 1. The same logic against `:v2026.08.26` exits 0, so it discriminates |
 
