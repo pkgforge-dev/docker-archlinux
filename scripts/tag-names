@@ -38,6 +38,7 @@ aliases_for() {
     amd64) printf 'x86_64 amd64\n' ;;
     arm64) printf 'aarch64 arm64\n' ;;
     armv7) printf 'armv7l armv7h armv7\n' ;;
+    loong64) printf 'loongarch64 loong64\n' ;;
     riscv64) printf 'riscv64\n' ;;
     *) die "unknown architecture: $1" ;;
   esac

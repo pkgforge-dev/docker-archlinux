@@ -311,10 +311,10 @@ generate() {
 
 case "${1:-}" in
   "")
-    die "usage: scripts/gen-mirrorlist <amd64|arm64|armv7|riscv64|all>"
+    die "usage: scripts/gen-mirrorlist <amd64|arm64|armv7|loong64|riscv64|all>"
     ;;
   all)
-    for d in amd64 arm64 armv7 riscv64; do
+    for d in amd64 arm64 armv7 loong64 riscv64; do
       generate "$d"
     done
     ;;

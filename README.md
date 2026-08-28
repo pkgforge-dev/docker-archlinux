@@ -7,6 +7,7 @@ Unofficial, automated Docker multi-platform images of Arch Linux for the followi
 | x86_64 | `linux/amd64` | [Arch Linux](https://archlinux.org) |
 | aarch64 | `linux/arm64` | [Arch Linux ARM](https://archlinuxarm.org) |
 | armv7h | `linux/arm/v7` | [Arch Linux ARM](https://archlinuxarm.org) |
+| loongarch64 | `linux/loong64` | [Arch Linux loong64](https://loongarchlinux.lcpu.dev) |
 | riscv64 | `linux/riscv64` | [Arch Linux RISC-V](https://archriscv.felixc.at) |
 
 - #### Registries
@@ -47,8 +48,8 @@ three name one architecture each.
 
 | tag | resolves to | moves |
 | --- | --- | --- |
-| `latest` | an index over all four platforms | every build |
-| `v2026.08.26` | an index over all four platforms, that day's build | never |
+| `latest` | an index over every platform | every build |
+| `v2026.08.26` | an index over every platform, that day's build | never |
 | `x86_64` | one platform, newest | every build |
 | `x86_64-v2026.08.26` | one platform, that day's build | never |
 | `x86_64-7.1.0.r9.g54d9411-2` | one platform, that `pacman` version | never |
@@ -61,6 +62,7 @@ manifest, so `x86_64` and `amd64` are two names for one digest.
 | `linux/amd64` | `x86_64`, `amd64` |
 | `linux/arm64` | `aarch64`, `arm64` |
 | `linux/arm/v7` | `armv7l`, `armv7h`, `armv7` |
+| `linux/loong64` | `loongarch64`, `loong64` |
 | `linux/riscv64` | `riscv64` |
 
 The `uname -m` spellings follow the sibling images in the organisation. ⚠ The

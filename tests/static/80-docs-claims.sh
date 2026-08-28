@@ -181,7 +181,7 @@ fi
 #---------------------------------------------------------------------------#
 TAGS="$REPO_ROOT/scripts/tag-names"
 if [ -x "$TAGS" ] && [ -f "$readme" ]; then
-  emitted="$(for a in amd64 arm64 armv7 riscv64; do
+  emitted="$(for a in amd64 arm64 armv7 loong64 riscv64; do
                "$TAGS" aliases "$a" | tr ' ' '\n'
              done | awk 'NF' | sort -u)"
 

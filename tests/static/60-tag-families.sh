@@ -46,11 +46,15 @@ expect_alias_count() { # arch expected
 expect_alias_count amd64 2
 expect_alias_count arm64 2
 expect_alias_count armv7 3
+# uname -m reports loongarch64 inside the image, where the OCI platform string
+# and the image's own architecture field are both loong64. Measured in
+# HISTORY/loong64.md.
+expect_alias_count loong64 2
 # riscv64 is spelled the same in both families, so it is one tag and not two.
 expect_alias_count riscv64 1
 
 # Every architecture emits three shapes per alias, on both registries.
-for arch in amd64 arm64 armv7 riscv64; do
+for arch in amd64 arm64 armv7 loong64 riscv64; do
   aliases="$("$TAGS" aliases "$arch")"
   n_alias="$(printf '%s\n' "$aliases" | tr ' ' '\n' | awk 'NF' | wc -l | tr -d '[:space:]')"
   want=$((n_alias * 3 * 2))
@@ -95,13 +99,13 @@ for shape in "latest" "v$VERSION"; do
 done
 
 # No alias may be claimed by two architectures, or one would overwrite another.
-all_aliases="$(for arch in amd64 arm64 armv7 riscv64; do "$TAGS" aliases "$arch" | tr ' ' '\n'; done | awk 'NF')"
+all_aliases="$(for arch in amd64 arm64 armv7 loong64 riscv64; do "$TAGS" aliases "$arch" | tr ' ' '\n'; done | awk 'NF')"
 dupes="$(printf '%s\n' "$all_aliases" | sort | uniq -d | tr '\n' ' ')"
 if [ -z "$(printf '%s' "$dupes" | tr -d '[:space:]')" ]; then
   ok "no alias is claimed by two architectures"
 else
   fail "no alias is claimed by two architectures" "duplicated: $dupes" \
-    "reproduce: for a in amd64 arm64 armv7 riscv64; do scripts/tag-names aliases $a; done"
+    "reproduce: for a in amd64 arm64 armv7 loong64 riscv64; do scripts/tag-names aliases $a; done"
 fi
 
 # Both organisation names appear. They differ and it is not a typo.

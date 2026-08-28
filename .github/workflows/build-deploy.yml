@@ -124,7 +124,7 @@ jobs:
           # lockstep, so it is resolved per architecture.
           anchors='{'
           sep=''
-          for arch in amd64 arm64 armv7 riscv64; do
+          for arch in amd64 arm64 armv7 loong64 riscv64; do
             anchor="$(scripts/resolve-anchor "$arch")"
             anchors="${anchors}${sep}\"${arch}\":\"${anchor}\""
             sep=','
@@ -163,8 +163,8 @@ jobs:
   # work. Cache is keyed per architecture: one shared key thrashes.
   #
   # There is no runner debloat step. Each job now builds one architecture rather
-  # than four in one job, so the disk pressure that step existed for is much
-  # lower. ⚠ Runner disk use has not been measured on this workflow.
+  # than all of them in one job, so the disk pressure that step existed for is
+  # much lower. ⚠ Runner disk use has not been measured on this workflow.
   #----------------------------------------------------------------------------------#
   build:
     name: Build ${{ matrix.docker_arch }}
@@ -190,6 +190,12 @@ jobs:
             runner: ${{ vars.ARM64_RUNNER || 'ubuntu-latest' }}
           - docker_arch: armv7
             platform: linux/arm/v7
+            runner: ubuntu-latest
+          # The loong64 port is published by the Linux Club of Peking
+          # University, not by Arch, so it carries its own keyring. Both
+          # feasibility gates are measured in HISTORY/loong64.md.
+          - docker_arch: loong64
+            platform: linux/loong64
             runner: ubuntu-latest
           - docker_arch: riscv64
             platform: linux/riscv64
@@ -378,7 +384,7 @@ jobs:
           if [ "$PUBLISH_HUB" = "true" ]; then
             images+=("$HUB_TARGET")
           fi
-          for arch in amd64 arm64 armv7 riscv64; do
+          for arch in amd64 arm64 armv7 loong64 riscv64; do
             digest_file="/tmp/digests/$arch"
             if [ ! -s "$digest_file" ]; then
               echo "no digest for $arch, refusing to tag a partial release" >&2
@@ -409,7 +415,7 @@ jobs:
             images+=("$HUB_TARGET")
           fi
           sources=()
-          for arch in amd64 arm64 armv7 riscv64; do
+          for arch in amd64 arm64 armv7 loong64 riscv64; do
             sources+=("$TARGET_IMAGE@$(cat "/tmp/digests/$arch")")
           done
           mapfile -t tags < <(scripts/tag-names index "$VERSION" "${images[@]}")
@@ -442,8 +448,8 @@ jobs:
             dated="$(scripts/tag-names index "$VERSION" "$image" | grep -v ':latest$')"
             echo "verifying $dated"
 
-            # The index must carry all four platforms. An index with a hole in
-            # it is the failure this whole topology exists to prevent.
+            # The index must carry every platform the matrix built. An index with
+            # a hole in it is the failure this whole topology exists to prevent.
             got="$(docker buildx imagetools inspect "$dated" --raw \
               | jq -r '[ .manifests[].platform
                          | select(.os != "unknown")
@@ -454,7 +460,7 @@ jobs:
             # armv7 renders as arm/v7. A bare match on arm would also match
             # arm64, so the assertion would pass with armv7 missing and mean
             # nothing.
-            for expect in amd64 arm64 riscv64 arm/v7; do
+            for expect in amd64 arm64 loong64 riscv64 arm/v7; do
               if ! grep -qw -- "$expect" <<< "$got"; then
                 echo "the index for $dated is missing $expect" >&2
                 echo "it carries: $got" >&2

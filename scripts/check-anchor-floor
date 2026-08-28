@@ -28,8 +28,9 @@
 #
 # ⛔ vercmp is the only correct way to compare two pacman versions, and no
 # runner has it. It comes from the Arch image already pinned by digest in the
-# Dockerfile, in one container run for all four architectures rather than one
-# per comparison.
+# Dockerfile, in one container run for every architecture rather than one per
+# comparison. The set comes from the JSON it is handed, so adding a port needs
+# no edit here.
 #
 # Exit status is the result:
 #   0  every architecture is at or above its floor, or has no floor yet

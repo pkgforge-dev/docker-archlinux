@@ -19,7 +19,7 @@ ARG IMAGE_VERSION
 
 COPY bootstrap/any /
 COPY bootstrap/${TARGETARCH}${TARGETVARIANT} /
-COPY bootstrap/keyrings/archlinuxarm.pin /usr/local/share/docker-archlinux/archlinuxarm.pin
+COPY bootstrap/keyrings /usr/local/share/docker-archlinux/keyrings
 
 # pacman -r reads /etc/pacman.conf from the running host, never from the target
 # root, so the per architecture config has to be installed here. It carries
@@ -32,9 +32,11 @@ COPY rootfs/${TARGETARCH}${TARGETVARIANT}/etc /etc
 COPY rootfs/any /rootfs
 COPY rootfs/${TARGETARCH}${TARGETVARIANT} /rootfs
 
-# Arch Linux ARM signs with a key archlinux-keyring does not carry. This trusts
-# it from a pinned fingerprint, which is what lets SigLevel stay Required.
-RUN install-alarm-keyring
+# Arch Linux ARM and the loong64 port sign with keys archlinux-keyring does not
+# carry. This trusts them from a pinned set of fingerprints and expiry dates,
+# which is what lets SigLevel stay Required. An architecture no pin serves,
+# amd64 and riscv64, exits 0 without touching the keyring.
+RUN install-port-keyring
 
 # bootstrap/<arch>/etc/bootstrap-packages.txt is one package name per line and
 # carries no comments, because xargs has no comment syntax: a leading # would

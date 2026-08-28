@@ -1,9 +1,14 @@
-name: Freshness, Arch Linux ARM keyring
+name: Freshness, port keyring pins
 
-# The pinned keyring package name carries its version, and Arch Linux ARM
-# removes a superseded package from the mirror. A pin that falls behind stops
-# being fetchable and every ARM build fails. This job notices before that
-# happens, applies the bump on a branch, tests it, and opens a pull request.
+# Two ports sign with keys archlinux-keyring does not carry, and each has a pin
+# in bootstrap/keyrings/. A pinned keyring package name carries its version, and
+# a port removes a superseded package from its mirror, so a pin that falls
+# behind stops being fetchable and every build for that port fails. This job
+# notices before that happens, applies the bump on a branch, tests it, and opens
+# a pull request.
+#
+# ⛔ One job per pin. Two trust roots moving in one pull request would hide which
+# one moved, and the two are tested by building different architectures.
 #
 # A failing run here is a normal result. It means upstream moved.
 on:
@@ -24,43 +29,86 @@ concurrency:
 
 jobs:
   check:
-    name: Check the keyring pin
+    name: Check the ${{ matrix.keyring }} pin
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
+    strategy:
+      # One run reports every stale pin. Neither blocks the other.
+      fail-fast: false
+      matrix:
+        include:
+          # docker_arch is the architecture built to test a bump. Both ARM ports
+          # share the ARM keyring, so one of the two exercises it.
+          - keyring: archlinuxarm
+            pin: bootstrap/keyrings/archlinuxarm.pin
+            docker_arch: arm64
+            platform: linux/arm64
+          - keyring: archlinux-lcpu
+            pin: bootstrap/keyrings/archlinux-lcpu.pin
+            docker_arch: loong64
+            platform: linux/loong64
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Compare the pin against the mirror
         id: check
+        env:
+          PIN: ${{ matrix.pin }}
         run: |
           set -uo pipefail
-          # 0 current, 3 behind, 4 gone, 1 the check could not run.
-          scripts/check-keyring-pin | tee /tmp/check.txt
+          # 0 current, 3 behind, 4 gone, 5 the pinned bytes changed, 1 the check
+          # could not run.
+          scripts/check-keyring-pin "$PIN" | tee /tmp/check.txt
           rc="${PIPESTATUS[0]}"
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           case "$rc" in
-            0) echo "::notice::the keyring pin is current" ;;
-            3) echo "::warning::a newer keyring is published, preparing a pull request" ;;
-            4) echo "::error::the pinned keyring is gone from the mirror, ARM builds are broken now" ;;
+            0) echo "::notice::${PIN} is current" ;;
+            3) echo "::warning::a newer keyring is published for ${PIN}, preparing a pull request" ;;
+            4) echo "::error::the package ${PIN} pins is gone from the mirror, that port is broken now" ;;
+            5) echo "::error::the package ${PIN} pins still answers and its bytes changed" ;;
             *) echo "the freshness check could not run" >&2; exit 1 ;;
           esac
+
+      # ⛔ Reported on every run, including a green one. A trusted key past its
+      # expiry signs nothing pacman will take, so the count of usable keys falls
+      # with no upstream change at all and nothing else would say so.
+      - name: Report the expiry horizon
+        env:
+          EXPIRED: ${{ steps.check.outputs.expired_now }}
+          SOON: ${{ steps.check.outputs.expiring_soon }}
+          COUNT: ${{ steps.check.outputs.trusted_count }}
+          KEYRING: ${{ matrix.keyring }}
+        run: |
+          set -euo pipefail
+          echo "${KEYRING}: ${COUNT} trusted fingerprint(s) pinned"
+          echo "  expired today : ${EXPIRED:-none}"
+          echo "  expiring < 1y : ${SOON:-none}"
+          if [ -n "${SOON:-}" ] && [ "${SOON:-none}" != "none" ]; then
+            echo "::warning::${KEYRING} has trusted keys expiring within a year: ${SOON}"
+          fi
 
       - name: Apply the bump on a branch
         if: steps.check.outputs.rc != '0'
         id: apply
+        env:
+          PIN: ${{ matrix.pin }}
+          KEYRING: ${{ matrix.keyring }}
         run: |
           set -uo pipefail
-          branch="freshness/alarm-keyring-$(date -u +%Y%m%d)"
+          branch="freshness/${KEYRING}-$(date -u +%Y%m%d)"
           git switch -c "$branch"
-          scripts/check-keyring-pin --apply | tee /tmp/apply.txt
+          scripts/check-keyring-pin --apply "$PIN" | tee /tmp/apply.txt
           rc="${PIPESTATUS[0]}"
-          if [ "$rc" != "3" ] && [ "$rc" != "4" ]; then
-            echo "applying the bump did not report a bump, refusing to open a pull request" >&2
-            exit 1
-          fi
+          case "$rc" in
+            3 | 4 | 5) ;;
+            *)
+              echo "applying the bump did not report a bump, refusing to open a pull request" >&2
+              exit 1
+              ;;
+          esac
           # check-keyring-pin writes the measured values straight to
           # GITHUB_OUTPUT when it runs under Actions, so nothing is re-parsed
           # out of its human readable output here.
@@ -74,30 +122,41 @@ jobs:
       - name: Test the bump with the tests that guard a normal build
         if: steps.check.outputs.rc != '0'
         id: test
+        env:
+          DOCKER_ARCH: ${{ matrix.docker_arch }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
           echo "::group::static suite"
           tests/run.sh static
           echo "::endgroup::"
 
-          # The keyring only affects the two ARM ports. arm64 is built and
-          # inspected, because a keyring that installs but does not verify
-          # produces an empty root rather than a build error.
+          # One architecture is built and inspected, because a keyring that
+          # installs but does not verify produces an empty root rather than a
+          # build error.
           ver="$(date -u +%Y.%m.%d)"
-          docker build --platform linux/arm64 \
+          docker build --platform "$PLATFORM" \
             --build-arg "IMAGE_VERSION=$ver" \
             --build-arg "SOURCE_COMMIT=${{ github.sha }}" \
             --build-arg "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            -t freshness-check:arm64 .
+            -t "freshness-check:$DOCKER_ARCH" .
+
+          # The databases the build resolved against, so the evidence is not
+          # joined against a set that moved. HISTORY/evidence-race.md.
+          docker build --platform "$PLATFORM" --target dbsnapshot \
+            --build-arg "IMAGE_VERSION=$ver" \
+            --output "type=local,dest=/tmp/dbsnapshot" .
 
           echo "::group::image suite"
           SOURCE_COMMIT="${{ github.sha }}" BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            scripts/gen-evidence arm64 freshness-check:arm64 linux/arm64 /tmp/evidence-arm64.json
-          IMAGE=freshness-check:arm64 PLATFORM=linux/arm64 CONTAINER_RUNTIME=docker \
-            EVIDENCE=/tmp/evidence-arm64.json tests/run.sh image
+            DB_SNAPSHOT=/tmp/dbsnapshot \
+            scripts/gen-evidence "$DOCKER_ARCH" "freshness-check:$DOCKER_ARCH" "$PLATFORM" \
+              "/tmp/evidence-$DOCKER_ARCH.json"
+          IMAGE="freshness-check:$DOCKER_ARCH" PLATFORM="$PLATFORM" CONTAINER_RUNTIME=docker \
+            EVIDENCE="/tmp/evidence-$DOCKER_ARCH.json" tests/run.sh image
           echo "::endgroup::"
 
-          pkgs="$(jq -r '.package_count' /tmp/evidence-arm64.json)"
+          pkgs="$(jq -r '.package_count' "/tmp/evidence-$DOCKER_ARCH.json")"
           echo "packages=$pkgs" >> "$GITHUB_OUTPUT"
 
       - name: Open a pull request carrying the measurement
@@ -105,14 +164,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: ${{ steps.apply.outputs.branch }}
+          PIN: ${{ matrix.pin }}
+          KEYRING: ${{ matrix.keyring }}
+          DOCKER_ARCH: ${{ matrix.docker_arch }}
           OLD_PACKAGE: ${{ steps.apply.outputs.old_package }}
           OLD_SHA: ${{ steps.apply.outputs.old_sha256 }}
-          OLD_MASTER: ${{ steps.apply.outputs.old_master }}
           NEW_PACKAGE: ${{ steps.apply.outputs.new_package }}
           NEW_SHA: ${{ steps.apply.outputs.new_sha256 }}
-          NEW_MASTER: ${{ steps.apply.outputs.new_master }}
           NEW_SIZE: ${{ steps.apply.outputs.new_size }}
-          MASTER_COUNT: ${{ steps.apply.outputs.master_count }}
+          TRUSTED_COUNT: ${{ steps.apply.outputs.trusted_count }}
+          TRUSTED_ADDED: ${{ steps.apply.outputs.trusted_added }}
+          TRUSTED_REMOVED: ${{ steps.apply.outputs.trusted_removed }}
+          EXPIRED: ${{ steps.apply.outputs.expired_now }}
+          SOON: ${{ steps.apply.outputs.expiring_soon }}
           PINNED_HTTP: ${{ steps.apply.outputs.pinned_http }}
           PACKAGES: ${{ steps.test.outputs.packages }}
           RC: ${{ steps.check.outputs.rc }}
@@ -120,45 +184,51 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add bootstrap/keyrings/archlinuxarm.pin
+          git add "$PIN"
           git commit -m "keyring: pin ${NEW_PACKAGE}"
           git push --set-upstream origin "$BRANCH"
 
           urgency="a newer keyring is published and the pinned one still answers"
-          if [ "$RC" = "4" ]; then
-            urgency="the pinned keyring is GONE from the mirror, so ARM builds fail until this merges"
-          fi
+          case "$RC" in
+            4) urgency="the pinned keyring is GONE from the mirror, so ${DOCKER_ARCH} builds fail until this merges" ;;
+            5) urgency="⛔ the pinned package name still answers and its bytes are not the bytes that were pinned" ;;
+          esac
 
           # The printf formats are markdown. Backticks inside them are literal
           # text for the pull request body, not shell expansions.
           # shellcheck disable=SC2016
           {
             printf '## What moved\n\n'
-            printf 'Arch Linux ARM published a new `archlinuxarm-keyring`. %s\n\n' "$urgency"
+            printf 'The `%s` trust root changed. %s\n\n' "$KEYRING" "$urgency"
             printf '| | pinned before | pinned now |\n'
             printf '| --- | --- | --- |\n'
             printf '| package | `%s` | `%s` |\n' "$OLD_PACKAGE" "$NEW_PACKAGE"
-            printf '| sha256 | `%s` | `%s` |\n' "$OLD_SHA" "$NEW_SHA"
-            printf '| master fingerprint | `%s` | `%s` |\n\n' "$OLD_MASTER" "$NEW_MASTER"
+            printf '| sha256 | `%s` | `%s` |\n\n' "$OLD_SHA" "$NEW_SHA"
             printf 'The old package answered HTTP `%s` at check time. The new package is\n' "$PINNED_HTTP"
-            printf '`%s` bytes and lists `%s` master key(s).\n\n' "$NEW_SIZE" "$MASTER_COUNT"
+            printf '`%s` bytes and trusts `%s` fingerprint(s).\n\n' "$NEW_SIZE" "$TRUSTED_COUNT"
+            printf '| trusted keys | fingerprints |\n'
+            printf '| --- | --- |\n'
+            printf '| added | `%s` |\n' "$TRUSTED_ADDED"
+            printf '| removed | `%s` |\n' "$TRUSTED_REMOVED"
+            printf '| expired as of today | `%s` |\n' "$EXPIRED"
+            printf '| expiring within a year | `%s` |\n\n' "$SOON"
             printf 'Every value above was re-derived from the package itself by\n'
-            printf '`scripts/check-keyring-pin`. None was copied from a report.\n\n'
+            printf '`scripts/check-keyring-pin`. None was copied from a report. The expiry\n'
+            printf 'dates come from the key material, so a change to one of them is the\n'
+            printf 'trust root moving and not a clock ticking.\n\n'
             printf '## What the tests did\n\n'
             printf -- '- `tests/run.sh static`, the same suite the build job runs first.\n'
-            printf -- '- A full `linux/arm64` build from this branch.\n'
+            printf -- '- A full `%s` build from this branch.\n' "$DOCKER_ARCH"
             printf -- '- `scripts/gen-evidence` then `tests/run.sh image` against that build,\n'
             printf '  which installed `%s` packages.\n\n' "$PACKAGES"
             printf 'Signature verification stayed at `SigLevel = Required` throughout. A\n'
             printf 'keyring that installs but does not verify produces an empty root, which\n'
             printf 'the image suite fails on rather than passing.\n\n'
             printf '## ⚠ What this job did NOT verify\n\n'
-            printf -- '- **armv7 was not built.** Only arm64 was. The two ports share this\n'
-            printf '  keyring, so a fault specific to armv7 packaging would not show here.\n'
-            printf -- '- **amd64 and riscv64 were not built.** They do not use this keyring.\n'
-            printf -- '- **The new master fingerprint was not checked against any source other\n'
-            printf '  than the package that carries it.** That is the trust model the existing\n'
-            printf '  pin uses, and it is why the sha256 is pinned alongside it.\n'
+            printf -- '- **Only `%s` was built.** The other architectures were not.\n' "$DOCKER_ARCH"
+            printf -- '- **The new fingerprints were not checked against any source other than\n'
+            printf '  the package that carries them.** That is the trust model these pins use,\n'
+            printf '  and it is why the sha256 is pinned alongside them.\n'
             printf -- '- **No image was published.** The build stayed on the runner.\n'
             printf -- '- **The mirror was read once.** A mirror mid sync can serve an older\n'
             printf '  listing than another mirror.\n'
@@ -169,7 +239,8 @@ jobs:
           } > /tmp/body.md
 
           title="keyring: pin ${NEW_PACKAGE}"
-          if [ "$RC" = "4" ]; then
-            title="keyring: pin ${NEW_PACKAGE} (ARM builds are broken until this merges)"
-          fi
+          case "$RC" in
+            4) title="keyring: pin ${NEW_PACKAGE} (${DOCKER_ARCH} builds are broken until this merges)" ;;
+            5) title="keyring: ${OLD_PACKAGE} changed under its own name" ;;
+          esac
           gh pr create --base main --head "$BRANCH" --title "$title" --body-file /tmp/body.md

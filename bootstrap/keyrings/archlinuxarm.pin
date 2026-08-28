@@ -2,21 +2,39 @@
 #
 # Arch Linux ARM signs its packages with a key that archlinux-keyring does not
 # carry, so a build host that only trusts archlinux-keyring rejects every ARM
-# package. Pinning the keyring package and its master key fingerprint here lets
-# SigLevel = Required stay on with no signature weakening.
+# package. Pinning the keyring package, its checksum and its trusted key set
+# here lets SigLevel = Required stay on with no signature weakening.
 #
-# master is the fingerprint listed in the keyring package's own
-# archlinuxarm-trusted file. It is the trust anchor and is verified on every
-# build. sha256 covers the package that carries it.
+# bootstrap/any/usr/local/bin/install-port-keyring reads every .pin in this
+# directory and uses the one whose arch list carries the Architecture of the
+# build. Adding a port means adding a file here, not editing that script.
+#
+# Fields:
+#   keyring   the pacman keyring name, so --populate can be told what to add
+#   arch      the pacman Architecture values this pin serves, space separated
+#   mirror    the directory the package is fetched from
+#   package   the pinned package, name carrying its version
+#   sha256    over that package
+#   trusted   one line per fingerprint in the keyring's own -trusted file,
+#             with the primary key's expiry as YYYY-MM-DD or never
+#
+# ⛔ The trusted lines are a set, and the whole set is asserted. A fingerprint
+# added, removed or re-dated is the trust root moving, and it stops the build
+# rather than passing quietly.
 #
 # To re-derive, from any host:
 #   curl -sSL -o k.pkg.tar.xz http://mirror.archlinuxarm.org/aarch64/core/<package>
 #   sha256sum k.pkg.tar.xz
 #   bsdtar -xOf k.pkg.tar.xz usr/share/pacman/keyrings/archlinuxarm-trusted
+#   bsdtar -xOf k.pkg.tar.xz usr/share/pacman/keyrings/archlinuxarm.gpg | \
+#     gpg --with-colons --show-keys
 #
-# Adopted 2026-08-26. Verified on that date against
+# Adopted 2026-08-26. Trusted set and expiry re-measured 2026-08-28 against
 # http://mirror.archlinuxarm.org/aarch64/core/.
 
+keyring = archlinuxarm
+arch    = aarch64 armv7h
+mirror  = http://mirror.archlinuxarm.org/aarch64/core
 package = archlinuxarm-keyring-20240419-2-any.pkg.tar.xz
 sha256  = 3cb36869edfe413672a6e932cc55d7f8386e1a9d3b38663cfb3bc6fe0d146e21
-master  = 68B3537F39A313B3E574D06777193F152BDBE6A6
+trusted = 68B3537F39A313B3E574D06777193F152BDBE6A6 never

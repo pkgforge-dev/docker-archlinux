@@ -2,9 +2,9 @@
 #
 # One architecture set, named the same way everywhere.
 #
-# Adding an architecture means editing sixteen places in seven files. Nine of
-# them fail silently, and seven of those nine are a `for` loop over the same
-# four names inside a YAML `run:` block. Miss one and the architecture is not
+# Adding an architecture means editing every place that names the set. Most of
+# them fail silently, and most of those are a `for` loop over the same names
+# inside a YAML `run:` block. Miss one and the architecture is not
 # built, or has no anchor, or gets no tags, or is never looked for in the
 # published index. The run stays green and publishes a release that looks
 # complete and is not.
@@ -368,7 +368,7 @@ fi
 # 40-mirrors-reachable.sh and 45-pacman-conf-shape.sh both discover their work
 # by walking rootfs/. That makes them loud about a file that is wrong and
 # silent about one that is not there at all: a new architecture with no rootfs
-# directory leaves them checking three files instead of four, and passing.
+# directory leaves them checking one file fewer than it should, and passing.
 #---------------------------------------------------------------------------#
 required_paths() { # arch -> the files that architecture must have
   printf 'rootfs/%s/etc/pacman.conf\n' "$1"

@@ -1,25 +1,32 @@
 #!/usr/bin/env bash
 #
-# Check bootstrap/keyrings/archlinuxarm.pin against the mirror, and optionally
+# Check a keyring pin in bootstrap/keyrings/ against its mirror, and optionally
 # rewrite it.
 #
-#   scripts/check-keyring-pin            report only, exit 0 current, 3 behind, 4 gone
-#   scripts/check-keyring-pin --apply    rewrite the pin to what the mirror serves
+#   scripts/check-keyring-pin                      report on every pin
+#   scripts/check-keyring-pin <pin>                report on one
+#   scripts/check-keyring-pin --apply <pin>        rewrite it to what the mirror serves
 #
-# The pinned package name carries its version. Arch Linux ARM removes a
-# superseded keyring package from the mirror, so a pin that falls behind stops
-# being fetchable and the build fails. This is what notices first.
+# The pinned package name carries its version, and a port removes a superseded
+# keyring package from its mirror. A pin that falls behind stops being fetchable
+# and every build for that port fails. This is what notices first.
 #
-# Exit status is the result, not just success or failure:
-#   0  the pin matches the newest package on the mirror
+# ⛔ It also re-hashes the pinned package while it is still served. A pin whose
+# bytes changed under the same file name is a supply chain event, not a version
+# bump, and nothing else in the tree would see it until a build failed on a
+# checksum with no explanation of what moved.
+#
+# Exit status is the result, not just success or failure. With several pins it
+# is the worst of them:
+#   0  the pin matches the newest package on the mirror, and the bytes still hash
 #   3  a newer package exists, the pinned one is still fetchable
-#   4  the pinned package is gone from the mirror, so the build is broken now
+#   4  the pinned package is gone from the mirror, so that port is broken now
+#   5  the pinned package is still served and its bytes changed
 #   1  the check itself could not run
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PIN="${ALARM_KEYRING_PIN:-$REPO_ROOT/bootstrap/keyrings/archlinuxarm.pin}"
-MIRROR="${ALARM_KEYRING_MIRROR:-http://mirror.archlinuxarm.org/aarch64/core}"
+KEYRING_DIR="${KEYRING_PIN_DIR:-$REPO_ROOT/bootstrap/keyrings}"
 
 # die MESSAGE [ACTION ...]
 #
@@ -42,9 +49,11 @@ need() {
 need curl
 need awk
 need sha256sum
+need gpg
 
-# GNU tar auto-detects the xz compression Arch Linux ARM ships. bsdtar reads it
-# too and is what the Arch build container has, so either is accepted.
+# GNU tar reads the xz Arch Linux ARM ships and the zstd the loong64 port ships,
+# given the matching helper. bsdtar reads both and is what the Arch build
+# container has, so either is accepted.
 if command -v bsdtar >/dev/null; then
   unpack() { bsdtar -xf "$1" -C "$2"; }
 elif command -v tar >/dev/null; then
@@ -54,134 +63,306 @@ else
 fi
 
 apply=0
-case "${1:-}" in
-  "") ;;
-  --apply) apply=1 ;;
-  *) die "usage: check-keyring-pin [--apply]" ;;
-esac
-
-[ -f "$PIN" ] || die "no pin file at $PIN"
-
-field() {
-  awk -F= -v k="$1" '$0 !~ /^[[:space:]]*#/ && $1 ~ k { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$PIN"
-}
-old_pkg="$(field '^[[:space:]]*package')"
-old_sha="$(field '^[[:space:]]*sha256')"
-old_fpr="$(field '^[[:space:]]*master')"
-[ -n "$old_pkg" ] && [ -n "$old_sha" ] && [ -n "$old_fpr" ] || die "$PIN is missing a value"
-
-echo "pinned package : $old_pkg"
-echo "pinned sha256  : $old_sha"
-echo "pinned master  : $old_fpr"
-
-#---------------------------------------------------------------------------#
-# What the mirror serves today
-#---------------------------------------------------------------------------#
-index="$(mktemp)"
-trap 'rm -f "$index"' EXIT
-if ! curl -sSfL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 3 \
-     -o "$index" "$MIRROR/"; then
-  die "cannot list $MIRROR/" \
-    "set ALARM_KEYRING_MIRROR to another Arch Linux ARM mirror and re-run" \
-    "check it with: curl -sS -o /dev/null -w %{http_code} $MIRROR/"
-fi
-
-# Sorted by version, newest last. The names carry a date and a pkgrel, so a
-# plain version sort is the right order.
-new_pkg="$(grep -oE 'archlinuxarm-keyring-[0-9][0-9a-zA-Z.-]*\.pkg\.tar\.[a-z]+' "$index" \
-  | sort -u -V | tail -n 1)"
-[ -n "$new_pkg" ] || die "no archlinuxarm-keyring package found at $MIRROR/"
-echo "mirror newest  : $new_pkg"
-
-pinned_code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 60 \
-  -L "$MIRROR/$old_pkg")"
-echo "pinned still fetchable: HTTP $pinned_code"
-
-if [ "$new_pkg" = "$old_pkg" ]; then
-  echo "result: current"
-  exit 0
-fi
-
-if [ "$pinned_code" = "200" ]; then
-  result=3
-  echo "result: behind, the pinned package is still fetchable"
-else
-  result=4
-  echo "result: GONE, the pinned package no longer answers, the build is broken now"
-fi
-
-#---------------------------------------------------------------------------#
-# Derive the new values. Never copied from the report, always re-measured.
-#---------------------------------------------------------------------------#
-work="$(mktemp -d)"
-trap 'rm -f "$index"; rm -rf "$work"' EXIT
-
-if ! curl -sSfL --connect-timeout 15 --max-time 300 --retry 3 --retry-delay 3 \
-     -o "$work/k.pkg" "$MIRROR/$new_pkg"; then
-  die "cannot fetch $MIRROR/$new_pkg" \
-    "the index listed this package, so the mirror is mid-sync or the file went away between the two requests" \
-    "re-run, or set ALARM_KEYRING_MIRROR to another Arch Linux ARM mirror"
-fi
-new_sha="$(sha256sum "$work/k.pkg" | cut -d' ' -f1)"
-mkdir -p "$work/x"
-unpack "$work/k.pkg" "$work/x"
-trusted="$work/x/usr/share/pacman/keyrings/archlinuxarm-trusted"
-[ -f "$trusted" ] || die "$new_pkg carries no archlinuxarm-trusted file"
-new_fpr="$(awk -F: 'NR == 1 { print $1 }' "$trusted")"
-[ -n "$new_fpr" ] || die "$new_pkg lists no master key fingerprint"
-
-new_size="$(stat -c%s "$work/k.pkg")"
-master_count="$(awk 'NF { n++ } END { print n + 0 }' "$trusted")"
-
-echo "new sha256     : $new_sha"
-echo "new master     : $new_fpr"
-echo "new size       : $new_size bytes"
-echo "master keys    : $master_count"
-
-if [ "$new_fpr" != "$old_fpr" ]; then
-  echo "⚠ the master key fingerprint changes with this bump"
-fi
-
-# Machine readable, for the job that opens the pull request.
-if [ -n "${GITHUB_OUTPUT:-}" ]; then
-  {
-    printf 'old_package=%s\n' "$old_pkg"
-    printf 'old_sha256=%s\n' "$old_sha"
-    printf 'old_master=%s\n' "$old_fpr"
-    printf 'new_package=%s\n' "$new_pkg"
-    printf 'new_sha256=%s\n' "$new_sha"
-    printf 'new_master=%s\n' "$new_fpr"
-    printf 'new_size=%s\n' "$new_size"
-    printf 'master_count=%s\n' "$master_count"
-    printf 'pinned_http=%s\n' "$pinned_code"
-    printf 'result=%s\n' "$result"
-  } >> "$GITHUB_OUTPUT"
-fi
-
-if [ "$apply" -eq 0 ]; then
-  exit "$result"
-fi
-
-#---------------------------------------------------------------------------#
-# Apply
-#
-# Written to a temporary file and moved into place, so an interrupted run
-# cannot leave a half written pin behind.
-#---------------------------------------------------------------------------#
-tmp="$(mktemp)"
-awk -v pkg="$new_pkg" -v sha="$new_sha" -v fpr="$new_fpr" -v today="$(date -u +%Y-%m-%d)" '
-  /^[[:space:]]*package[[:space:]]*=/ { printf "package = %s\n", pkg; next }
-  /^[[:space:]]*sha256[[:space:]]*=/  { printf "sha256  = %s\n", sha; next }
-  /^[[:space:]]*master[[:space:]]*=/  { printf "master  = %s\n", fpr; next }
-  /^# Adopted .* Verified on that date against$/ { printf "# Adopted %s. Verified on that date against\n", today; next }
-  { print }
-' "$PIN" > "$tmp"
-
-for k in package sha256 master; do
-  grep -qE "^[[:space:]]*${k}[[:space:]]*=" "$tmp" || die "the rewritten pin lost its $k line"
+pins=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --apply) apply=1 ;;
+    -*) die "usage: check-keyring-pin [--apply] [<pin>]" ;;
+    *) pins+=("$1") ;;
+  esac
+  shift
 done
 
-mv "$tmp" "$PIN"
-chmod 0644 "$PIN"
-echo "applied: $PIN now pins $new_pkg"
-exit "$result"
+if [ "${#pins[@]}" -eq 0 ]; then
+  [ -d "$KEYRING_DIR" ] || die "no keyring directory at $KEYRING_DIR"
+  for f in "$KEYRING_DIR"/*.pin; do
+    [ -e "$f" ] || continue
+    pins+=("$f")
+  done
+  [ "${#pins[@]}" -gt 0 ] || die "no .pin file in $KEYRING_DIR"
+  if [ "$apply" -eq 1 ] && [ "${#pins[@]}" -gt 1 ]; then
+    die "--apply needs one pin named, and $KEYRING_DIR holds ${#pins[@]}" \
+      "rewriting several trust roots in one commit hides which one moved" \
+      "reproduce: ls $KEYRING_DIR/*.pin"
+  fi
+fi
+
+# field FILE KEY -> the value of the first KEY = line, comments ignored
+field() {
+  awk -F= -v k="$2" '
+    $0 ~ /^[[:space:]]*#/ { next }
+    $1 ~ "^[[:space:]]*" k "[[:space:]]*$" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      sub(/[[:space:]]+$/, "")
+      print
+      exit
+    }' "$1"
+}
+
+# trusted_lines FILE -> "<fingerprint> <expiry>" per trusted entry
+trusted_lines() {
+  awk -F= '
+    $0 ~ /^[[:space:]]*#/ { next }
+    $1 ~ /^[[:space:]]*trusted[[:space:]]*$/ {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      sub(/[[:space:]]+$/, "")
+      print
+    }' "$1"
+}
+
+# key_expiry KEYRING_FILE -> "<fingerprint> <YYYY-MM-DD|never>" per primary key
+key_expiry() {
+  gpg --batch --with-colons --fixed-list-mode --show-keys "$1" | awk -F: '
+    $1 == "pub" { expires = $7; seen = 1; next }
+    $1 == "fpr" && seen {
+      if (expires == "") {
+        printf "%s never\n", $10
+      } else {
+        printf "%s %s\n", $10, strftime("%Y-%m-%d", expires + 0, 1)
+      }
+      seen = 0
+    }'
+}
+
+worst=0
+note_result() {
+  [ "$1" -gt "$worst" ] && worst="$1"
+  return 0
+}
+
+check_one() {
+  local pin="$1"
+  [ -f "$pin" ] || die "no pin file at $pin"
+
+  local keyring mirror old_pkg old_sha
+  keyring="$(field "$pin" keyring)"
+  mirror="$(field "$pin" mirror)"
+  old_pkg="$(field "$pin" package)"
+  old_sha="$(field "$pin" sha256)"
+  [ -n "$keyring" ] && [ -n "$mirror" ] && [ -n "$old_pkg" ] && [ -n "$old_sha" ] ||
+    die "$pin is missing a value" \
+      "the fields are described at the top of bootstrap/keyrings/archlinuxarm.pin" \
+      "reproduce: cat $pin"
+
+  local work
+  work="$(mktemp -d)"
+  trap 'rm -rf "$work"' RETURN
+
+  trusted_lines "$pin" | LC_ALL=C sort > "$work/old-trusted.txt"
+  local old_trusted_count
+  old_trusted_count="$(awk 'NF { n++ } END { print n + 0 }' "$work/old-trusted.txt")"
+
+  echo "=== ${pin#"$REPO_ROOT/"} ==="
+  echo "keyring        : $keyring"
+  echo "pinned package : $old_pkg"
+  echo "pinned sha256  : $old_sha"
+  echo "pinned trusted : $old_trusted_count fingerprint(s)"
+
+  #-------------------------------------------------------------------------#
+  # How many of the pinned keys are usable today, and which lapse next.
+  #
+  # ⛔ Reported rather than fatal. A trusted key past its expiry signs nothing
+  # pacman will take, and install-port-keyring skips it. The number falling is
+  # what a reader needs to see coming, because the day it reaches zero the port
+  # cannot be built at all.
+  #-------------------------------------------------------------------------#
+  local today horizon expired_now soon
+  today="$(date -u +%Y-%m-%d)"
+  horizon="$(date -u -d '+365 days' +%Y-%m-%d)"
+  expired_now="$(awk -v t="$today" '$2 != "never" && $2 < t { printf "%s(%s) ", $1, $2 }' "$work/old-trusted.txt")"
+  soon="$(awk -v t="$today" -v h="$horizon" '$2 != "never" && $2 >= t && $2 <= h { printf "%s(%s) ", $1, $2 }' "$work/old-trusted.txt")"
+  echo "expired today  : ${expired_now:-none}"
+  echo "expiring < 1y  : ${soon:-none}"
+
+  #-------------------------------------------------------------------------#
+  # What the mirror serves today
+  #-------------------------------------------------------------------------#
+  local index
+  index="$work/index.html"
+  if ! curl -sSfL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 3 \
+       -o "$index" "$mirror/"; then
+    die "cannot list $mirror/" \
+      "set the mirror field in $pin to another mirror of this port and re-run" \
+      "⚠ a mirror can serve files and answer a directory with a JavaScript page, which lists nothing" \
+      "check it with: curl -sS -o /dev/null -w %{http_code} $mirror/"
+  fi
+
+  # Sorted by version, newest last. The names carry a date and a pkgrel, so a
+  # plain version sort is the right order.
+  local new_pkg
+  new_pkg="$(awk -v k="$keyring-keyring" '
+    { line = $0
+      while (match(line, k "-[0-9][0-9a-zA-Z.-]*[.]pkg[.]tar[.][a-z]+")) {
+        print substr(line, RSTART, RLENGTH)
+        line = substr(line, RSTART + RLENGTH)
+      } }' "$index" | LC_ALL=C sort -u -V | awk 'NF { last = $0 } END { print last }')"
+  [ -n "$new_pkg" ] || die "no $keyring-keyring package found at $mirror/" \
+    "the listing answered and carried no package name this pattern matches" \
+    "⚠ a mirror whose directory listing is a JavaScript page answers 200 and lists nothing" \
+    "check it with: curl -sSL $mirror/ | grep $keyring-keyring"
+  echo "mirror newest  : $new_pkg"
+
+  #-------------------------------------------------------------------------#
+  # Is the pinned package still there, and are its bytes still its bytes
+  #-------------------------------------------------------------------------#
+  local pinned_code pinned_sha="-"
+  pinned_code="$(curl -s -o "$work/pinned.pkg" -w '%{http_code}' \
+    --connect-timeout 15 --max-time 300 -L "$mirror/$old_pkg")"
+  echo "pinned still fetchable: HTTP $pinned_code"
+
+  local result=0
+  if [ "$pinned_code" = "200" ]; then
+    pinned_sha="$(sha256sum "$work/pinned.pkg" | cut -d' ' -f1)"
+    if [ "$pinned_sha" != "$old_sha" ]; then
+      echo "pinned bytes   : $pinned_sha"
+      echo "result: CHANGED, the pinned package name still answers and its bytes are not the pinned bytes"
+      result=5
+    fi
+  fi
+
+  if [ "$result" -eq 0 ] && [ "$new_pkg" = "$old_pkg" ]; then
+    echo "result: current"
+    note_result 0
+    write_outputs "$pin" "$keyring" "$old_pkg" "$old_sha" "$old_pkg" "$old_sha" \
+      "-" "$old_trusted_count" "$expired_now" "$soon" "$pinned_code" 0 "" ""
+    return 0
+  fi
+
+  if [ "$result" -eq 0 ]; then
+    if [ "$pinned_code" = "200" ]; then
+      result=3
+      echo "result: behind, the pinned package is still fetchable"
+    else
+      result=4
+      echo "result: GONE, the pinned package no longer answers, this port is broken now"
+    fi
+  fi
+  note_result "$result"
+
+  #-------------------------------------------------------------------------#
+  # Derive the new values. Never copied from the report, always re-measured.
+  #-------------------------------------------------------------------------#
+  if ! curl -sSfL --connect-timeout 15 --max-time 300 --retry 3 --retry-delay 3 \
+       -o "$work/k.pkg" "$mirror/$new_pkg"; then
+    die "cannot fetch $mirror/$new_pkg" \
+      "the listing named this package, so the mirror is mid sync or the file went away between the two requests" \
+      "re-run, or set the mirror field in $pin to another mirror of this port"
+  fi
+  local new_sha new_size
+  new_sha="$(sha256sum "$work/k.pkg" | cut -d' ' -f1)"
+  new_size="$(stat -c%s "$work/k.pkg")"
+
+  mkdir -p "$work/x"
+  unpack "$work/k.pkg" "$work/x"
+  local src="$work/x/usr/share/pacman/keyrings"
+  [ -f "$src/$keyring-trusted" ] || die "$new_pkg carries no $keyring-trusted file" \
+    "the package layout changed, so the keyring name in $pin no longer matches what it ships" \
+    "reproduce: bsdtar -tf $new_pkg"
+  [ -f "$src/$keyring.gpg" ] || die "$new_pkg carries no $keyring.gpg file" \
+    "reproduce: bsdtar -tf $new_pkg"
+
+  key_expiry "$src/$keyring.gpg" | LC_ALL=C sort > "$work/expiry.txt"
+  cut -d: -f1 < "$src/$keyring-trusted" | awk 'NF' | LC_ALL=C sort > "$work/new-fprs.txt"
+
+  # One "<fingerprint> <expiry>" line per trusted key, in the pin's own shape.
+  #
+  # ⚠ The array is not called exp. That is an awk built-in, and naming an array
+  # after it is a syntax error rather than a shadowing, so this whole branch
+  # died on a line the current-pin path never reaches.
+  awk 'NR == FNR { expiry[$1] = $2; next }
+       { printf "%s %s\n", $1, ($1 in expiry ? expiry[$1] : "unknown") }' \
+    "$work/expiry.txt" "$work/new-fprs.txt" > "$work/new-trusted.txt"
+
+  local unknown
+  unknown="$(awk '$2 == "unknown" { printf "%s ", $1 }' "$work/new-trusted.txt")"
+  [ -z "$unknown" ] || die "$new_pkg trusts fingerprints its own keyring does not carry: $unknown" \
+    "a trusted fingerprint with no key behind it can never be used, and pinning it would assert nothing" \
+    "reproduce: bsdtar -xOf $new_pkg usr/share/pacman/keyrings/$keyring.gpg | gpg --with-colons --show-keys"
+
+  local new_count added removed
+  new_count="$(awk 'NF { n++ } END { print n + 0 }' "$work/new-trusted.txt")"
+  added="$(comm -13 <(awk '{ print $1 }' "$work/old-trusted.txt") "$work/new-fprs.txt" | tr '\n' ' ')"
+  removed="$(comm -23 <(awk '{ print $1 }' "$work/old-trusted.txt") "$work/new-fprs.txt" | tr '\n' ' ')"
+
+  echo "new sha256     : $new_sha"
+  echo "new size       : $new_size bytes"
+  echo "new trusted    : $new_count fingerprint(s)"
+  echo "added          : ${added:-none}"
+  echo "removed        : ${removed:-none}"
+
+  write_outputs "$pin" "$keyring" "$old_pkg" "$old_sha" "$new_pkg" "$new_sha" \
+    "$new_size" "$new_count" "$expired_now" "$soon" "$pinned_code" "$result" \
+    "$added" "$removed"
+
+  if [ "$apply" -eq 0 ]; then
+    return 0
+  fi
+
+  #-------------------------------------------------------------------------#
+  # Apply
+  #
+  # Written to a temporary file and moved into place, so an interrupted run
+  # cannot leave a half written pin behind. The trusted block is variable
+  # length, so it is dropped whole and re-emitted where the first line was.
+  #-------------------------------------------------------------------------#
+  local tmp
+  tmp="$work/pin.new"
+  awk -v pkg="$new_pkg" -v sha="$new_sha" -v today="$(date -u +%Y-%m-%d)" \
+      -v block="$work/new-trusted.txt" '
+    /^[[:space:]]*package[[:space:]]*=/ { printf "package = %s\n", pkg; next }
+    /^[[:space:]]*sha256[[:space:]]*=/  { printf "sha256  = %s\n", sha; next }
+    /^[[:space:]]*trusted[[:space:]]*=/ {
+      if (!emitted) {
+        while ((getline line < block) > 0) { printf "trusted = %s\n", line }
+        close(block)
+        emitted = 1
+      }
+      next
+    }
+    /^# Adopted .* Verified on that date against$/ { printf "# Adopted %s. Verified on that date against\n", today; next }
+    { print }
+  ' "$pin" > "$tmp"
+
+  local k
+  for k in keyring arch mirror package sha256; do
+    grep -qE "^[[:space:]]*${k}[[:space:]]*=" "$tmp" ||
+      die "the rewritten pin lost its $k line"
+  done
+  local written
+  written="$(awk '/^[[:space:]]*trusted[[:space:]]*=/ { n++ } END { print n + 0 }' "$tmp")"
+  [ "$written" -eq "$new_count" ] ||
+    die "the rewritten pin carries $written trusted lines, expected $new_count"
+
+  mv "$tmp" "$pin"
+  chmod 0644 "$pin"
+  echo "applied: $pin now pins $new_pkg with $written trusted fingerprint(s)"
+}
+
+# Machine readable, for the job that opens the pull request. Prefixed with
+# nothing: one pin is checked per job, so the names stay the ones the workflow
+# already reads.
+write_outputs() {
+  [ -n "${GITHUB_OUTPUT:-}" ] || return 0
+  {
+    printf 'pin=%s\n' "${1#"$REPO_ROOT/"}"
+    printf 'keyring=%s\n' "$2"
+    printf 'old_package=%s\n' "$3"
+    printf 'old_sha256=%s\n' "$4"
+    printf 'new_package=%s\n' "$5"
+    printf 'new_sha256=%s\n' "$6"
+    printf 'new_size=%s\n' "$7"
+    printf 'trusted_count=%s\n' "$8"
+    printf 'expired_now=%s\n' "${9:-none}"
+    printf 'expiring_soon=%s\n' "${10:-none}"
+    printf 'pinned_http=%s\n' "${11}"
+    printf 'result=%s\n' "${12}"
+    printf 'trusted_added=%s\n' "${13:-none}"
+    printf 'trusted_removed=%s\n' "${14:-none}"
+  } >> "$GITHUB_OUTPUT"
+}
+
+for p in "${pins[@]}"; do
+  check_one "$p"
+done
+
+exit "$worst"

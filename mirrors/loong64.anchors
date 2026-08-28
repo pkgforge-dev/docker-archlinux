@@ -1,0 +1,11 @@
+# Well known servers, always written first and never dropped by ranking.
+#
+# loongarchlinux.lcpu.dev is the endpoint on the port maintainers' own domain.
+# The other five, in mirrors/loong64.pool, are the rest of the list the port
+# ships as pacman-mirrorlist-loong64, and all six served the same 90776 byte
+# core.db when this file was written.
+#
+# It is also the anchor because it serves a plain directory index, which
+# scripts/check-keyring-pin has to read. mirrors.pku.edu.cn answers 200 for a
+# directory with a JavaScript page instead, so a text scan of it finds nothing.
+Server = https://loongarchlinux.lcpu.dev/loongarch/archlinux/$repo/os/$arch

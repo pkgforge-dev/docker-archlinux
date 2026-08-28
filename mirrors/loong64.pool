@@ -1,0 +1,23 @@
+# Candidate pool for the Arch Linux loong64 port.
+#
+# The port publishes no mirror status API. It does ship its own list, as
+# /etc/pacman.d/mirrorlist-loong64 inside pacman-mirrorlist-loong64, and these
+# are its entries with the anchor removed. Re-derive them with:
+#
+#   pkg=$(curl -sSfL https://loongarchlinux.lcpu.dev/loongarch/archlinux/core/os/loong64/ \
+#     | grep -oE 'pacman-mirrorlist-loong64-[0-9][0-9a-zA-Z.-]*\.pkg\.tar\.[a-z]+' | sort -u -V | tail -1)
+#   curl -sSfL -o m.pkg "https://loongarchlinux.lcpu.dev/loongarch/archlinux/core/os/loong64/$pkg"
+#   bsdtar -xOf m.pkg etc/pacman.d/mirrorlist-loong64
+#
+# ⚠ That package is not fetched at generation time. It is a package on the same
+# mirrors this pool would rank, so reading it live would make the pool source
+# and the pool one thing. Every entry is probed before it is written, and an
+# entry that stops answering is dropped from the generated list rather than
+# removed from this file, so it can come back.
+#
+# Derived 2026-08-28 from pacman-mirrorlist-loong64-20250718-1-any.pkg.tar.zst.
+Server = https://mirrors.wsyu.edu.cn/loongarch/archlinux/$repo/os/$arch
+Server = https://mirrors.pku.edu.cn/loongarch-lcpu/archlinux/$repo/os/$arch
+Server = https://mirrors.nju.edu.cn/loongarch/archlinux/$repo/os/$arch
+Server = https://mirror.iscas.ac.cn/loongarch/archlinux/$repo/os/$arch
+Server = https://mirrors.pku.edu.cn/loongarch/archlinux/$repo/os/$arch

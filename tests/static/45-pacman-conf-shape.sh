@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# The four shipped pacman.conf files must agree, and must keep the two choices
+# Every shipped pacman.conf must agree with the others, and must keep the two choices
 # that were made deliberately.
 #
 # `30-signature-checking-on.sh` covers SigLevel. This covers the rest of the
 # [options] block, which governs how pacman behaves for every consumer of the
-# image and is maintained as four hand-edited copies. Drift between them is the
+# image and is maintained as one hand-edited copy per architecture. Drift is the
 # failure this exists to catch: a setting added to one architecture and
-# forgotten on the other three produces four images that are no longer one
+# forgotten on the rest produces a set of images that are no longer one
 # release.
 #
 # The two deliberate choices, both measured in HISTORY/defect-parity.md:
@@ -40,7 +40,7 @@ fi
 # options_directives FILE -> the setting lines of the [options] block
 #
 # One per line, commented settings included, with the per architecture
-# Architecture line removed so the four can be compared.
+# Architecture line removed so the files can be compared.
 #
 # ⚠ The block ends at the next section header whether or not it is commented
 # out. `#[core-testing]` starts a repository section, and reading past it pulls
@@ -144,8 +144,8 @@ while IFS= read -r conf; do
     reference="$dirs"
     reference_rel="$rel"
     # ⛔ Without this floor the comparison below is free to pass on nothing. An
-    # extraction that returns an empty list for every file makes all four
-    # compare equal, and the test reports four passes having read no directive
+    # extraction that returns an empty list for every file makes them all
+    # compare equal, and the test reports a pass per file having read no directive
     # at all.
     if [ "$n" -ge "$DIRECTIVES_MIN" ]; then
       ok "$rel is the reference options block, $n directives, minimum $DIRECTIVES_MIN"
@@ -159,7 +159,7 @@ while IFS= read -r conf; do
     ok "$rel has the same options directives as $reference_rel"
   else
     fail "$rel has the same options directives as $reference_rel" \
-      "the [options] blocks differ, so the four architectures no longer build the same way" \
+      "the [options] blocks differ, so the architectures no longer build the same way" \
       "Architecture is excluded from this comparison, and the repository sections are not compared at all" \
       "the two lists are printed below, one line per directive" \
       "reproduce: bash tests/static/45-pacman-conf-shape.sh, which names every directive that differs"
@@ -175,8 +175,8 @@ done <<< "$confs"
 #---------------------------------------------------------------------------#
 # 5. No architecture is claimed twice.
 #
-# Four files that all say x86_64 build one image four times and publish it under
-# four names, which no other test in the suite would notice.
+# Several files that all say x86_64 build one image several times and publish it
+# under several names, which no other test in the suite would notice.
 #---------------------------------------------------------------------------#
 total="$(printf '%s\n' "$architectures" | awk 'NF' | wc -l | tr -d '[:space:]')"
 distinct="$(printf '%s\n' "$architectures" | awk 'NF' | LC_ALL=C sort -u | wc -l | tr -d '[:space:]')"

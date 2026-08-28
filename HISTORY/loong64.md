@@ -274,22 +274,147 @@ routes. The `i686` bar is met by a transaction that commits 137 packages under
 reasons to refuse it are gone. Everything in section 1a of the brief after step
 1 is still owed, and the probe above is not repository content.
 
-## What this file does not settle
+## The port, as built
 
-- ⛔ **`docker/setup-qemu-action` on a GitHub runner is unverified.** The
-  emulation above is this workstation's. That is the last measurement before the
-  matrix is wired, and it fails loudly rather than silently, so it can be taken
-  on a branch.
-- ⛔ **`lcpu-club/loongarchlinux-dockerfile` is not yet mined.** Policy 11
-  applies before anything is written, and policy 8 forbids bootstrapping from
-  the image it builds.
-- ⚠ **A pin format is not chosen.** The ARM pin carries one `master`
-  fingerprint. This keyring lists ten, two of them expired, so a single-master
-  pin does not transfer unchanged.
-- ⚠ **The organisation precedent for the alias family is unchecked.**
+⭐ **Added 2026-08-28.** Five architectures now, not four.
+
+### The trust root, and why the installer was generalised
+
+⛔ **The ARM pin format does not transfer.** It carries one `master` fingerprint
+and that keyring has one key. This one lists ten, and two of them are already
+expired. A second installer differing from the first only by a name is the shape
+that rots, so there is one installer and one pin format, and adding a port is a
+`.pin` file rather than a script.
+
+`bootstrap/any/usr/local/bin/install-port-keyring` reads every
+`bootstrap/keyrings/*.pin`, and uses the one whose `arch` list carries the
+`Architecture` of the build. amd64 and riscv64 match nothing and it exits 0
+having touched no keyring.
+
+Each pin holds the keyring name, the architectures it serves, the mirror, the
+package, its sha256, and one `trusted` line per fingerprint carrying that key's
+**expiry**. Both halves are asserted:
+
+| assertion | what it catches |
+| --- | --- |
+| sha256 of the fetched package | the mirror serving different bytes |
+| the trusted fingerprint set, whole | a signer added or removed |
+| each key's expiry against the pin | the key material moving |
+| after populate, every key the pin dates in the future is `f` or `u` | ⛔ the `i686` failure: a keyring that installs and then verifies nothing |
+| at least one key usable at all | the day the last one lapses |
+
+⭐ **Validity, not presence, is the assertion that matters.** `i686` had its
+keyring installed and still committed nothing, because a signer sat below full
+validity. A check that only asked whether the fingerprint was present would have
+passed there.
+
+⚠ **A key past its pinned expiry is named and skipped, not fatal.** It can sign
+nothing pacman will take, and refusing a build for a key that signs nothing would
+refuse a build that works. `HISTORY/loong64.md` measures that neither expired key
+signs any of the 293 packages in `core`.
+
+### Two spellings, so two tag names
+
+```bash
+podman image inspect localhost/archlinux:loong64 --format '{{.Architecture}}'
+podman run --rm --platform linux/loong64 localhost/archlinux:loong64 uname -m
+```
+
+`loong64` and `loongarch64`. The alias set is `loongarch64 loong64`, the
+`uname -m` spelling first, which is the order `scripts/tag-names` already uses.
+Twelve tags per build, two aliases times three shapes on two registries.
+
+### The mirrors
+
+`mirrors/loong64.anchors` carries one server and `mirrors/loong64.pool` the other
+five. All six are the list the port ships as `pacman-mirrorlist-loong64`, and all
+six served the same 90776 byte `core.db` when the list was generated.
+
+⛔ **`mirrors.pku.edu.cn` cannot be the anchor.** It serves files, and answers a
+directory with a JavaScript single page application, so a text scan of its
+listing finds nothing:
+
+```bash
+curl -sS -L https://mirrors.pku.edu.cn/loongarch/archlinux/core/os/loong64/ | wc -c
+curl -sS -o /dev/null -w '%{http_code} %{size_download}\n' -L \
+  https://mirrors.pku.edu.cn/loongarch/archlinux/core/os/loong64/archlinux-lcpu-keyring-20241126-1-any.pkg.tar.zst
+```
+
+597 bytes of HTML for the directory, and `200 15627` for the file inside it.
+`scripts/check-keyring-pin` lists a directory, so the anchor is
+`loongarchlinux.lcpu.dev`, which serves a plain index.
+
+### Everywhere the architecture set is named
+
+⭐ **The set was not listed by hand.** Adding the matrix entry first and running
+`bash tests/run.sh static` made `tests/static/75-architecture-set.sh` report
+`failed 17 of 24`, naming 14 sites in 6 files plus the four missing per
+architecture files. Each edit turned one line green.
+
+⚠ **One site needed the docker platform spelling rather than the matrix key.**
+The index verification in `build-deploy.yml` compares against
+`amd64 arm64 loong64 riscv64 arm/v7`, because `armv7` renders as `arm/v7` there.
+
+### What became data instead of a list
+
+| was | is |
+| --- | --- |
+| `install-alarm-keyring`, ARM only, one master fingerprint | `install-port-keyring`, any port, driven by `bootstrap/keyrings/*.pin` |
+| `check-keyring-pin`, one hardcoded pin and mirror | takes a pin, or checks every pin |
+| `90-package-lists.sh`, a hardcoded `arm64 armv7` loop | derives the pairs from the pins and the shipped `pacman.conf` files |
+| `freshness-keyring.yml`, one job | one job per pin, each building the architecture that exercises it |
+| `freshness-mirrors.yml`, `mirrors/riscv64.pool` by name | every `mirrors/*.pool`, architecture read from that port's `pacman.conf` |
+
+⭐ **`scripts/check-anchor-floor` needed no edit at all.** It takes its
+architecture set from the JSON it is handed, and reported `no floor  loong64
+nothing published yet` on the first run that included it.
+
+## What CI proved
+
+Dry run `33165970427`, 2026-08-28, on branch `loong64`. Seven jobs, all green,
+six minutes and fifty six seconds end to end.
+
+```bash
+gh run view 33165970427 --json status,conclusion,jobs \
+  --jq '"run: \(.status)/\(.conclusion)", (.jobs[] | "\(.name) \(.status)/\(.conclusion)")'
+```
+
+⛔ **The one measurement the feasibility work could not take is now taken.**
+`docker/setup-qemu-action` does register a `loongarch64` handler on
+`ubuntu-latest`. The `Build loong64` job ran the emulated stage without a
+binfmt error, in 4 minutes 25 seconds, the longest of the five.
+
+| what | value |
+| --- | --- |
+| keyring step in CI | `8 of 10 pinned keys are fully valid, SigLevel stays Required` |
+| packages recorded | 137 |
+| anchor | `pacman 7.1.0.r9.g54d9411-2`, the same as the other four |
+| per architecture tags created | 6 on GHCR, `loongarch64` and `loong64` times three shapes |
+| index platforms after publishing | `amd64 arm/v7 arm64 loong64 riscv64` |
+
+The image suite ran against what was pushed and passed, on loong64 as on the
+other four. Locally it reports `passed 35 of 35` for
+`tests/image/60-defect-parity.sh` against a `linux/loong64` build.
+
+## What is still not settled
+
+- ⚠ **Nothing is measured about mirror stability over time.** All six answered
+  on 2026-08-28. `.github/workflows/freshness-mirrors.yml` now probes
+  `mirrors/loong64.pool` monthly along with the others, which is what will
+  produce that history.
+- ⚠ **One trusted key expires 2027-11-26**,
+  `B955F2012D6A161F6D9076AF34BE2B6F4A99C0E9`. When it does, the count of usable
+  keys falls from 8 to 7 with no upstream change at all.
+  `scripts/check-keyring-pin` reports every key expiring within a year, and the
+  weekly job raises a warning annotation for it.
+- ⚠ **The organisation precedent for the alias family is still unchecked.**
   `pkgforge/alpine` supports only the `uname -m` family, and the docker-arch
-  names are this repository's extension. The set above follows this
-  repository's own rule, not a sibling image's.
-- ⚠ **Nothing was measured about mirror stability over time.** All five mirrors
-  answered on one day. `mirrors/loong64.anchors` and the monthly freshness job
-  are what would watch that, and neither exists yet.
+  names are this repository's extension. The set follows this repository's own
+  rule, not a sibling image's.
+- ⚠ **The fingerprints are still corroborated only by the two keyservers and the
+  five mirrors recorded above.** Nothing in this port's own infrastructure
+  publishes them independently: the wiki page the signing key's uid names still
+  answers 530.
+- ⚠ **No loong64 image is published yet.** The dry run wrote to
+  `ghcr.io/pkgforge-dev/archlinux-ci`. The first real tags appear on the next
+  scheduled publish.

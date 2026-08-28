@@ -8,8 +8,8 @@
 # those statements was checked anywhere until now. The script is studied in
 # HISTORY/references/devscripts-archlinux.md, which carries the line numbers.
 #
-# The image is inspected rather than run, because the suite runs against four
-# architectures and a foreign one cannot execute.
+# The image is inspected rather than run, because the suite runs against every
+# architecture the matrix builds and a foreign one cannot execute.
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR/..
 # shellcheck source=lib/harness.sh

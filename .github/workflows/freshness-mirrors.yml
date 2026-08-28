@@ -7,7 +7,7 @@ name: Freshness, mirror lists
 # to ship a timer for this because of the load it puts on mirrors, and that
 # reasoning applies here. Monthly, opening a pull request.
 #
-# The candidate pool in mirrors/riscv64.pool is hand maintained and nothing else
+# The candidate pools in mirrors/*.pool are hand maintained and nothing else
 # watches it, so a pool entry that stops answering is reported here too.
 on:
   workflow_dispatch:
@@ -43,7 +43,7 @@ jobs:
           # The probe is the same one the static suite uses, so before and after
           # are measured with one instrument.
           total=0
-          for a in amd64 arm64 armv7 riscv64; do
+          for a in amd64 arm64 armv7 loong64 riscv64; do
             n="$(awk '/^Server/ { c++ } END { print c + 0 }' "rootfs/$a/etc/pacman.d/mirrorlist")"
             echo "$a: $n servers"
             total=$((total + n))
@@ -51,18 +51,27 @@ jobs:
           echo "servers_before=$total" >> "$GITHUB_OUTPUT"
 
           # A pool entry that no longer answers is invisible until a regeneration
-          # drops it, so it is counted explicitly.
+          # drops it, so it is counted explicitly. Every hand maintained pool is
+          # probed, and the architecture each belongs to is read from that
+          # architecture's own pacman.conf, so a new port's pool needs no edit
+          # here.
           dead=0
-          while IFS= read -r s; do
-            [ -n "$s" ] || continue
-            url="${s//\$repo/core}"
-            url="${url//\$arch/riscv64}"
-            code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 -L "$url/core.db")"
-            echo "  pool $code $s"
-            if [ "$code" != "200" ]; then dead=$((dead + 1)); fi
-          done < <(awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); print }' mirrors/riscv64.pool)
+          for pool in mirrors/*.pool; do
+            [ -e "$pool" ] || continue
+            d="${pool#mirrors/}"
+            d="${d%.pool}"
+            pacman_arch="$(awk -F= '/^[[:space:]]*Architecture[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "rootfs/$d/etc/pacman.conf")"
+            while IFS= read -r s; do
+              [ -n "$s" ] || continue
+              url="${s//\$repo/core}"
+              url="${url//\$arch/$pacman_arch}"
+              code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 -L "$url/core.db")"
+              echo "  pool $d $code $s"
+              if [ "$code" != "200" ]; then dead=$((dead + 1)); fi
+            done < <(awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); print }' "$pool")
+          done
           echo "pool_dead=$dead" >> "$GITHUB_OUTPUT"
-          echo "::notice::riscv64 pool: $dead entries do not answer"
+          echo "::notice::the hand maintained pools have $dead entries that do not answer"
 
       - name: Regenerate
         id: gen
@@ -74,7 +83,7 @@ jobs:
           scripts/gen-mirrorlist all
 
           total=0
-          for a in amd64 arm64 armv7 riscv64; do
+          for a in amd64 arm64 armv7 loong64 riscv64; do
             n="$(awk '/^Server/ { c++ } END { print c + 0 }' "rootfs/$a/etc/pacman.d/mirrorlist")"
             echo "$a: $n servers"
             total=$((total + n))
@@ -122,13 +131,13 @@ jobs:
             printf 'answered 200 for `core.db` at generation time.\n\n'
             printf '| | before | after |\n'
             printf '| --- | --- | --- |\n'
-            printf '| active servers, all four lists | %s | %s |\n\n' "$BEFORE" "$AFTER"
+            printf '| active servers, every list | %s | %s |\n\n' "$BEFORE" "$AFTER"
             printf 'Per architecture, after regeneration:\n\n'
-            for a in amd64 arm64 armv7 riscv64; do
+            for a in amd64 arm64 armv7 loong64 riscv64; do
               printf -- '- `%s`: %s servers\n' "$a" "$(awk '/^Server/ { c++ } END { print c + 0 }' "rootfs/$a/etc/pacman.d/mirrorlist")"
             done
-            printf '\nThe hand maintained `mirrors/riscv64.pool` had **%s** entries that did\n' "$POOL_DEAD"
-            printf 'not answer when this ran. Nothing else watches that file.\n\n'
+            printf '\nThe hand maintained pools under `mirrors/` had **%s** entries between\n' "$POOL_DEAD"
+            printf 'them that did not answer when this ran. Nothing else watches those files.\n\n'
             printf '## What the tests did\n\n'
             printf '`tests/run.sh static`, the whole suite, including\n'
             printf '`40-mirrors-reachable.sh` which probes every written entry again from\n'
@@ -140,8 +149,8 @@ jobs:
             printf '  order suits that runner, not every consumer.\n'
             printf -- '- **Anchors are not ranked and are never dropped.** If an anchor is down\n'
             printf '  the generator refuses to write rather than quietly removing it.\n'
-            printf -- '- **The riscv64 pool was probed, not repaired.** A dead entry stays in\n'
-            printf '  `mirrors/riscv64.pool` until someone edits it.\n'
+            printf -- '- **The pools were probed, not repaired.** A dead entry stays in its\n'
+            printf '  `mirrors/*.pool` file until someone edits it.\n'
             printf -- '- **https availability was tested per host, once.** A host that answers\n'
             printf '  https intermittently may be written as either.\n'
             printf -- '- **This pull request carries no status check.** A pull request opened\n'

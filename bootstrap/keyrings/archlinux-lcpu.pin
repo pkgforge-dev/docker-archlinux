@@ -1,0 +1,56 @@
+# Arch Linux loong64 package signing trust root.
+#
+# The loong64 port is published by the Linux Club of Peking University and signs
+# with keys archlinux-keyring does not carry. The overlap with the official
+# keyring is empty, so a build host that only trusts archlinux-keyring rejects
+# every loong64 package. Pinning the keyring package, its checksum and its
+# trusted key set here lets SigLevel = Required stay on with no signature
+# weakening. The measurements are in HISTORY/loong64.md.
+#
+# ⛔ The trust root is self-referential: the key that signs this keyring package
+# is inside the keyring. That is why the checksum is pinned rather than a
+# signature being checked, and why the fingerprints were corroborated against
+# keys.openpgp.org and keyserver.ubuntu.com, which are not mirrors.
+#
+# The field format is described in archlinuxarm.pin.
+#
+# ⛔ Two of the ten trusted keys are already expired, and one more expires in
+# 2027. That is the shape that refused i686: a trusted key which cannot sign
+# anything the transaction will accept. install-port-keyring asserts, after
+# populating, that every key this file dates in the future is fully valid, so
+# the day one of them lapses the build says which one rather than failing later
+# on a package nobody can place.
+#
+# ⚠ The expiry dates are the pinned facts. They come from the key material in
+# the package, so they do not move unless the package does, and a change to any
+# of them stops the build.
+#
+# To re-derive, from any host with bsdtar and gpg:
+#   B=https://loongarchlinux.lcpu.dev/loongarch/archlinux/core/os/loong64
+#   curl -sSL -o k.pkg.tar.zst "$B/<package>"
+#   sha256sum k.pkg.tar.zst
+#   bsdtar -xOf k.pkg.tar.zst usr/share/pacman/keyrings/archlinux-lcpu-trusted
+#   bsdtar -xOf k.pkg.tar.zst usr/share/pacman/keyrings/archlinux-lcpu.gpg | \
+#     gpg --with-colons --show-keys
+#
+# ⚠ mirrors.pku.edu.cn cannot be the mirror here. It serves files, and answers a
+# directory with a JavaScript page, so scripts/check-keyring-pin finds no
+# package when it lists.
+#
+# Adopted 2026-08-28. Verified on that date against the mirror below.
+
+keyring = archlinux-lcpu
+arch    = loong64
+mirror  = https://loongarchlinux.lcpu.dev/loongarch/archlinux/core/os/loong64
+package = archlinux-lcpu-keyring-20241126-1-any.pkg.tar.zst
+sha256  = cfdd65dceddbc5824df091787bd8546143beae9adb12f8ecccc25fbb67baa303
+trusted = 49E74F2DF61CFF4217AB8EB737EFC8DBFB4CC627 2029-02-24
+trusted = 5CDE9ADCBD04454BAF547A1C40D0304E1192746B 2026-04-24
+trusted = 60922C5D40F6297BC1616C270A8F993ECADF8CE7 2026-07-14
+trusted = 65D4986C7904C6DBF2C4DD9A4E4E02B70BA5C468 2031-04-01
+trusted = 7A9B819083ED51654DED13C9717A69D3E5AF9CBB never
+trusted = 8C7F6B7B9B90AE02C2ACB633F0647F18A79089C9 never
+trusted = 99B2D2B96495AEC3447EF1899C36B961066CC8EF never
+trusted = A6C02FBE730CD45859B946E15C74AE170BDA1433 never
+trusted = AFE972FC04BA8F4C17CBCE10476FA793513A4071 never
+trusted = B955F2012D6A161F6D9076AF34BE2B6F4A99C0E9 2027-11-26

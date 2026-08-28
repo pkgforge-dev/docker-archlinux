@@ -7,8 +7,9 @@
 # named "#" and the rest of the line as further package names. pacman then fails
 # with "target not found: #", a long way from the file that caused it.
 #
-# There is one list per architecture and they legitimately differ: the two ARM
-# ports need the Arch Linux ARM keyring and the other two do not.
+# There is one list per architecture and they legitimately differ: a port that
+# signs with its own keyring names that keyring, and the ports Arch itself
+# builds do not.
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR/..
 # shellcheck source=lib/harness.sh
@@ -65,7 +66,7 @@ done <<< "$lists"
 
 # One list per architecture the build matrix covers. A missing one means an
 # architecture builds with whatever the previous COPY left behind.
-for arch in amd64 arm64 armv7 riscv64; do
+for arch in amd64 arm64 armv7 loong64 riscv64; do
   if [ -f "$REPO_ROOT/bootstrap/$arch/etc/bootstrap-packages.txt" ]; then
     ok "bootstrap/$arch/etc/bootstrap-packages.txt exists"
   else
@@ -75,22 +76,72 @@ for arch in amd64 arm64 armv7 riscv64; do
   fi
 done
 
-# The two ARM ports need the Arch Linux ARM keyring in the target root, because
-# the packages there are signed by a key archlinux-keyring does not carry.
+#---------------------------------------------------------------------------#
+# A port that signs with its own keyring needs that keyring inside the target
+# root as well as on the build host, because the image has to verify its own
+# updates after the build.
 #
-# arch-subset: the ARM ports, the only ones needing a second keyring. Read by
-# 75-architecture-set.sh, which otherwise requires the whole set here.
-for arch in arm64 armv7; do
-  list="$REPO_ROOT/bootstrap/$arch/etc/bootstrap-packages.txt"
-  [ -f "$list" ] || continue
-  if grep -qxF 'archlinuxarm-keyring' "$list"; then
-    ok "bootstrap/$arch names archlinuxarm-keyring"
-  else
-    fail "bootstrap/$arch names archlinuxarm-keyring" \
-      "without it the image cannot verify its own updates after the build" \
-      "reproduce: cat bootstrap/$arch/etc/bootstrap-packages.txt"
+# ⛔ Derived from bootstrap/keyrings/*.pin, not listed here. A sixth port is a
+# new pin file, and this picks it up with no edit. That is also why there is no
+# arch-subset marker: no line below names an architecture.
+#---------------------------------------------------------------------------#
+pin_field() { # FILE KEY -> the value of the first KEY = line
+  awk -F= -v k="$2" '
+    $0 ~ /^[[:space:]]*#/ { next }
+    $1 ~ "^[[:space:]]*" k "[[:space:]]*$" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      sub(/[[:space:]]+$/, "")
+      print
+      exit
+    }' "$1"
+}
+
+architecture_of() { # pacman.conf -> its Architecture value
+  awk -F= '/^[[:space:]]*Architecture[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$1"
+}
+
+pins="$(find "$REPO_ROOT/bootstrap/keyrings" -type f -name '*.pin' | sort)"
+if [ -z "$pins" ]; then
+  fail "at least one keyring pin exists"     "searched: $REPO_ROOT/bootstrap/keyrings"     "without a pin, no port that signs with its own keys can build under SigLevel = Required"     "reproduce: ls bootstrap/keyrings/*.pin"
+fi
+
+# ⛔ The floor. A derivation that matched nothing would report no failure and
+# assert nothing, which is the shape this whole file exists to avoid.
+pairs=0
+while IFS= read -r pin; do
+  [ -n "$pin" ] || continue
+  keyring="$(pin_field "$pin" keyring)"
+  archs="$(pin_field "$pin" arch)"
+  pin_rel="${pin#"$REPO_ROOT/"}"
+  if [ -z "$keyring" ] || [ -z "$archs" ]; then
+    fail "$pin_rel names a keyring and the architectures it serves"       "keyring: ${keyring:-<unset>}, arch: ${archs:-<unset>}"       "reproduce: cat $pin_rel"
+    continue
   fi
-done
+
+  for pacman_arch in $archs; do
+    for conf in "$REPO_ROOT"/rootfs/*/etc/pacman.conf; do
+      [ -e "$conf" ] || continue
+      [ "$(architecture_of "$conf")" = "$pacman_arch" ] || continue
+      dir="${conf#"$REPO_ROOT/rootfs/"}"
+      dir="${dir%%/*}"
+      list="$REPO_ROOT/bootstrap/$dir/etc/bootstrap-packages.txt"
+      pairs=$((pairs + 1))
+      if [ ! -f "$list" ]; then
+        fail "bootstrap/$dir names $keyring-keyring"           "there is no bootstrap/$dir/etc/bootstrap-packages.txt at all"           "reproduce: ls bootstrap/$dir/etc/bootstrap-packages.txt"
+      elif grep -qxF "$keyring-keyring" "$list"; then
+        ok "bootstrap/$dir names $keyring-keyring, from $pin_rel"
+      else
+        fail "bootstrap/$dir names $keyring-keyring"           "$pin_rel serves Architecture = $pacman_arch, which rootfs/$dir sets"           "without it the image cannot verify its own updates after the build"           "reproduce: cat bootstrap/$dir/etc/bootstrap-packages.txt"
+      fi
+    done
+  done
+done <<< "$pins"
+
+if [ "$pairs" -gt 0 ]; then
+  ok "every pinned keyring was matched to $pairs architecture(s) that ship it"
+else
+  fail "every pinned keyring was matched to an architecture that ships it"     "no pacman.conf Architecture matched any pin's arch list, so nothing above was checked"     "reproduce: grep -n '^arch' bootstrap/keyrings/*.pin, then grep -n Architecture rootfs/*/etc/pacman.conf"
+fi
 
 diag "checked $count package list(s)"
 summary
