@@ -21,7 +21,7 @@ what happens after it is checked and a verdict is written down.
   supposed to carry.
 - `HISTORY/references/lcpu-loongarchlinux-dockerfile.md`, the most recent
   previous reference, for the house shape and for how a refusal is stated.
-- `.tmp/PROMPT_COMPLETION.md` standing policy 11 and decision 7, re-read rather
+- `HISTORY/CONTINUE.md` standing policy 11 and decision 7, re-read rather
   than recalled.
 - The reference tree at `38f7e3e45730f9a6dd4d62675dc1e9594b90f4e4`, for the four
   `PKGBUILD` lines and the licence files the verdict rests on.

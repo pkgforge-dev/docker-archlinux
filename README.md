@@ -192,6 +192,36 @@ and `pacman` itself is pinned at the commit the images above are built from.
 is the walkthrough: build the binary, build a root with it in two passes, and
 end with an image that passes this repository's image suite.
 
+- #### Without a container runtime
+
+Every release carries the same images as plain files, so a consumer that never
+runs a registry client can still use them.
+
+| asset | what it is |
+| --- | --- |
+| `rootfs-<arch>.tar.gz` | the image filesystem, one gzipped tar. Untar it and `chroot`, or `podman import` it |
+| `oci-<arch>.tar.gz` | the same image with its metadata, for `podman load` with no network |
+| `bootstrap-set-<arch>.txt` | the resolved package set as `name version sha256`, so the root can be rebuilt with no tooling from here |
+| `rootfs-<arch>.json` | the evidence file for that image: every package, version, size, `sha256` and release date |
+| `pacman-static-<arch>` | the static `pacman` below, and its evidence file |
+| `manifest.json` | every published tag with its digest, platforms and anchor version |
+| `SHA256SUMS` | covers all of the above |
+
+⚠ Only `manifest.json` has a URL that does not change. The rest are under
+`releases/download/<tag>/`, so a consumer who wants the current set resolves the
+latest release first. ⚠ A rootfs tarball carries `/etc/os-release`, which dates
+it; the commit it was built from is in `rootfs-<arch>.json` beside it and
+nowhere else on this path.
+
+```bash
+curl -sSfL --connect-timeout 15 --max-time 120 \
+  https://github.com/pkgforge-dev/docker-archlinux/releases/latest/download/manifest.json \
+  | jq -r '.tags[] | select(.anchor) | "\(.tag) \(.digest)"'
+```
+
+⚠ A git tag here is a version of this repository's tooling and assets,
+`v0.1.0` shape. It is not an image version. Images are tagged by date.
+
 - #### Project history
 
 The build was rewritten from scratch to get reproducible inputs, pinned

@@ -1,0 +1,425 @@
+name: Release
+
+# Everything this project produces that is not a container tag, in one release.
+#
+# ⭐ The framing: other tools import, extract and reuse these images without
+# container tooling. ArchPOWER, Arch Linux ARM and Arch RISC-V all publish a
+# rootfs tarball and this project did not. Five asset families answer that:
+#
+#   pacman-static-<arch>              a static pacman, and its evidence file
+#   rootfs-<arch>.tar.gz              the image filesystem, and its evidence file
+#   bootstrap-set-<arch>.txt          the resolved package set, name version sha256
+#   oci-<arch>.tar                    loadable by podman or docker with no network
+#   manifest.json                     every published tag, digest, platform, anchor
+#   SHA256SUMS                        one file covering all of the above
+#
+# ⛔ A v* tag whose commit never reached the default branch publishes nothing,
+# and that is checked before any build starts rather than after eight of them.
+#
+# ⭐ A workflow_dispatch run builds and uploads for inspection and stops. Only a
+# tag reaches the publish job, so a manual run cannot create a release.
+#
+# ⛔ The body is generated from the evidence files by scripts/release-notes, so
+# the release notes and the assets cannot disagree. A hand written body is a
+# second record that goes stale on the first bump.
+#
+# ⚠ What a release is not. build-deploy.yml tags images by date; a git tag here
+# is a version of this repository's own tooling and assets, and the two
+# namespaces are deliberately different shapes: v0.1.0 against v2026.08.28.
+# HISTORY/releases.md.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  #----------------------------------------------------------------------------------#
+  # ⛔ First, and everything needs it. Eight image builds and eight cross
+  # compiled pacmans is most of an hour of runner time, and a tag pointing at a
+  # commit that never reached the default branch must cost none of it.
+  #----------------------------------------------------------------------------------#
+  guard:
+    name: Check the tag
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth 0 because the tag has to be checked against the default
+      # branch, and a shallow checkout cannot answer that.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse a tag whose commit is not on the default branch
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor HEAD "origin/${DEFAULT_BRANCH}"; then
+            echo "this tag is not an ancestor of origin/${DEFAULT_BRANCH}" >&2
+            echo "assets would be built from a commit that never reached the default branch" >&2
+            exit 1
+          fi
+          echo "::notice::tag commit is on ${DEFAULT_BRANCH}"
+
+      - name: Check the repository before building anything from it
+        run: tests/run.sh static
+
+  #----------------------------------------------------------------------------------#
+  # The eight static pacman binaries, built by the workflow that owns that
+  # recipe rather than by a second copy of it here.
+  #----------------------------------------------------------------------------------#
+  pacman:
+    name: Static pacman
+    needs: guard
+    uses: ./.github/workflows/pacman-static.yml
+    permissions:
+      contents: read
+
+  #----------------------------------------------------------------------------------#
+  # One job per architecture: build the image, then take four things out of it.
+  #
+  # ⛔ One build, four artefacts. Building twice would let the tarball and the
+  # evidence describe different images, which is the class of defect
+  # HISTORY/evidence-race.md records.
+  #----------------------------------------------------------------------------------#
+  rootfs:
+    name: Rootfs ${{ matrix.docker_arch }}
+    needs: guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # ⚠ arch-subset: this is the whole architecture set, and
+        # tests/static/75-architecture-set.sh fails when it stops matching
+        # build-deploy.yml.
+        include:
+          - docker_arch: amd64
+            platform: linux/amd64
+          - docker_arch: arm64
+            platform: linux/arm64
+          - docker_arch: armv7
+            platform: linux/arm/v7
+          - docker_arch: loong64
+            platform: linux/loong64
+          - docker_arch: riscv64
+            platform: linux/riscv64
+          - docker_arch: ppc
+            platform: linux/ppc
+          - docker_arch: ppc64
+            platform: linux/ppc64
+          - docker_arch: ppc64le
+            platform: linux/ppc64le
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      # ⛔ docker/setup-qemu-action registers no big endian PowerPC emulator and
+      # says nothing about it. Ubuntu's qemu-user-static ships no binfmt
+      # descriptions either. This image does, and the F flag is asserted
+      # afterwards rather than assumed. HISTORY/powerpc.md.
+      #
+      # ⚠ The digest is the same pin build-deploy.yml carries, and
+      # scripts/check-image-pins reads the marker above it in both files, so the
+      # two move together.
+      - name: Register the big endian PowerPC emulators
+        if: matrix.docker_arch == 'ppc' || matrix.docker_arch == 'ppc64'
+        env:
+          DOCKER_ARCH: ${{ matrix.docker_arch }}
+        run: |
+          set -euo pipefail
+          handler="qemu-${DOCKER_ARCH}"
+          # tag: latest
+          docker run --rm --privileged \
+            docker.io/multiarch/qemu-user-static@sha256:fe60359c92e86a43cc87b3d906006245f77bfc0565676b80004cc666e4feb9f0 \
+            --reset -p yes
+
+          reg="/proc/sys/fs/binfmt_misc/${handler}"
+          if [ ! -f "$reg" ]; then
+            echo "${handler} is not registered after the binfmt image ran" >&2
+            ls /proc/sys/fs/binfmt_misc >&2
+            exit 1
+          fi
+          cat "$reg"
+
+          # ⚠ The F flag is what makes the handler usable from inside a
+          # container. Without it the kernel opens the interpreter in the
+          # container's own filesystem, where the emulator does not exist.
+          if ! awk '/^flags:/ && $2 ~ /F/ { found = 1 } END { exit !found }' "$reg"; then
+            echo "${handler} is registered without the F flag" >&2
+            exit 1
+          fi
+          echo "::notice::${handler} registered with the F flag"
+
+      # ⛔ The published image, not a fresh build of it.
+      #
+      # The first attempt built its own image and exported that. Two things were
+      # wrong with it and the second is the one that matters:
+      #
+      #   1. a never-pushed image has no RepoDigests, so
+      #      tests/image/40-evidence.sh assertion 10 fails with "the image
+      #      digest is known locally". Measured in run 33212195947.
+      #   2. ⛔ the asset then corresponded to nothing. Its evidence recorded the
+      #      digest of a local build, which matches no entry in manifest.json
+      #      and nothing on either registry, so a consumer comparing the two
+      #      found no match with no way to know that was expected. Review 25.
+      #
+      # Pulling the published tag fixes both: the digest is the one in the
+      # registry, the rootfs is the bytes consumers already pull, and there is
+      # no second build that could differ from the first.
+      #
+      # ⚠ It makes the release depend on a publish having happened. A repository
+      # that has never published cannot cut a release, and that failure is loud.
+      - name: Resolve and pull the published image
+        id: pull
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          DOCKER_ARCH: ${{ matrix.docker_arch }}
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY_OWNER}/archlinux"
+
+          # ⚠ The digest comes from the registry's own Docker-Content-Digest
+          # header, not from a client's idea of it. The tag list and the anchor
+          # floor are read the same way, anonymously, so this adds no credential.
+          token="$(curl -sS --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
+            "https://ghcr.io/token?scope=repository:${repo}:pull&service=ghcr.io" \
+            | jq -r '.token // empty')"
+          [ -n "$token" ] || { echo "no anonymous pull token for ${repo}" >&2; exit 1; }
+
+          digest="$(curl -sSI --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
+            -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json' \
+            -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
+            -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+            -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+            "https://ghcr.io/v2/${repo}/manifests/${DOCKER_ARCH}" \
+            | awk 'tolower($1) == "docker-content-digest:" { print $2 }' | tr -d '\r')"
+
+          if [ -z "$digest" ]; then
+            echo "no digest for ghcr.io/${repo}:${DOCKER_ARCH}" >&2
+            echo "a release exports what was published, so that tag has to exist" >&2
+            echo "reproduce: curl -sSI -H 'Authorization: Bearer <token>' https://ghcr.io/v2/${repo}/manifests/${DOCKER_ARCH}" >&2
+            exit 1
+          fi
+          img="ghcr.io/${repo}@${digest}"
+          echo "image=$img" >> "$GITHUB_OUTPUT"
+
+          # --platform is required. provenance and sbom wrap the pushed manifest
+          # in an index, so a bare pull selects the runner's own architecture
+          # and fails with "no matching manifest for linux/amd64".
+          docker pull --platform "$PLATFORM" "$img"
+          echo "::notice::${DOCKER_ARCH} is ${digest}"
+
+      # The evidence file first, because everything below describes the image it
+      # describes, and a mismatch has to be impossible rather than unlikely.
+      #
+      # ⛔ CONTAINER_RUNTIME is not optional here. The runner image carries both
+      # docker and podman, and gen-evidence prefers podman when it finds one.
+      # The image is in docker's store, so podman tries to pull it again and
+      # fails. Measured in run 33211181473, which failed on all eight.
+      - name: Record the evidence
+        env:
+          IMAGE: ${{ steps.pull.outputs.image }}
+          PLATFORM: ${{ matrix.platform }}
+          DOCKER_ARCH: ${{ matrix.docker_arch }}
+          CONTAINER_RUNTIME: docker
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          SOURCE_COMMIT="${GITHUB_SHA}" BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            scripts/gen-evidence "$DOCKER_ARCH" "$IMAGE" "$PLATFORM" \
+              "assets/rootfs-${DOCKER_ARCH}.json"
+
+      - name: Test the image the assets are taken from
+        env:
+          IMAGE: ${{ steps.pull.outputs.image }}
+          PLATFORM: ${{ matrix.platform }}
+          DOCKER_ARCH: ${{ matrix.docker_arch }}
+        run: |
+          set -euo pipefail
+          IMAGE="$IMAGE" PLATFORM="$PLATFORM" CONTAINER_RUNTIME=docker \
+            EVIDENCE="assets/rootfs-${DOCKER_ARCH}.json" tests/run.sh image
+
+      # ⛔ docker export, not docker save. export writes the container's
+      # filesystem, which is what a consumer with no container tooling can
+      # untar; save writes an image with its layers and metadata, which is the
+      # oci asset below. They are different artefacts and both are asked for.
+      - name: Export the rootfs and an OCI archive
+        env:
+          IMAGE: ${{ steps.pull.outputs.image }}
+          PLATFORM: ${{ matrix.platform }}
+          DOCKER_ARCH: ${{ matrix.docker_arch }}
+        run: |
+          set -euo pipefail
+          cid="$(docker create --platform "$PLATFORM" "$IMAGE" true)"
+          docker export "$cid" | gzip -9 > "assets/rootfs-${DOCKER_ARCH}.tar.gz"
+          docker rm -f "$cid" > /dev/null
+          docker save "$IMAGE" | gzip -9 > "assets/oci-${DOCKER_ARCH}.tar.gz"
+
+          # ⛔ An empty or truncated archive is a green step with a broken asset.
+          # gzip -t reads the whole stream, and the tar listing proves it is a
+          # root and not an arbitrary archive that happens to decompress.
+          for f in "assets/rootfs-${DOCKER_ARCH}.tar.gz" "assets/oci-${DOCKER_ARCH}.tar.gz"; do
+            gzip -t "$f"
+            bytes="$(stat -c %s "$f")"
+            if [ "$bytes" -lt 1000000 ]; then
+              echo "$f is only $bytes bytes, which is not a root filesystem" >&2
+              exit 1
+            fi
+            echo "$f: $bytes bytes"
+          done
+
+          if ! tar -tzf "assets/rootfs-${DOCKER_ARCH}.tar.gz" etc/os-release > /dev/null; then
+            echo "the rootfs archive has no etc/os-release, so it is not this image" >&2
+            exit 1
+          fi
+
+      - name: Write the bootstrap set
+        env:
+          DOCKER_ARCH: ${{ matrix.docker_arch }}
+        run: |
+          set -euo pipefail
+          scripts/gen-bootstrap-set "assets/rootfs-${DOCKER_ARCH}.json" \
+            "assets/bootstrap-set-${DOCKER_ARCH}.txt"
+          awk 'NR <= 14' "assets/bootstrap-set-${DOCKER_ARCH}.txt"
+
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rootfs-${{ matrix.docker_arch }}
+          path: assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  #----------------------------------------------------------------------------------#
+  # Every published tag, its digest, its platforms and its anchor.
+  #
+  # ⛔ Read from the registries, never assembled from what a build believed it
+  # pushed. Both are generated: they are two registries and they can disagree,
+  # and a manifest for one of them would hide that.
+  #----------------------------------------------------------------------------------#
+  manifest:
+    name: Manifest of manifests
+    needs: guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Generate
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          SOURCE_COMMIT="${GITHUB_SHA}" \
+            scripts/gen-manifest "ghcr.io/${GITHUB_REPOSITORY_OWNER}/archlinux" assets/manifest.json
+          jq '{schema, image, tag_count, resolved_count, generated}' assets/manifest.json
+
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: manifest
+          path: assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  #----------------------------------------------------------------------------------#
+  # Publish. Only for a v* tag, and only when every job above succeeded.
+  #
+  # ⛔ needs: over all of them is what makes a partial failure publish nothing. A
+  # release missing one architecture is worse than no release: it looks complete.
+  #----------------------------------------------------------------------------------#
+  publish:
+    name: Publish the release
+    needs: [guard, pacman, rootfs, manifest]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download every artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: assets
+          merge-multiple: true
+
+      # ⛔ Counted, not trusted. download-artifact merging several uploads into
+      # one directory is exactly where a missing architecture becomes invisible.
+      - name: Check every architecture is present
+        run: |
+          set -euo pipefail
+          ls -la assets
+          missing=""
+          arches="$(awk '
+            /^[[:space:]]*-[[:space:]]+docker_arch:/ {
+              s = $0; sub(/^[^:]*:[[:space:]]*/, "", s); sub(/[[:space:]]*$/, "", s); print s
+            }' .github/workflows/build-deploy.yml | sort -u)"
+          n=0
+          for a in $arches; do
+            n=$((n + 1))
+            for f in "pacman-static-$a" "pacman-static-$a.json" \
+                     "rootfs-$a.tar.gz" "rootfs-$a.json" \
+                     "bootstrap-set-$a.txt" "oci-$a.tar.gz"; do
+              [ -f "assets/$f" ] || missing="$missing $f"
+            done
+          done
+          [ -f assets/manifest.json ] || missing="$missing manifest.json"
+          if [ -n "$missing" ]; then
+            echo "the release is missing:$missing" >&2
+            echo "a release with a hole in it looks complete, which is worse than no release" >&2
+            exit 1
+          fi
+          echo "::notice::$n architectures, every asset present"
+
+      - name: Generate the release body and SHA256SUMS
+        run: |
+          set -euo pipefail
+          scripts/release-notes assets "${GITHUB_REF_NAME}" > body.md
+          cat body.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --notes-file body.md \
+            assets/pacman-static-* \
+            assets/rootfs-* \
+            assets/bootstrap-set-* \
+            assets/oci-* \
+            assets/manifest.json \
+            assets/SHA256SUMS

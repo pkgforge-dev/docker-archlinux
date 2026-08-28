@@ -87,7 +87,12 @@ jobs:
             -t pin-check:amd64 .
 
           echo "::group::image suite"
+          # ⛔ CONTAINER_RUNTIME is not optional. The runner image carries both
+          # docker and podman, and gen-evidence prefers podman when it finds
+          # one. The image was built with docker and lives in docker's store, so
+          # podman tries to pull it from Docker Hub and quay.io and fails.
           SOURCE_COMMIT="${{ github.sha }}" BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            CONTAINER_RUNTIME=docker \
             scripts/gen-evidence amd64 pin-check:amd64 linux/amd64 /tmp/evidence-amd64.json
           IMAGE=pin-check:amd64 PLATFORM=linux/amd64 CONTAINER_RUNTIME=docker \
             EVIDENCE=/tmp/evidence-amd64.json tests/run.sh image

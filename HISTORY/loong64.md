@@ -418,3 +418,123 @@ other four. Locally it reports `passed 35 of 35` for
 - ⚠ **No loong64 image is published yet.** The dry run wrote to
   `ghcr.io/pkgforge-dev/archlinux-ci`. The first real tags appear on the next
   scheduled publish.
+
+## Beyond the trust half, measured 2026-08-29
+
+⛔ **What was open**: every loong64 measurement was QEMU, and the transfer half
+had never been run from inside a published image. The trust half was checked in
+`HISTORY/reviews/15-a-consumer-arriving-on-loong64.md`: the lcpu signing key
+comes out of the image at `validity=f`. Whether the six shipped mirrors serve a
+whole transaction, rather than just `core.db`, was not.
+
+⭐ **It needed a published loong64 tag, and the 2026-08-28 publish created one.**
+
+### The databases sync
+
+```bash
+podman run --rm --platform linux/loong64 ghcr.io/pkgforge-dev/archlinux:loong64 \
+  sh -c 'pacman -Syu --noconfirm'
+```
+
+```
+:: Synchronizing package databases...
+ core downloading...
+ extra downloading...
+:: Starting full system upgrade...
+ there is nothing to do
+```
+
+⚠ **That proves less than it looks.** Both databases transferred from the
+shipped mirror list, and then nothing was installed, because the image was built
+the same day. ⛔ A green `pacman -Syu` on a current image does not exercise the
+package payload path at all.
+
+### A package actually transfers, and its signature is checked
+
+```bash
+podman run --rm --platform linux/loong64 ghcr.io/pkgforge-dev/archlinux:loong64 \
+  sh -c 'pacman -Sy --noconfirm --needed tree && tree --version && pacman -Q tree'
+```
+
+```
+ tree-2.3.2-1-loong64 downloading...
+checking keyring...
+checking package integrity...
+:: Processing package changes...
+installing tree...
+:: Running post-transaction hooks...
+(1/3) Arming ConditionNeedsUpdate...
+(2/3) Linking executables installed outside PATH...
+(3/3) Cleaning up package cache...
+tree v2.3.2 (c) 1996 - 2026 by Steve Baker, Thomas Moore, Francesc Rocher, Florian Sesser, Kyosuke Tokoro
+tree 2.3.2-1
+```
+
+⭐ **Four things at once, and each was separately unproven:**
+
+| | |
+| --- | --- |
+| a package payload transfers from a shipped mirror | `tree-2.3.2-1-loong64 downloading...` |
+| its signature verifies under `SigLevel = Required` | `checking keyring`, `checking package integrity` |
+| the installed binary runs under emulation | `tree v2.3.2` |
+| all three shipped hooks fire on a consumer's transaction | the `(1/3)` to `(3/3)` block |
+
+⚠ **The second hook is this repository's own.** `Linking executables installed
+outside PATH` is the fix for upstream issue 80, Completed row 17. This is the
+first time it has been seen running inside a published image on this port
+rather than in a test.
+
+⛔ **Still qemu-user.** No target kernel and no target page size. Real hardware
+remains untouched and is the one item emulation cannot answer.
+
+## The keyring pin, re-measured 2026-08-29
+
+⚠ **Two claims carried forward from the 2026-08-28 session were wrong**, and the
+correction is what `scripts/check-keyring-pin` prints:
+
+```bash
+scripts/check-keyring-pin bootstrap/keyrings/archlinux-lcpu.pin
+```
+
+```
+pinned trusted : 10 fingerprint(s)
+expired today  : 5CDE9ADCBD04454BAF547A1C40D0304E1192746B(2026-04-24) 60922C5D40F6297BC1616C270A8F993ECADF8CE7(2026-07-14)
+expiring < 1y  : none
+result: current
+```
+
+| the claim | what is measured |
+| --- | --- |
+| eight trusted keys | **ten** |
+| one key expires 2027-11-26, taking usable keys from 8 to 7 | that key is real and does expire then, but **two others expired already**, on 2026-04-24 and 2026-07-14 |
+
+⭐ **The port is unaffected and that is the point of the pin.** `result: current`
+and the build works: the keys that signed the packages this image installs are
+not the expired ones. ⚠ What changed is the margin, and nothing had said so.
+
+### The expiry annotation, forced and seen
+
+⛔ **Nobody had seen the warning fire.** `expiring < 1y` is empty because
+2027-11-26 is beyond the 365 day horizon, so the branch that raises the
+annotation had never been taken. Forced against a scratch copy of the pin with
+that key's date moved inside the horizon:
+
+```bash
+cp bootstrap/keyrings/archlinux-lcpu.pin /tmp/scratch.pin
+sed -i 's/B955F2012D6A161F6D9076AF34BE2B6F4A99C0E9 2027-11-26/B955F2012D6A161F6D9076AF34BE2B6F4A99C0E9 2027-03-15/' /tmp/scratch.pin
+scripts/check-keyring-pin /tmp/scratch.pin
+```
+
+```
+expiring < 1y  : B955F2012D6A161F6D9076AF34BE2B6F4A99C0E9(2027-03-15)
+```
+
+Fed to the workflow's own branch from `.github/workflows/freshness-keyring.yml`:
+
+```
+::warning::archlinux-lcpu has trusted keys expiring within a year: B955F2012D6A161F6D9076AF34BE2B6F4A99C0E9(2027-03-15)
+```
+
+⚠ **The annotation was produced by running the workflow's condition against the
+script's real output, not by running the workflow.** The scratch pin was never
+committed and no run was dispatched for it.

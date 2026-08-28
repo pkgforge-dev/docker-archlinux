@@ -156,8 +156,12 @@ jobs:
             --output "type=local,dest=/tmp/dbsnapshot" .
 
           echo "::group::image suite"
+          # ⛔ CONTAINER_RUNTIME is not optional. The runner image carries both
+          # docker and podman, and gen-evidence prefers podman when it finds
+          # one. The image was built with docker and lives in docker's store, so
+          # podman tries to pull it from Docker Hub and quay.io and fails.
           SOURCE_COMMIT="${{ github.sha }}" BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            DB_SNAPSHOT=/tmp/dbsnapshot \
+            DB_SNAPSHOT=/tmp/dbsnapshot CONTAINER_RUNTIME=docker \
             scripts/gen-evidence "$DOCKER_ARCH" "freshness-check:$DOCKER_ARCH" "$PLATFORM" \
               "/tmp/evidence-$DOCKER_ARCH.json"
           IMAGE="freshness-check:$DOCKER_ARCH" PLATFORM="$PLATFORM" CONTAINER_RUNTIME=docker \

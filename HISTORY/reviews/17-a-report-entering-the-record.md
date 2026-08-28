@@ -1,10 +1,17 @@
 # Review 17: a report entering the record as though it were a measurement
 
+⚠ **Scratch paths in this document** name fixtures under `.tmp/`, which is
+gitignored and wiped between sessions. They record what a measurement was
+taken against, not something a reader can open. ⛔ Nothing in the
+repository depends on them. To re-run one, copy the tree to a scratch
+directory, rebuild the fixture the surrounding text describes, and point the
+command at that copy.
+
 **Lens.** Somebody hands the session a URL and a description of what is behind
 it. The session is told not to look. What ends up written down, and can the next
 session tell the difference between what was checked and what it was told.
 
-**Date.** 2026-08-28. Only `.tmp/PROMPT_COMPLETION.md` was touched in the change
+**Date.** 2026-08-28. Only `HISTORY/CONTINUE.md` was touched in the change
 this reviews, so only that file is reviewed.
 
 ⚠ Distinct from review 12, which read the brief as somebody with no repository,
@@ -71,8 +78,8 @@ Completed, three tasks inserted, then static pacman moved from 8 to 2. Each
 reordering renumbers headings and orphans every cross-reference.
 
 ```bash
-sed -n '/^## TODO/,$p' .tmp/PROMPT_COMPLETION.md | awk '/^### [0-9]+\. /{ ... }'
-for n in $(grep -o 'TODO [0-9]*' .tmp/PROMPT_COMPLETION.md | awk '{ print $2 }' | sort -un); do ... done
+sed -n '/^## TODO/,$p' HISTORY/CONTINUE.md | awk '/^### [0-9]+\. /{ ... }'
+for n in $(grep -o 'TODO [0-9]*' HISTORY/CONTINUE.md | awk '{ print $2 }' | sort -un); do ... done
 ```
 
 | check | result |
@@ -127,7 +134,10 @@ them that way.
 
 ## Change summary
 
-Files touched: 1, `.tmp/PROMPT_COMPLETION.md`, which is not in the repository.
+Files touched: 1, the brief. ⚠ At the time it lived in a gitignored directory
+and was not in the repository, so no line count here can be checked later. It
+moved to `HISTORY/CONTINUE.md` on 2026-08-29 and is tracked now, which is what
+this review's own finding argued for.
 Lines added: 141. Lines removed: 85. 1024 lines to 1080.
 
 ⚠ This review is in the repository and the file it reviews is not, because

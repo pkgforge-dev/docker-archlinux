@@ -187,6 +187,18 @@ a browser's and this repository's all get the same answer.
 | GitHub runner | `docker-archlinux-mirrorlist/1` | 403 |
 | this workstation | any of the above | 200 |
 
+⭐ **Mined 2026-08-29, and it changes what this measurement means.** The
+ArchPOWER tracker records the maintainer blocking whole networks deliberately.
+Issue 69, closed 2023-12-29, in his own words:
+
+> After careful consideration I blocked all traffic from the Russian Federation
+
+⛔ **So network level blocking is this origin's normal practice, not an
+accident.** ⚠ Nothing upstream says GitHub's ranges are blocked and no issue
+names a CI runner, so this is a lead and not a diagnosis. What it settles is the
+posture: ⛔ the read through proxy is a permanent second path, not a workaround
+waiting for upstream to fix a bot rule. `HISTORY/references/kth5-archpower.md`.
+
 ⭐ **`api.rv.pkgforge.dev` is a read through proxy in front of the same origin,
 and it answers from both.** It returned byte identical databases: 724493 bytes
 for `powerpc64le`, 741715 for `powerpc`, 684273 for `powerpc64`, and 504891 for

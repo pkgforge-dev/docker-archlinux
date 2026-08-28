@@ -125,11 +125,18 @@ git rev-list --count origin/history-archive..origin/debug   # 0
 git merge-base --is-ancestor origin/debug origin/history-archive && echo ancestor
 ```
 
-| branch | unique commits vs `history-archive` | protected |
+⚠ **Re-measured 2026-08-29, and two of the three rows have moved.** Only
+`main` and `history-archive` exist on the remote now.
+
+```bash
+gh api repos/pkgforge-dev/docker-archlinux/branches --jq '.[].name'
+```
+
+| branch | unique commits vs `history-archive` | state on the remote |
 | --- | --- | --- |
-| `history-archive` | it is the reference | ⛔ **no** |
-| `debug` | 0, it is an ancestor of the archive | no |
-| `template-adoption` | **11** | no |
+| `history-archive` | it is the reference | present, ⛔ **not protected** |
+| `debug` | 0, it is an ancestor of the archive | ⭐ deleted 2026-08-29 |
+| `template-adoption` | **11** | ⛔ **gone, and not by this repository's doing** |
 
 ### ⛔ Protect `history-archive`
 
@@ -158,29 +165,59 @@ JSON
 `HISTORY/rewrite.md` and the `main` commit body, so the branch can be recreated
 from any clone that still has the objects. That is a name, not a copy.
 
-### `debug`
+### `debug`  ⭐ deleted
 
-Tip `a809a22`, 2025-11-14, a keepalive commit. It holds nothing the archive does
-not.
+Tip `a809a2251aef65188c0390b8a36f566fd2279854`, 2025-11-14, a keepalive commit.
 
-```bash
-git push origin --delete debug
-```
-
-⛔ Proposed, not done.
-
-### `template-adoption`
-
-⚠ **Deleting this one loses commits.** It holds 11 that are on no other branch,
-the work between the archive point and the rewrite:
+⛔ **Checked before deleting, not asserted.** Every commit on it was already
+reachable from the archive:
 
 ```bash
-git log --oneline origin/history-archive..origin/template-adoption
+git merge-base --is-ancestor origin/debug origin/history-archive && echo ancestor
+git rev-list --count origin/history-archive..origin/debug   # 0
 ```
 
-⛔ Proposed for nothing. Either keep it, or move its tip into the archive first.
-Deleting the last reference to a commit is not an action to take on somebody
-else's behalf.
+Deleted 2026-08-29 at the maintainer's direction, by
+`gh api -X DELETE repos/pkgforge-dev/docker-archlinux/git/refs/heads/debug`.
+Nothing was lost: the 2159 commits it named remain on `history-archive`.
+
+### `template-adoption`  ⛔ gone from the remote
+
+⛔ **This one held 11 commits that were on no other branch, and the remote no
+longer has it.** A `git fetch --prune` on 2026-08-29 reported it deleted, along
+with `freshness/mirrors-20260826`. ⚠ Neither was deleted by this session: the
+only branch deleted here was `debug`, and the command is recorded above.
+
+⚠ **The 11 commits survive in one place that is known**: the working clone on
+the maintainer's workstation, where the local branch still points at
+`8cf0ca698503ed09f153f1df2426b2414b4d4d1e`. They are the work between the
+archive point and the rewrite:
+
+```
+8cf0ca6 record the fault that makes each test fail
+0b0649e correct what a single architecture tag is, measured against a real run
+14e4b18 run the static suite and both linters on every pull request
+eccbcd2 remove the orphaned keepalive file, and record what the maintainer must apply
+a35136a document what the image does, with examples that run
+bf9e26d assert a reachable floor per mirror list, not every entry
+fa1933f watch every pin, and record what was measured about the ports
+6d4b92f split the build into resolve, a per architecture matrix, and a publish job
+fdb90a9 add the static and image test suites, and the evidence generator
+62592ca rebuild the bootstrap so it does not depend on its own output
+2ee4af5 normalise line endings to LF in the repository
+```
+
+⛔ **The maintainer's call, and it does not keep.** Pushing a deleted branch back
+is undoing somebody's decision, so it was not done. If those commits are wanted,
+push the local ref back before that clone is garbage collected:
+
+```bash
+git push origin 8cf0ca698503ed09f153f1df2426b2414b4d4d1e:refs/heads/template-adoption
+```
+
+⚠ If they are not wanted, nothing needs doing and this entry can go. ⭐ What is
+not acceptable is neither: an unreferenced commit in one clone is lost the day
+that clone is cleaned, and nobody is told.
 
 ## 4. Actions creating pull requests
 
@@ -288,3 +325,23 @@ not ok 1 - every base image is pinned by digest
 
 ⚠ If Dependabot does rewrite pins to tags, its pull requests will be red and
 that dependency belongs to a freshness job of its own instead.
+
+## 6. Forks and the fork relationship  ⭐ done
+
+⚠ **This was an open maintainer action and it is closed.** The repository was a
+fork of `fwcd/docker-archlinux` in GitHub's data model, and the maintainer was
+contacting fork owners so it could be detached.
+
+Measured 2026-08-29:
+
+```bash
+gh api repos/pkgforge-dev/docker-archlinux --jq '{fork:.fork, parent:(.parent.full_name // "none"), forks:.forks_count}'
+```
+
+```json
+{"fork":false,"forks":0,"parent":"none"}
+```
+
+⭐ Detached, with no parent and no forks of its own. ⛔ Nothing in the repository
+changed for it, which is what was written down at the time and is still true.
+The repository was already documented as independent.

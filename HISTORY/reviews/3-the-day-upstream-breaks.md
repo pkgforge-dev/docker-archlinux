@@ -1,5 +1,12 @@
 # Review 3: the day upstream breaks
 
+⚠ **Scratch paths in this document** name fixtures under `.tmp/`, which is
+gitignored and wiped between sessions. They record what a measurement was
+taken against, not something a reader can open. ⛔ Nothing in the
+repository depends on them. To re-run one, copy the tree to a scratch
+directory, rebuild the fixture the surrounding text describes, and point the
+command at that copy.
+
 **Lens.** Take each external dependency away in turn. Does CI fail loudly and
 specifically, or does it publish something wrong, or publish nothing while
 reporting success?
