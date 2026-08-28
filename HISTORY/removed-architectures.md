@@ -75,6 +75,77 @@ compression before this port could be anchored.
 before, and not because the port is inactive. It is excluded because signature
 verification cannot be established without weakening `SigLevel`.
 
+### ⭐ Re-measured 2026-08-28: the keyring exists, and the verdict above no longer holds
+
+⛔ **The measurement above looked in the wrong database.** It probed `base` and
+`testing` for `powerpc64le` and found no keyring package. `archpower-keyring`
+is an `any` architecture package, and ArchPOWER splits arch specific from `any`
+packages into **separate** databases. The keyring is in `base/any`, which that
+probe never read.
+
+```bash
+curl -s -L "https://repo.archlinuxpower.org/base/any/" |
+  grep -oE '[a-z0-9._+-]*keyring[a-z0-9._+-]*\.pkg\.tar\.[a-z]+' | LC_ALL=C sort -u
+```
+
+`archpower-keyring-20260408-1-any.pkg.tar.zst`, and `python-keyring`.
+
+| fact | value |
+| --- | --- |
+| package | `archpower-keyring-20260408-1-any.pkg.tar.zst` |
+| HTTP, bytes | 200, 28621 |
+| sha256 | `2f3ebb1a9234775e9244bf45ae1121a20bdbe7d27efbd440a3da172a2baf6241` |
+| detached signature | 200, 119 bytes |
+| `pkgdesc` | `Arch POWER PGP keyring` |
+| keys in `archpower.gpg` | 7 |
+| trusted master keys, `archpower-trusted` | 3, all at trust level 4 |
+| revoked, `archpower-revoked` | 1, `3B40CFA2B2FC99268DE7B31BF95FE1C7E212CF15` |
+
+⭐ **It carries the key this page could not verify.**
+`D201F92AE42528456537C3F9B96775F34689694C`, recorded above as the key that
+signed `bash-5.3.15-1-powerpc64le.pkg.tar.zst` and as not present in
+`archlinux-keyring`, is one of the three at trust level 4.
+
+```bash
+podman run --rm -i --platform linux/amd64 docker.io/pkgforge/archlinux:latest bash -c '
+  cat > /tmp/k.pkg.tar.zst; mkdir -p /tmp/x
+  tar --no-same-owner -xf /tmp/k.pkg.tar.zst -C /tmp/x
+  cat /tmp/x/usr/share/pacman/keyrings/archpower-trusted' < archpower-keyring.pkg.tar.zst
+```
+
+```
+8D3D6CE8D4F0625F4D7109022205B7A06C2656A3:4:
+D201F92AE42528456537C3F9B96775F34689694C:4:
+DE9D1B4851C66CCD9994459CFBB374D5D026D9DA:4:
+```
+
+⭐ **By this page's own criterion the block is cleared.** It reads: "a keyring
+obtainable independently of the packages it signs. A keyring package in the
+repository, a fingerprint published on a channel this repository does not fetch
+packages from, or a signature chaining to a key already in
+`archlinux-keyring`." The first of the three now exists, and it is the same
+shape as `archlinuxarm-keyring` and `archlinux-lcpu-keyring`, both of which
+this repository already pins under `bootstrap/keyrings/`.
+
+⚠ **Cleared is not implemented, and three obstacles named elsewhere are
+untouched by this.** None is a trust problem.
+
+1. `scripts/resolve-anchor` reads gzip only, and ArchPOWER's databases are
+   Zstandard. That is stated above and is unchanged.
+2. `repo.archlinuxpower.org` is one host, so there is no second mirror.
+3. ArchPOWER needs **two** repository sections rather than one, because `base`
+   is unsatisfiable without `base-any`. `iana-etc` and `openssl` are only in
+   the second.
+
+⚠ **What was not measured.** No keyring was installed, no `pacman-key
+--populate archpower` was run, and no package signature was verified against
+it. Everything above is the package's contents read out of the archive. The
+bootstrap is what settles it, the way `loong64` was settled.
+
+⚠ **Found while mining an unrelated reference**, whose `docs/GOTCHAS.md` G-11
+names `archpower-keyring` and so contradicted this page.
+`HISTORY/references/aseem-pacman-static.md`.
+
 ## i686: blocked on an expired master key
 
 Arch Linux 32 publishes a keyring as a package, which is the same shape as the

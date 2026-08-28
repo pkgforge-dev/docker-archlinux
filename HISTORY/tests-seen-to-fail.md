@@ -242,6 +242,9 @@ reaching it, and the ARM pin has been current every time the job has run. The
 | a fifth architecture builds and publishes | none. Dry run `33165970427`, the first run carrying loong64 | seven jobs green in 6m56s. ⛔ This is the measurement `HISTORY/loong64.md` could not take: `docker/setup-qemu-action` **does** register a `loongarch64` handler on `ubuntu-latest`, and the emulated stage ran without a binfmt error. `8 of 10 pinned keys are fully valid` in the build log, 137 packages recorded, 6 per architecture tags created, and `index platforms: amd64 arm/v7 arm64 loong64 riscv64` |
 | a dry run cannot touch a real repository | the same run | both real repositories still hold 161 tags. `pkgforge/archlinux:latest` was last pushed at 17:18:47, by the earlier real publish; the scratch `:latest` moved at 18:47:52 |
 | the index check refuses an incomplete index | ran the step's own jq and grep loop against `pkgforge/archlinux-ci:amd64`, a single-architecture tag, on the real registry | `index platforms: amd64`, then `missing arm64`, `missing riscv64`, `missing arm/v7`, exit 1. The same logic against `:v2026.08.26` exits 0, so it discriminates |
+| a partial failure publishes nothing, **with five architectures** | `bootstrap/loong64/etc/bootstrap-packages.txt` given a third line, `no-such-package`, on throwaway branch `proof-five-arch-partial-failure`, then dispatched with `dry_run=true`. Run `33179363541` | `Build loong64` fails at `Build and push by digest` with `error: target not found: no-such-package`. Its remaining seven steps are skipped, so no digest is uploaded. The other **four** builds all succeed, because `fail-fast` is off. `Create tags` is **skipped** and the run concludes `failure`. Real GHCR still holds 161 tags |
+| the cross-registry copy runs and is verified, **at five** | none. Run `33178993776`, `dry_run` and `dry_run_hub` both true, on `main` at `c47443a` | all seven jobs green. `verifying ghcr.io/pkgforge-dev/archlinux-ci:v2026.08.28` and `verifying pkgforge/archlinux-ci:v2026.08.28`, each `index platforms: amd64 arm/v7 arm64 loong64 riscv64`. The Docker Hub scratch repository carries `loong64`, `loong64-v2026.08.28`, `loong64-7.1.0.r9.g54d9411-2` and the three `loongarch64` spellings, 41 tags in all against 26 after run `33001089986` |
+| the evidence still resolves when the snapshot is reverted | `git revert 30d75ed` in full on throwaway branch `proof-evidence-fetch-path`, `HISTORY/tests-seen-to-fail.md` kept at `main`, then dispatched with `dry_run=true`. Run `33180365462` | all seven jobs green. The `Record the evidence` step's env carries no `DB_SNAPSHOT` and there is no export step, so `gen-evidence` took the fetch path on all five architectures: `core database read`, `extra database read`, `135 packages` on riscv64 |
 
 ⚠ **What is still not proven this way.** The cross-registry copy is no longer in
 this list: run `33001089986` exercised it against scratch repositories on both
@@ -249,3 +252,20 @@ registries. What remains unproven is a copy that fails **partway**. The index
 check refuses an incomplete index, tested above against a real
 single-architecture tag, but a copy interrupted midway through a multi-tag run
 has not been produced deliberately.
+
+⚠ **Two notes on the three rows added 2026-08-28**, because each is narrower
+than it looks.
+
+⛔ **The injection the brief prescribed would have proved nothing.** It said to
+write `base` and `no-such-package` alone, which drops `archlinux-lcpu-keyring`.
+`tests/static/90-package-lists.sh` assertion 11 then fails, the `resolve` job's
+`Check the repository before building it` step fails with it, and **no build job
+ever starts**. The keyring line was kept and the bogus name appended, so the
+static suite passes and the failure lands where the topology is actually being
+tested. ⭐ A fault injected upstream of the thing under test is not a test of it.
+
+⚠ **The fetch path passing is one sample, and the fault it replaced is a race.**
+Run `33180365462` proves `gen-evidence` still fetches, parses and joins on a
+runner for all five architectures. It does **not** prove the fetch path is safe:
+upstream simply did not move during those four minutes. Scheduled run
+`33094128354` failed on a 63 second window. `HISTORY/evidence-race.md`.

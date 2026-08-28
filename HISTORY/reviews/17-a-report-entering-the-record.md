@@ -132,3 +132,63 @@ Lines added: 141. Lines removed: 85. 1024 lines to 1080.
 
 ⚠ This review is in the repository and the file it reviews is not, because
 `.tmp/` is wiped between sessions. Reviews 12 and 13 have the same shape.
+
+---
+
+## Addendum, 2026-08-28: the reference was mined, and the report held
+
+⛔ **This closes the gap named above under "What this did not look at".** The
+reference was cloned, its commit captured first, its tracker read and its
+LICENSE opened. `HISTORY/references/aseem-pacman-static.md` carries the full
+write-up and the verdict. What belongs here is only what it says about the
+question this review asked, which is whether an unchecked report was safe to
+leave in the record.
+
+**The review's own framing was four claims, one corroborated.** Measured
+against the repository at `38f7e3e45730f9a6dd4d62675dc1e9594b90f4e4`:
+
+| the claim | what measurement says |
+| --- | --- |
+| it exists and is a proof of concept for this repository | corroborated before, unchanged |
+| **0-BSD** | ⭐ **holds.** `LICENSE` is the full 0BSD text, 12 lines. `gh api repos/Aseem0xff/pacman-static --jq '.license.spdx_id'` answers `0BSD` |
+| most of the hard work is done | ⚠ **partly.** A static `pacman` 7.1.0 for five architectures with evidence files, and two of its own phases unstarted: source signatures, T-07, and reproducibility, T-16 |
+| it unblocks this task | ⚠ **partly.** It covers four of this repository's five architectures. ⛔ It does not cover `armv7` |
+
+⭐ **The trap the review named did not fire.** Decision 7 exists because
+`packages-core-pacman-static` declares `GPL-2.0-or-later` in its `PKGBUILD` and
+ships no LICENSE file. This repository ships one, its text is the licence it
+claims, and `LICENSING.md` bounds the claim correctly: the vendored trees under
+`references/` keep their own licences, and applying a patch produces a
+derivative under the patched file's licence.
+
+⚠ **And one open fault the report did not mention.** A low rate intermittent
+`SIGSEGV` after `pacman -S base` completes, roughly 3 in 50, which the
+repository itself calls a blocker. A report is a summary and a summary drops
+things; that is the shape of the risk this review was about, and here it took
+the form of an omission rather than an error.
+
+### What this says about the practice, not about this reference
+
+⭐ **Marking the report as a report was the right call and it cost nothing.**
+Three of the four claims turned out to be right or nearly right, so the brief
+would have been mostly correct had it stated them flatly. ⛔ **That is the
+argument for the practice, not against it.** The session that mined it could
+tell which sentences it had to verify, and it found two things a flat statement
+would have hidden: the open fault above, and the `armv7` gap.
+
+⚠ **What the mining found that no amount of care with the brief could have.**
+Two facts recorded in this repository's own TODO 2 are now stale, and both were
+measured against live upstream rather than against the reference's corpus:
+
+- `manjaro-contrib/packages-core-pacman-static` is at
+  `aad8fa5b24a94aa36f01b42eeae5a426b314a2c9`, `pkgrel` 15, not the recorded
+  `8c7a7c2262d5d51ee4d7301d403133a9c932c2f6` at `pkgrel` 14.
+- Its `riscv64` is declared in `arch=()` and cannot build:
+  `openssltarget='linux64-$CARCH'` is single quoted at `PKGBUILD:251`, so
+  `$CARCH` never expands.
+
+⛔ **The brief recorded the fork's architecture list as fact.** It came from the
+fork's own `arch=()`, which is observed content and is evidence of intent
+rather than of behaviour. The lens of this review generalises: a report is not
+the only thing that enters the record unchecked. A field read out of an
+upstream file does the same, and looks more authoritative for it.
