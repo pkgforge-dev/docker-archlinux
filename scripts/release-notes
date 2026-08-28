@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+#
+# Write a release body from the evidence files beside the assets, and write the
+# checksum file the release carries.
+#
+#   scripts/release-notes <asset-dir> <tag>
+#
+# ⛔ Generated, never hand written. A body somebody types is a second record of
+# what the release contains, and it goes stale on the first bump while still
+# reading as authoritative. Everything below is read out of the evidence files
+# scripts/build-pacman-static wrote next to each binary.
+#
+# ⛔ It refuses to write a body for an asset with no evidence file, and for an
+# evidence file whose binary was never run. A release asset nobody executed is
+# not evidence that it works.
+#
+# The body goes to stdout. SHA256SUMS is written into the asset directory,
+# because the release carries it as an asset of its own.
+set -euo pipefail
+
+die() {
+  echo "release-notes: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+dir="${1:-}"
+tag="${2:-}"
+[ -n "$dir" ] || die "usage: release-notes <asset-dir> <tag>"
+[ -n "$tag" ] || die "usage: release-notes <asset-dir> <tag>"
+[ -d "$dir" ] || die "no asset directory at $dir" \
+  "the release job downloads every build job's artifact into one directory" \
+  "check it with: ls -1 $dir"
+
+need() {
+  command -v "$1" > /dev/null || die "$1 is required"
+}
+need jq
+need sha256sum
+
+binaries="$(find "$dir" -maxdepth 1 -type f -name 'pacman-static-*' ! -name '*.json' | LC_ALL=C sort)"
+[ -n "$binaries" ] || die "no pacman-static-* binary in $dir" \
+  "the release would be published with nothing in it" \
+  "check it with: ls -1 $dir"
+
+# Every binary needs its evidence, and every evidence needs its binary. A pair
+# that is half present is a partial upload, and the release must not paper over
+# one.
+missing=""
+while IFS= read -r bin; do
+  [ -n "$bin" ] || continue
+  [ -f "$bin.json" ] || missing="$missing $(basename "$bin")"
+done <<< "$binaries"
+[ -z "$missing" ] || die "these binaries arrived with no evidence file:$missing" \
+  "scripts/build-pacman-static writes both, so one without the other is a lost upload" \
+  "check it with: ls -1 $dir"
+
+orphans="$(find "$dir" -maxdepth 1 -type f -name 'pacman-static-*.json' \
+  | LC_ALL=C sort \
+  | awk -v d="$dir" '{ b = $0; sub(/\.json$/, "", b); if (system("test -f " b) != 0) print b }')"
+[ -z "$orphans" ] || die "these evidence files arrived with no binary: $(printf '%s' "$orphans" | tr '\n' ' ')" \
+  "check it with: ls -1 $dir"
+
+# ⚠ Relative names, so the file reads the way sha256sum -c expects beside the
+# assets it names. -print0 and xargs -0 rather than an unquoted expansion, which
+# would split on whitespace in a name.
+( cd "$dir" && find . -maxdepth 1 -type f -name 'pacman-static-*' -printf '%f\0' \
+    | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS )
+
+count="$(awk 'NF { n++ } END { print n + 0 }' <<< "$binaries")"
+
+# The pacman commit is one value for the whole release. Two different ones would
+# mean the matrix did not build from one source, which is worse than a failure
+# because every asset looks correct on its own.
+commits="$(while IFS= read -r bin; do
+  [ -n "$bin" ] || continue
+  jq -r .pacman_commit "$bin.json"
+done <<< "$binaries" | LC_ALL=C sort -u)"
+n_commits="$(awk 'NF { n++ } END { print n + 0 }' <<< "$commits")"
+[ "$n_commits" = "1" ] || die "the assets were built from $n_commits different pacman commits" \
+  "$(printf '%s' "$commits" | tr '\n' ' ')" \
+  "one release is one source, or the binaries in it are not comparable" \
+  "check it with: jq -r .pacman_commit $dir/pacman-static-*.json"
+
+describe="$(jq -r .pacman_describe_pinned "$(printf '%s\n' "$binaries" | awk 'NR == 1').json")"
+
+# ⛔ The static prose goes through quoted heredocs, so nothing in it is a shell
+# expansion and the backticks stay literal. A printf of the same text reads as
+# an attempted command substitution to a linter, and is one editing slip away
+# from being one.
+printf '## Static pacman, %s\n' "$tag"
+cat <<'INTRO'
+
+A statically linked pacman for every architecture this repository builds, built
+from source. No dynamic loader is named, so each binary runs on a system whose
+libc is missing or broken.
+
+INTRO
+printf 'Built from pacman %s, which is %s: the same commit the images in this\n' \
+  "$commits" "$describe"
+printf 'release are built from, so the binary and the image agree by construction.\n\n'
+
+printf '| asset | machine | size | reported | sha256 |\n'
+printf '| --- | --- | --- | --- | --- |\n'
+while IFS= read -r bin; do
+  [ -n "$bin" ] || continue
+  jq -r '"| " + (input_filename | sub(".*/"; "") | sub("[.]json$"; "")) + " | "
+         + .elf_machine + " | " + (.size | tostring) + " | "
+         + .reported_version + " | " + .sha256[0:16] + " |"' "$bin.json"
+done <<< "$binaries"
+
+cat <<'TAILA'
+
+### Verify
+
+```bash
+sha256sum -c SHA256SUMS
+readelf -lW pacman-static-amd64 | awk '/INTERP/ { n++ } END { print n + 0 }'
+```
+
+The INTERP count must be 0. That is what static means.
+
+### Build it yourself
+
+```bash
+scripts/build-pacman-static amd64
+```
+
+Every input is pinned by sha256 or by commit in
+bootstrap/pacman-static/sources.pin. Nothing else is fetched.
+
+### Bootstrapping with it
+
+docs/bootstrap-with-pacman-static.md builds a working Arch root on a host with
+no pacman, no libalpm and no Arch keyring, and ends with an image that passes
+this repository image suite.
+
+### Source
+
+The binary is pacman, which is GPL-2.0-or-later however it was built.
+bootstrap/pacman-static/sources.pin names every input by URL and sha256, so the
+exact sources are recoverable from the pin alone.
+
+TAILA
+printf '⚠ %s assets. Every one was executed under its architecture emulator before\n' "$count"
+cat <<'TAILB'
+it was uploaded, and the release job refuses an asset that was not.
+⚠ Every non x86_64 claim here is a qemu-user claim: no target kernel and no
+target page size.
+TAILB

@@ -9,6 +9,9 @@ Unofficial, automated Docker multi-platform images of Arch Linux for the followi
 | armv7h | `linux/arm/v7` | [Arch Linux ARM](https://archlinuxarm.org) |
 | loongarch64 | `linux/loong64` | [Arch Linux loong64](https://loongarchlinux.lcpu.dev) |
 | riscv64 | `linux/riscv64` | [Arch Linux RISC-V](https://archriscv.felixc.at) |
+| ppc | `linux/ppc` | [ArchPOWER](https://archlinuxpower.org) |
+| ppc64 | `linux/ppc64` | [ArchPOWER](https://archlinuxpower.org) |
+| ppc64le | `linux/ppc64le` | [ArchPOWER](https://archlinuxpower.org) |
 
 - #### Registries
 
@@ -64,10 +67,17 @@ manifest, so `x86_64` and `amd64` are two names for one digest.
 | `linux/arm/v7` | `armv7l`, `armv7h`, `armv7` |
 | `linux/loong64` | `loongarch64`, `loong64` |
 | `linux/riscv64` | `riscv64` |
+| `linux/ppc` | `ppc`, `powerpc` |
+| `linux/ppc64` | `ppc64`, `powerpc64` |
+| `linux/ppc64le` | `ppc64le`, `powerpc64le` |
 
 The `uname -m` spellings follow the sibling images in the organisation. ⚠ The
 Docker platform spellings (`amd64`, `arm64`, `armv7`) are this repository's
 extension and are not an organisation convention.
+
+⚠ On the three PowerPC ports `uname -m` and the Docker platform agree, so the
+second name in each pair is neither: it is the spelling ArchPOWER uses in its
+repository paths and in `Architecture`.
 
 ⚠ A single-architecture tag still records its platform, so pulling one for a
 foreign architecture needs `--platform`. Without it the runtime looks for the
@@ -162,6 +172,25 @@ docker buildx imagetools inspect docker.io/pkgforge/archlinux:latest --format '{
 ```
 
 See [`examples/`](examples/) for consuming the evidence file.
+
+- #### Bootstrapping without a base image
+
+A statically linked `pacman` is built from source for every architecture above.
+It carries its own libc, so it runs on a system whose own libc is missing or
+broken, and it can build an Arch root on a host that has no `pacman`, no
+`libalpm` and no Arch keyring.
+
+```bash
+scripts/build-pacman-static amd64
+```
+
+⛔ Built here, never downloaded. Every input is pinned by `sha256` or by commit
+in [`bootstrap/pacman-static/sources.pin`](bootstrap/pacman-static/sources.pin),
+and `pacman` itself is pinned at the commit the images above are built from.
+
+[`docs/bootstrap-with-pacman-static.md`](docs/bootstrap-with-pacman-static.md)
+is the walkthrough: build the binary, build a root with it in two passes, and
+end with an image that passes this repository's image suite.
 
 - #### Project history
 

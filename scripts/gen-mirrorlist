@@ -71,10 +71,22 @@ read_servers() {
 #---------------------------------------------------------------------------#
 # substitute the two variables pacman expands, then probe
 #---------------------------------------------------------------------------#
+# ⛔ The repository name and the database file are not core and core.db on every
+# port. ArchPOWER's primary repository is named base and its database is
+# base.db, so a probe that assumes core asks for a path that answers 404 and
+# then reports the mirror as dead.
+#
+# ⚠ These are set by generate() rather than passed down, because probe_all runs
+# probe in background jobs and threading two more positional arguments through
+# both would put the parallelism and the naming in one change. They are read
+# only below this point.
+PROBE_REPO="core"
+PROBE_DB="core.db"
+
 probe_url() {
-  local u="${1//\$repo/core}"
+  local u="${1//\$repo/$PROBE_REPO}"
   u="${u//\$arch/$2}"
-  printf '%s/core.db\n' "$u"
+  printf '%s/%s\n' "$u" "$PROBE_DB"
 }
 
 probe_once() {
@@ -214,7 +226,26 @@ generate() {
   arch="$(awk -F= '/^[[:space:]]*Architecture[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$conf")"
   [ -n "$arch" ] || die "$conf has no Architecture line"
 
-  echo "==> $dir, Architecture = $arch"
+  # The primary repository is the first section that is not [options], which is
+  # the same rule pacman applies when two repositories carry one package name.
+  # Discovered rather than tabulated: a table here would be a second place to
+  # edit when a port is added, and the config is already the authority.
+  PROBE_REPO="$(awk '
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*\[/ {
+      name = $0
+      sub(/^[[:space:]]*\[/, "", name)
+      sub(/\].*$/, "", name)
+      if (name != "options") { print name; exit }
+    }' "$conf")"
+  [ -n "$PROBE_REPO" ] || die "$conf declares no repository section" \
+    "the probe asks for that repository's database, so there has to be one" \
+    "check it with: grep -n '^\[' $conf"
+  PROBE_DB="$PROBE_REPO.db"
+
+  local floor="$MIN_SERVERS"
+
+  echo "==> $dir, Architecture = $arch, repository $PROBE_REPO, floor $floor"
 
   local anchors anchor_servers anchor_count
   anchors="$(read_servers "$anchors_file")"
@@ -223,17 +254,29 @@ generate() {
   anchor_count="$(printf '%s\n' "$anchor_servers" | count_lines)"
 
   # An anchor that stops answering is a fault to report, not a line to drop.
-  local dead_anchors
+  #
+  # ⚠ Reported and survivable while at least one answers, rather than fatal on
+  # the first. A mirror can answer from one network and not another: ArchPOWER's
+  # origin sits behind a bot challenge that refuses datacentre address ranges,
+  # so it answers from a workstation and 403s from a GitHub runner. Refusing to
+  # regenerate on that would make the list ungeneratable from CI while it is
+  # perfectly valid. ⛔ Every anchor failing is still fatal, which is the case
+  # the rule exists for.
+  local dead_anchors live_anchors
   dead_anchors="$(printf '%s\n' "$anchor_servers" | probe_all "$arch" \
     | awk '$1 != "200" { print $3 " (HTTP " $1 ")" }')"
+  live_anchors=$((anchor_count - $(printf '%s\n' "$dead_anchors" | count_lines)))
   if [ -n "$dead_anchors" ]; then
-    echo "gen-mirrorlist: an anchor did not answer for $dir:" >&2
+    echo "gen-mirrorlist: an anchor did not answer for $dir from this network:" >&2
     printf '  %s\n' "$dead_anchors" >&2
-    die "refusing to generate a list whose anchor is down" \
-      "the servers are named above. An anchor is a well known mirror and is never ranked away" \
-      "if one is gone for good, remove it from mirrors/$dir.anchors and say why in the commit"
+    if [ "$live_anchors" -lt 1 ]; then
+      die "refusing to generate a list whose every anchor is down" \
+        "the servers are named above. An anchor is a well known mirror and is never ranked away" \
+        "if one is gone for good, remove it from mirrors/$dir.anchors and say why in the commit"
+    fi
+    echo "gen-mirrorlist: $live_anchors of $anchor_count anchors answered, continuing" >&2
   fi
-  echo "    anchors: $anchor_count verified"
+  echo "    anchors: $anchor_count written, $live_anchors answered from here"
 
   local pool
   case "$dir" in
@@ -265,8 +308,8 @@ generate() {
   echo "    live: $live of $candidate_count"
 
   local total=$((anchor_count + live))
-  if [ "$total" -lt "$MIN_SERVERS" ]; then
-    die "only $total server(s) reachable for $dir, the floor is $MIN_SERVERS, leaving $dest alone" \
+  if [ "$total" -lt "$floor" ]; then
+    die "only $total server(s) reachable for $dir, the floor is $floor, leaving $dest alone" \
       "every probe result is printed above, with the code each server returned" \
       "widen the candidate pool, or re-run when the mirrors are back"
   fi
@@ -277,7 +320,7 @@ generate() {
     printf '##\n'
     printf '## Arch mirror list for %s, Architecture = %s\n' "$dir" "$arch"
     printf '## Generated on %s by scripts/gen-mirrorlist\n' "$(date -u +%Y-%m-%d)"
-    printf '## Every server below answered 200 for core.db when it was written.\n'
+    printf '## Every server below answered 200 for %s when it was written.\n' "$PROBE_DB"
     printf '## The first %s is an anchor and is not ranked.\n' "$anchor_count"
     printf '##\n'
     printf '\n'
@@ -297,9 +340,9 @@ generate() {
   # so the one case the floor exists to catch produced no message at all.
   local written
   written="$(awk '/^Server/ { n++ } END { print n + 0 }' "$tmp")"
-  if [ "$written" -lt "$MIN_SERVERS" ]; then
+  if [ "$written" -lt "$floor" ]; then
     rm -f "$tmp"
-    die "the generated list for $dir has $written server(s), the floor is $MIN_SERVERS" \
+    die "the generated list for $dir has $written server(s), the floor is $floor" \
       "mirrors/$dir.anchors is written unconditionally, so a count this low means it lists too few" \
       "check it with: awk '/^Server/ { c++ } END { print c + 0 }' mirrors/$dir.anchors"
   fi
@@ -307,14 +350,77 @@ generate() {
   mv "$tmp" "$dest"
   chmod 0644 "$dest"
   echo "    wrote $written servers to rootfs/$dir/etc/pacman.d/mirrorlist"
+
+  #-------------------------------------------------------------------------#
+  # A port whose `any` architecture packages are in a second database.
+  #
+  # ⛔ Only ArchPOWER does this, and it is not a mirror of the first list. Two
+  # Server lines under one repository name are two mirrors of one database;
+  # these are two databases and need two repository sections, so the second
+  # gets a list of its own.
+  #
+  # ⚠ Discovered from mirrors/<arch>.any-anchors rather than from a list of
+  # architectures here. A port that does the same later needs the file and
+  # nothing else.
+  #-------------------------------------------------------------------------#
+  local any_anchors="$REPO_ROOT/mirrors/$dir.any-anchors"
+  [ -f "$any_anchors" ] || return 0
+
+  local any_dest="$REPO_ROOT/rootfs/$dir/etc/pacman.d/mirrorlist-any"
+  local any_repo any_servers any_dead
+  any_repo="$(awk '
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*\[/ {
+      name = $0
+      sub(/^[[:space:]]*\[/, "", name)
+      sub(/\].*$/, "", name)
+      if (name != "options" && name != PRIMARY) { print name; exit }
+    }' PRIMARY="$PROBE_REPO" "$conf")"
+  [ -n "$any_repo" ] || die "mirrors/$dir.any-anchors exists and $conf has no second repository" \
+    "the second list is included by a second repository section, so both have to be there" \
+    "check it with: grep -n '^\[' $conf"
+
+  PROBE_REPO="$any_repo"
+  PROBE_DB="$any_repo.db"
+
+  any_servers="$(read_servers "$any_anchors" | strip_server)"
+  [ -n "$any_servers" ] || die "mirrors/$dir.any-anchors lists no Server"
+  any_dead="$(printf '%s\n' "$any_servers" | probe_all "$arch" \
+    | awk '$1 != "200" { print $3 " (HTTP " $1 ")" }')"
+  if [ -n "$any_dead" ]; then
+    echo "gen-mirrorlist: the $any_repo database did not answer for $dir:" >&2
+    printf '  %s\n' "$any_dead" >&2
+    die "refusing to generate a list whose only server is down" \
+      "$any_repo carries the packages that have no architecture, so a root cannot be resolved without it"
+  fi
+
+  tmp="$(mktemp)"
+  {
+    printf '##\n'
+    printf '## The %s database for %s, Architecture = %s\n' "$any_repo" "$dir" "$arch"
+    printf '## Generated on %s by scripts/gen-mirrorlist\n' "$(date -u +%Y-%m-%d)"
+    printf '## Every server below answered 200 for %s when it was written.\n' "$PROBE_DB"
+    printf '##\n'
+    printf '## ⛔ A second list, not a second Server line in the first. This is a\n'
+    # The two names below are pacman's own substitution variables and are
+    # written into the file literally, which is the whole point of the sentence.
+    printf '## separate database, and its path is not %srepo/%sarch for any value\n' '$' '$'
+    printf '## of either, so it cannot be expressed in the same list.\n'
+    printf '##\n'
+    printf '\n'
+    read_servers "$any_anchors"
+  } > "$tmp"
+  mv "$tmp" "$any_dest"
+  chmod 0644 "$any_dest"
+  echo "    wrote $(awk '/^Server/ { n++ } END { print n + 0 }' "$any_dest") servers to rootfs/$dir/etc/pacman.d/mirrorlist-any"
 }
 
 case "${1:-}" in
   "")
-    die "usage: scripts/gen-mirrorlist <amd64|arm64|armv7|loong64|riscv64|all>"
+    die "usage: scripts/gen-mirrorlist <amd64|arm64|armv7|loong64|riscv64|ppc|ppc64|ppc64le|all>"
     ;;
   all)
-    for d in amd64 arm64 armv7 loong64 riscv64; do
+    for d in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
       generate "$d"
     done
     ;;

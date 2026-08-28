@@ -52,9 +52,16 @@ expect_alias_count armv7 3
 expect_alias_count loong64 2
 # riscv64 is spelled the same in both families, so it is one tag and not two.
 expect_alias_count riscv64 1
+# uname -m and the docker architecture agree on all three PowerPC ports, so the
+# second name in each set is neither: it is the spelling ArchPOWER itself uses
+# in its repository paths and in Architecture, which is where a consumer of that
+# port will look first.
+expect_alias_count ppc 2
+expect_alias_count ppc64 2
+expect_alias_count ppc64le 2
 
 # Every architecture emits three shapes per alias, on both registries.
-for arch in amd64 arm64 armv7 loong64 riscv64; do
+for arch in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
   aliases="$("$TAGS" aliases "$arch")"
   n_alias="$(printf '%s\n' "$aliases" | tr ' ' '\n' | awk 'NF' | wc -l | tr -d '[:space:]')"
   want=$((n_alias * 3 * 2))
@@ -99,13 +106,13 @@ for shape in "latest" "v$VERSION"; do
 done
 
 # No alias may be claimed by two architectures, or one would overwrite another.
-all_aliases="$(for arch in amd64 arm64 armv7 loong64 riscv64; do "$TAGS" aliases "$arch" | tr ' ' '\n'; done | awk 'NF')"
+all_aliases="$(for arch in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do "$TAGS" aliases "$arch" | tr ' ' '\n'; done | awk 'NF')"
 dupes="$(printf '%s\n' "$all_aliases" | sort | uniq -d | tr '\n' ' ')"
 if [ -z "$(printf '%s' "$dupes" | tr -d '[:space:]')" ]; then
   ok "no alias is claimed by two architectures"
 else
   fail "no alias is claimed by two architectures" "duplicated: $dupes" \
-    "reproduce: for a in amd64 arm64 armv7 loong64 riscv64; do scripts/tag-names aliases $a; done"
+    "reproduce: for a in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do scripts/tag-names aliases $a; done"
 fi
 
 # Both organisation names appear. They differ and it is not a typo.
@@ -118,9 +125,15 @@ else
 fi
 
 # An unknown architecture is refused rather than silently skipped.
-if "$TAGS" arch ppc64le "$VERSION" "$ANCHOR" "$GHCR" >/dev/null 2>&1; then
-  fail "an unknown architecture is refused" "tag-names accepted ppc64le" \
-    "reproduce: $TAGS arch ppc64le $VERSION $ANCHOR, which must exit non-zero"
+#
+# The name here was ppc64le until 2026-08-28, when ppc64le became one of the
+# eight this repository builds and the assertion started proving the opposite
+# of what it says. s390x is the replacement because it is a real Arch port name
+# that this repository does not build, so a session adding it trips this and
+# reads the note rather than wondering why an unrelated test failed.
+if "$TAGS" arch s390x "$VERSION" "$ANCHOR" "$GHCR" >/dev/null 2>&1; then
+  fail "an unknown architecture is refused" "tag-names accepted s390x" \
+    "reproduce: $TAGS arch s390x $VERSION $ANCHOR, which must exit non-zero"
 else
   ok "an unknown architecture is refused"
 fi

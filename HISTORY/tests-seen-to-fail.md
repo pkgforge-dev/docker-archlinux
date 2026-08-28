@@ -131,7 +131,7 @@ Fixtures were built for these rather than modifying a real image.
 | `50` | a commented `#[multilib]` block appended to `/etc/pacman.conf` | `not ok 4 - /etc/pacman.conf carries no multilib block` |
 | `50` | `/etc/pacman.d/gnupg/pubring.gpg` truncated to zero bytes | `not ok 5 - the pacman keyring is populated` |
 | `50` | `/usr/bin/locale-gen` removed | `not ok 6 - locale-gen is present` |
-| `50` | `/usr/share/i18n/charmaps/UTF-8.gz` removed, the file the `!` re-include lines keep | `not ok 7 - the UTF-8 charmap survives NoExtract` |
+| `50` | `/usr/share/i18n/charmaps/UTF-8.gz` removed, the file `locale-gen` reads | `not ok 7 - the UTF-8 charmap is present`. ⚠ Re-run 2026-08-28 after the assertion was renamed: the old name said the charmap survived `NoExtract`, and no shipped config has carried a rule since `HISTORY/noextract-reverted.md`. Fixture is two lines, `FROM docker.io/pkgforge/archlinux:latest` then `RUN rm -f /usr/share/i18n/charmaps/UTF-8.gz` |
 | `50` | root's password field emptied to `root::`, the CVE-2019-5021 shape | `not ok 8 - root has no empty password field in /etc/shadow` |
 | `60-defect-parity.sh` | fixture D, `FROM scratch` carrying one file, so the probe cannot run at all | `not ok 1 - the probe runs inside ...`, carrying `crun: executable file bash not found in $PATH`. The file then stops, rather than reporting 27 assertions read from an empty result |
 | `60` | fixture C, `/usr/bin/getfattr` removed | `not ok 2 - getfattr is available inside the image to read extended attributes`, and `not ok 3`, `not ok 4` behind it, which is why the tool is checked before the attributes |

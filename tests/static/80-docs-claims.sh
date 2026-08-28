@@ -92,9 +92,19 @@ fi
 # The block is extracted and fed to bash -n. A block that is a fragment rather
 # than a script, such as a bare FROM line, is skipped by the fence language.
 #---------------------------------------------------------------------------#
-docs="$REPO_ROOT/README.md
-$REPO_ROOT/examples/README.md
-$REPO_ROOT/tests/README.md"
+# ⛔ Discovered, not listed. A hardcoded list is one more place to edit when a
+# document is added, and the one that gets forgotten is the new one, which is
+# also the one most likely to carry a command nobody has run.
+#
+# HISTORY/ is excluded on purpose: it records what was measured and when, not
+# what a reader is meant to run, and its blocks name paths that were scratch.
+docs="$(
+  printf '%s
+' "$REPO_ROOT/README.md" "$REPO_ROOT/examples/README.md" "$REPO_ROOT/tests/README.md"
+  if [ -d "$REPO_ROOT/docs" ]; then
+    find "$REPO_ROOT/docs" -type f -name '*.md' | LC_ALL=C sort
+  fi
+)"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -181,7 +191,7 @@ fi
 #---------------------------------------------------------------------------#
 TAGS="$REPO_ROOT/scripts/tag-names"
 if [ -x "$TAGS" ] && [ -f "$readme" ]; then
-  emitted="$(for a in amd64 arm64 armv7 loong64 riscv64; do
+  emitted="$(for a in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
                "$TAGS" aliases "$a" | tr ' ' '\n'
              done | awk 'NF' | sort -u)"
 

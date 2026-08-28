@@ -1,0 +1,9 @@
+##
+## Arch mirror list for ppc64le, Architecture = powerpc64le
+## Generated on 2026-08-28 by scripts/gen-mirrorlist
+## Every server below answered 200 for base.db when it was written.
+## The first 2 is an anchor and is not ranked.
+##
+
+Server = https://repo.archlinuxpower.org/$repo/$arch
+Server = https://api.rv.pkgforge.dev/https://repo.archlinuxpower.org/$repo/$arch

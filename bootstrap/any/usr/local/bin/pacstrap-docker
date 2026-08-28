@@ -10,10 +10,11 @@
 #
 #   pacstrap-docker <root> <package>...
 #
-# The architecture, the mirrors and NoExtract come from /etc/pacman.conf of the
-# stage this runs in, not from <root>. pacman -r reads the running host's
-# config, which is why the Dockerfile installs the per architecture config as
-# the build stage's own /etc.
+# The architecture and the mirrors come from /etc/pacman.conf of the stage this
+# runs in, not from <root>. pacman -r reads the running host's config, which is
+# why the Dockerfile installs the per architecture config as the build stage's
+# own /etc. That config carries no NoExtract rule, so every file a package
+# ships lands on disk. HISTORY/noextract-reverted.md.
 #
 # No package is installed with a name that came from the network. The list is
 # bootstrap/<arch>/etc/bootstrap-packages.txt, copied into the image.

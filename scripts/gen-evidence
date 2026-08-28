@@ -178,24 +178,72 @@ db_sources() {
     printf '%s\n' "$snapshot/$1.db"
     return 0
   fi
-  awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); print }' "$list"
+
+  # ⛔ The list this repository Includes, not the default one. ArchPOWER keeps
+  # its `any` architecture packages in a second database at base/any, which is
+  # not $repo/$arch for any value of either, so its section Includes a list of
+  # its own. Reading the default list for it would ask for base-any/<arch>,
+  # which answers 404, and the evidence would then be missing every package
+  # that has no architecture.
+  local include
+  include="$(awk -v want="$1" '
+    /^[[:space:]]*\[/ {
+      name = $0
+      gsub(/^[[:space:]]*\[|\][[:space:]]*$/, "", name)
+      inrepo = (name == want)
+      next
+    }
+    inrepo && /^[[:space:]]*Include[[:space:]]*=/ {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      sub(/[[:space:]]+$/, "")
+      print
+      exit
+    }' "$conf")"
+
+  local from="$list"
+  if [ -n "$include" ]; then
+    # The path is absolute inside the image, so it is resolved against the
+    # architecture's own rootfs tree here.
+    from="$REPO_ROOT/rootfs/$dir${include}"
+    [ -f "$from" ] || die "$conf Includes $include for [$1] and rootfs/$dir$include does not exist" \
+      "a repository whose mirror list is missing resolves against nothing" \
+      "regenerate it with: scripts/gen-mirrorlist $dir"
+  fi
+  awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); print }' "$from"
 }
 
 # read_desc FILE LABEL -> writes the desc stream to $work/desc.txt
 #
 # LABEL is what the reader is told the database came from. Returns 1, having
-# left nothing behind, when FILE is not a readable gzip archive, so a caller
-# working down a mirrorlist can step over one that is mid sync.
+# left nothing behind, when FILE is not a readable archive in either
+# compression, so a caller working down a mirrorlist can step over one that is
+# mid sync.
+#
+# ⛔ Two compressions, because the ports do not agree. Every Arch family port
+# ships gzip and ArchPOWER ships Zstandard, and the file is named <repo>.db in
+# both cases, so neither announces which. Reporting the gzip error for a file
+# that was never gzip sends the reader looking for a corrupt database.
 read_desc() {
-  local file="$1" label="$2" descs
+  local file="$1" label="$2" descs gz_said zstd_said
   # The desc members are streamed rather than extracted. extra carries
   # roughly 15000 of them, and writing that many small files costs minutes
   # where the stream costs seconds. %FILENAME% opens every record.
-  if ! descs="$(tar -xzOf "$file" --wildcards '*/desc' 2>&1 >"$work/desc.txt")"; then
-    echo "gen-evidence: $label is not a readable gzip archive: ${descs:-no error text}" >&2
-    rm -f "$work/desc.txt"
-    return 1
+  if descs="$(tar -xzOf "$file" --wildcards '*/desc' 2>&1 >"$work/desc.txt")"; then
+    return 0
   fi
+  gz_said="$(awk 'NF { print; exit }' <<< "$descs")"
+
+  if ! command -v zstd > /dev/null; then
+    zstd_said="zstd is not on PATH, so a Zstandard database cannot be read here"
+  elif descs="$(tar --zstd -xOf "$file" --wildcards '*/desc' 2>&1 >"$work/desc.txt")"; then
+    return 0
+  else
+    zstd_said="$(awk 'NF { print; exit }' <<< "$descs")"
+  fi
+
+  echo "gen-evidence: $label is not a readable archive: gzip said ${gz_said:-nothing}; zstd said ${zstd_said:-nothing}" >&2
+  rm -f "$work/desc.txt"
+  return 1
 }
 
 : > "$work/repo.tsv"

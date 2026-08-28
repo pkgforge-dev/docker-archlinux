@@ -58,7 +58,14 @@ mkdir -p "$work/srv"/{empty,zstd,errorpage,truncated,missing,good}
 # 404 that became a zero byte file
 : > "$work/srv/empty/core.db"
 
-# Zstandard where every sibling is gzip. The magic number is what matters.
+# A Zstandard magic number followed by nothing that decompresses.
+#
+# ⚠ This fixture used to mean "Zstandard where every sibling is gzip", and that
+# stopped being a fault on 2026-08-28: ArchPOWER ships Zstandard databases and
+# resolve-anchor now reads both compressions. What it tests now is a body that
+# is neither, which is still a mangled response. A real Zstandard database is
+# fed to the same script further down, so the new path is proved rather than
+# assumed.
 printf '\050\265\057\375\000\130\041\000\000not-gzip\n' > "$work/srv/zstd/core.db"
 
 # 403, or a 200 from one network and a 403 from another. Either way the body is
@@ -169,6 +176,63 @@ else
     "counted $complaints complaints, expected 5" \
     "fewer means the search stopped early or one was consumed, more means the good mirror was refused too" \
     "reproduce: bash tests/static/67-mangled-responses.sh, and read the captured stderr"
+fi
+
+#---------------------------------------------------------------------------#
+# ⭐ The other half: a database that is genuinely Zstandard must be read.
+#
+# Three of this repository's eight architectures are served by ArchPOWER, whose
+# databases are Zstandard where every other port ships gzip, and whose primary
+# repository is named base rather than core. A resolver that only refused the
+# wrong shapes would pass every assertion above and still be unable to anchor
+# those three.
+#
+# ⚠ tar reaches zstd through the zstd program, and this suite also runs on a
+# Windows workstation where it is absent. The assertion is skipped there out
+# loud, rather than passing on a host that could not have failed it.
+#---------------------------------------------------------------------------#
+if ! command -v zstd > /dev/null; then
+  diag "zstd is not on PATH, so the Zstandard assertions did not run"
+  diag "  they run in CI and inside the image, both of which have it"
+  diag "  reproduce: command -v zstd"
+else
+  mkdir -p "$work/srv/zstdgood" "$work/zgood/pacman-$ANCHOR_VERSION"
+  tar --zstd -cf "$work/srv/zstdgood/base.db" -C "$work/zgood" "pacman-$ANCHOR_VERSION"
+
+  # A second scratch tree whose primary repository is named base rather than
+  # core, because the two go together: ArchPOWER is the only port with either.
+  mkdir -p "$work/repo2/rootfs/fake/etc/pacman.d" "$work/repo2/scripts"
+  cp "$REPO_ROOT/scripts/resolve-anchor" "$work/repo2/scripts/resolve-anchor"
+  printf '[options]\nArchitecture = powerpc64le\n\n[base]\nInclude = /etc/pacman.d/mirrorlist\n' \
+    > "$work/repo2/rootfs/fake/etc/pacman.conf"
+  printf 'Server = %s/zstdgood\n' "$(file_url "$work/srv")" \
+    > "$work/repo2/rootfs/fake/etc/pacman.d/mirrorlist"
+
+  zrc=0
+  ( cd "$work/repo2" && bash scripts/resolve-anchor fake ) \
+    > "$work/zout" 2> "$work/zerr" || zrc=$?
+
+  zgot="$(tr -d '\r' < "$work/zout" | awk 'NF { print; exit }')"
+  if [ "$zrc" -eq 0 ] && [ "$zgot" = "$ANCHOR_VERSION" ]; then
+    ok "a Zstandard base.db is read, and the repository name comes from the config"
+  else
+    fail "a Zstandard base.db is read, and the repository name comes from the config" \
+      "it exited $zrc and printed: ${zgot:-nothing}" \
+      "⛔ three of the eight architectures cannot be anchored without this" \
+      "it said: $(tr -d '\r' < "$work/zerr" | awk 'NF { last = $0 } END { print last }')" \
+      "reproduce: bash tests/static/67-mangled-responses.sh, which keeps its fixtures under a temp dir"
+  fi
+
+  # ⛔ And the mangled one must still be refused. A reader that fell back to
+  # taking whatever zstd produced would pass the assertion above and consume
+  # the zstd fixture from the first run as though it were a database.
+  if awk -v s="/zstd/core.db" 'index($0, s) { n++ } END { exit !(n >= 1) }' "$work/err"; then
+    ok "the Zstandard shaped body that decompresses to nothing is still refused"
+  else
+    fail "the Zstandard shaped body that decompresses to nothing is still refused" \
+      "no complaint named it, so reading zstd made the script less careful, not more" \
+      "reproduce: bash tests/static/67-mangled-responses.sh, and read the captured stderr"
+  fi
 fi
 
 summary

@@ -1,0 +1,761 @@
+#!/usr/bin/env bash
+#
+# Build a statically linked pacman for one architecture, from source.
+#
+#   scripts/build-pacman-static <amd64|arm64|armv7|loong64|riscv64|ppc|ppc64|ppc64le>
+#
+# The trust root of an image build today is one container image plus working
+# mirrors. This removes the first: with this binary and a keyring pin, a root
+# can be built on a host that has no pacman, no libalpm and no Arch keyring.
+#
+# ⛔ Every input is pinned in bootstrap/pacman-static/sources.pin and verified
+# before it is used. Nothing is downloaded that is not named there, and a
+# checksum that does not match stops the build rather than being re-fetched.
+#
+# ⛔ Nothing here runs during an image build. The Dockerfile does not call this
+# script and does not read the pin. This produces release assets.
+#
+# Environment:
+#   WORK   scratch directory, default a fresh mktemp -d. Reused across runs,
+#          so a second architecture does not re-download the sources.
+#   OUT    where the binary and its evidence file are written, default $WORK/dist
+#   ZIG    an already unpacked zig, default $WORK/zig/zig
+#   JOBS   parallelism, default nproc
+#
+# ⚠ The source trees are extracted fresh per architecture, every time. A tree
+# configured once for one target keeps that target's absolute paths in
+# config.status and in the .pc files it generates, and the second architecture
+# then links the first architecture's objects. The prefix leak check below is
+# the assertion for that, and it is not decoration.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PIN="$REPO_ROOT/bootstrap/pacman-static/sources.pin"
+
+die() {
+  echo "build-pacman-static: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+step() { echo "==> $*"; }
+
+#---------------------------------------------------------------------------#
+# The architecture table.
+#
+# Six spellings name one architecture and none of them is derivable from
+# another, so all six are written down once, here.
+#
+#   1 the directory name this repository uses, which is the argument
+#   2 the zig target triple
+#   3 the autotools host triplet
+#   4 OpenSSL's Configure target
+#   5 the ELF machine string readelf prints, which is what proves the output
+#   6 the qemu-user binary, whose name is not the triple prefix
+#   7 the Architecture value a pacman.conf for this port carries
+#
+# ⛔ 32 bit PowerPC is powerpc-linux-musleabi, not powerpc-linux-musl. The
+# latter is not a target zig has: it answers "'pthread.h' file not found",
+# which reads like a broken toolchain rather than a wrong triple.
+#
+# ⚠ qemu names ppc, ppc64 and ppc64le where the triple says powerpc. A script
+# deriving the emulator name by cutting the triple reports "no emulator" for
+# one that is installed, and then prints a dash in a results column, which
+# reads like a pass.
+#---------------------------------------------------------------------------#
+arch_row() {
+  case "$1" in
+    amd64)       echo "x86_64-linux-musl x86_64-unknown-linux-musl linux-x86_64 Advanced_Micro_Devices_X86-64 qemu-x86_64-static x86_64 x86_64 little" ;;
+    arm64)       echo "aarch64-linux-musl aarch64-unknown-linux-musl linux-aarch64 AArch64 qemu-aarch64-static aarch64 aarch64 little" ;;
+    armv7)       echo "arm-linux-musleabihf arm-unknown-linux-musleabihf linux-armv4 ARM qemu-arm-static armv7h arm little" ;;
+    loong64)     echo "loongarch64-linux-musl loongarch64-unknown-linux-musl linux64-loongarch64 LoongArch qemu-loongarch64-static loong64 loongarch64 little" ;;
+    riscv64)     echo "riscv64-linux-musl riscv64-unknown-linux-musl linux64-riscv64 RISC-V qemu-riscv64-static riscv64 riscv64 little" ;;
+    ppc)         echo "powerpc-linux-musleabi powerpc-unknown-linux-musleabi linux-ppc PowerPC qemu-ppc-static powerpc ppc big" ;;
+    ppc64)       echo "powerpc64-linux-musl powerpc64-unknown-linux-musl linux-ppc64 PowerPC64 qemu-ppc64-static powerpc64 ppc64 big" ;;
+    ppc64le)     echo "powerpc64le-linux-musl powerpc64le-unknown-linux-musl linux-ppc64le PowerPC64 qemu-ppc64le-static powerpc64le ppc64 little" ;;
+    *) return 1 ;;
+  esac
+}
+
+arch="${1:-}"
+[ -n "$arch" ] || die "usage: build-pacman-static <arch>" \
+  "one of: amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le"
+
+row="$(arch_row "$arch")" || die "unknown architecture: $arch" \
+  "one of: amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le"
+
+read -r TRIPLE HOSTTRIPLET OSSLTARGET ELFMACHINE QEMU PACMAN_ARCH CPUFAMILY ENDIAN <<< "$row"
+# The ELF machine string carries spaces, so the table holds it with underscores.
+ELFMACHINE="${ELFMACHINE//_/ }"
+
+[ -f "$PIN" ] || die "no source pin at $PIN" \
+  "the pin names every tarball, its sha256 and pacman's commit" \
+  "without it nothing can be verified, so nothing is fetched"
+
+WORK="${WORK:-$(mktemp -d)}"
+OUT="${OUT:-$WORK/dist}"
+if [ -z "${JOBS:-}" ]; then
+  if command -v nproc >/dev/null; then
+    JOBS="$(nproc)"
+  else
+    JOBS=2
+  fi
+fi
+mkdir -p "$WORK/dl" "$OUT"
+
+DL="$WORK/dl"
+SRC="$WORK/src/$arch"
+PREFIX="$WORK/out/$arch"
+BIN="$WORK/bin/$arch"
+rm -rf "$SRC" "$PREFIX" "$BIN"
+mkdir -p "$SRC" "$PREFIX/lib/pkgconfig" "$PREFIX/include" "$BIN"
+
+# zig writes its caches under HOME by default, and a CI runner's HOME is not
+# always writable from the step that runs this.
+export ZIG_GLOBAL_CACHE_DIR="$WORK/zig-cache"
+export ZIG_LOCAL_CACHE_DIR="$WORK/zig-cache"
+mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
+
+#---------------------------------------------------------------------------#
+# pin readers
+#---------------------------------------------------------------------------#
+pin_field() { # pin_field KIND [SELECTOR] -> the matching record's remaining fields
+  awk -v kind="$1" -v sel="${2:-}" '
+    $1 == kind {
+      if (sel == "" || $2 == sel) { $1 = ""; sub(/^[[:space:]]+/, ""); print; exit }
+    }
+  ' "$PIN"
+}
+
+pin_sources() {
+  awk '$1 == "source" { print $2, $3, $4, $5 }' "$PIN"
+}
+
+#---------------------------------------------------------------------------#
+# fetch URL SHA256 -> path in $DL
+#
+# ⛔ -f is load-bearing. Without it a host answering 403 returns exit 0 with an
+# error page in the file, and the failure surfaces later as a corrupt archive.
+#---------------------------------------------------------------------------#
+fetch() {
+  local url="$1" want="$2" out
+  out="$DL/$(basename "$url")"
+  if [ -f "$out" ] && [ "$(sha256sum "$out" | cut -c1-64)" = "$want" ]; then
+    printf '%s\n' "$out"
+    return 0
+  fi
+  rm -f "$out"
+  curl -sSfL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 900 \
+    -o "$out" "$url" \
+    || die "cannot fetch $url" "the pin names this URL and no substitute" \
+           "check it with: curl -sSI --connect-timeout 20 --max-time 60 $url"
+  local got
+  got="$(sha256sum "$out" | cut -c1-64)"
+  if [ "$got" != "$want" ]; then
+    rm -f "$out"
+    die "sha256 mismatch for $url" "pinned:   $want" "delivered: $got" \
+      "⛔ nothing is re-fetched from elsewhere. Either upstream replaced the" \
+      "  artefact or the transfer was tampered with. Both need a person."
+  fi
+  printf '%s\n' "$out"
+}
+
+#---------------------------------------------------------------------------#
+# the toolchain
+#---------------------------------------------------------------------------#
+ensure_zig() {
+  if [ -n "${ZIG:-}" ] && [ -x "$ZIG" ]; then
+    printf '%s\n' "$ZIG"
+    return 0
+  fi
+  if [ -x "$WORK/zig/zig" ]; then
+    printf '%s\n' "$WORK/zig/zig"
+    return 0
+  fi
+  local host rec url sha tarball
+  case "$(uname -m)" in
+    x86_64) host=x86_64-linux ;;
+    aarch64) host=aarch64-linux ;;
+    *) die "no zig pinned for this host architecture: $(uname -m)" \
+         "the pin carries x86_64-linux and aarch64-linux" \
+         "check it with: curl -sSfL -o z URL && sha256sum z, then add a zig line to $PIN" ;;
+  esac
+  rec="$(awk -v h="$host" '$1 == "zig" && $3 == h { print $4, $5 }' "$PIN")"
+  [ -n "$rec" ] || die "the pin has no zig record for host $host"
+  read -r url sha <<< "$rec"
+  step "zig $host"
+  tarball="$(fetch "$url" "$sha")"
+  mkdir -p "$WORK/zig"
+  tar xf "$tarball" -C "$WORK/zig" --strip-components=1
+  printf '%s\n' "$WORK/zig/zig"
+}
+
+ZIGBIN="$(ensure_zig)"
+
+# Wrapper scripts rather than a multi-word CC. autotools, cmake and meson each
+# split CC differently, and a two word compiler has broken all three at some
+# point. One executable per tool is unambiguous everywhere.
+write_wrapper() { # write_wrapper NAME ARGS...
+  local name="$1"; shift
+  {
+    echo '#!/bin/sh'
+    printf 'exec %s' "$ZIGBIN"
+    printf ' %s' "$@"
+    printf ' "$@"\n'
+  } > "$BIN/$name"
+  chmod +x "$BIN/$name"
+}
+
+write_wrapper cc cc -target "$TRIPLE"
+write_wrapper c++ c++ -target "$TRIPLE"
+
+# ⛔ A compiler for the build machine, which is a different job from the one
+# above. libgpg-error's mkheader and gpgme's helpers are built and run on the
+# host during the build, so autotools asks for CC_FOR_BUILD once --build and
+# --host differ. Its default is gcc, and this recipe's whole claim is that no
+# gcc is needed: without this the build stops at "gcc: No such file or
+# directory" on a host that has a perfectly good compiler.
+#
+# ⚠ No -target. That is what makes it native.
+write_wrapper cc-build cc
+write_wrapper ar ar
+write_wrapper ranlib ranlib
+write_wrapper strip-tool objcopy --strip-debug
+
+# meson and libtool both look for a strip; zig has no strip subcommand, and a
+# missing one makes meson's install step fail rather than skip stripping.
+{
+  echo '#!/bin/sh'
+  echo 'exit 0'
+} > "$BIN/strip"
+chmod +x "$BIN/strip"
+
+{
+  echo '#!/bin/sh'
+  echo "PKG_CONFIG_LIBDIR=$PREFIX/lib/pkgconfig"
+  echo 'export PKG_CONFIG_LIBDIR'
+  echo 'PKG_CONFIG_SYSROOT_DIR='
+  echo 'export PKG_CONFIG_SYSROOT_DIR'
+  echo 'exec pkg-config "$@"'
+} > "$BIN/pkg-config"
+chmod +x "$BIN/pkg-config"
+
+#---------------------------------------------------------------------------#
+# ⛔ --build is passed to every autotools configure, and it is not decoration.
+#
+# With --host given and --build absent, autoconf sets cross_compiling=maybe and
+# then decides by compiling a program and trying to run it. On a host with QEMU
+# registered in binfmt_misc that program runs, autoconf answers "checking
+# whether we are cross compiling... no", and every later AC_RUN_IFELSE executes
+# a target binary under emulation.
+#
+# ⛔ That makes the output depend on the build host's kernel state. The same
+# recipe on a host without binfmt takes the cross branch of each of those tests
+# and can produce a different binary, which is the opposite of reproducible.
+# It also hangs: curl's getifaddrs run test never returned for
+# powerpc-unknown-linux-musleabi under qemu-ppc, after 26 minutes.
+#
+# With both --build and --host given and different, autoconf sets
+# cross_compiling=yes without probing, and no target binary is ever executed
+# during a configure.
+#
+# ⚠ The value only has to be a parseable triplet that differs from the host.
+# config.sub canonicalises it, and nothing in these builds reads it further.
+BUILDTRIPLET="$(uname -m)-pc-linux-gnu"
+
+export CC="$BIN/cc"
+export CXX="$BIN/c++"
+export CC_FOR_BUILD="$BIN/cc-build"
+export BUILD_CC="$BIN/cc-build"
+# The build machine compiler must not inherit the target's include and library
+# paths. Those are a foreign architecture's, and a host tool linked against them
+# does not run.
+export CFLAGS_FOR_BUILD=""
+export CPPFLAGS_FOR_BUILD=""
+export LDFLAGS_FOR_BUILD=""
+export AR="$BIN/ar"
+export RANLIB="$BIN/ranlib"
+export STRIP="$BIN/strip"
+export PKG_CONFIG="$BIN/pkg-config"
+export CPPFLAGS="-I$PREFIX/include"
+# -static is on every link from here down, configure probes included. zig cc
+# prefers a dynamic library and this prefix has only archives, so without it
+# every probe reports "unable to find dynamic system library 'crypto'" and
+# curl concludes that OpenSSL is missing. ⚠ The error names the option that
+# failed, not the library that caused it: read config.log, not the message.
+export LDFLAGS="-L$PREFIX/lib -static"
+export CFLAGS="-Os -fPIC"
+
+#---------------------------------------------------------------------------#
+# unpack NAME VERSION URL SHA -> the extracted directory under $SRC
+#---------------------------------------------------------------------------#
+unpack() {
+  # $2 is the version. It is in the pin so the evidence file can record it and
+  # so the build can print it; the extracted directory is named after $1.
+  local name="$1" url="$3" sha="$4" tarball dir
+  tarball="$(fetch "$url" "$sha")"
+  dir="$SRC/$name"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  tar xf "$tarball" -C "$dir" --strip-components=1
+  printf '%s\n' "$dir"
+}
+
+src_of() { # src_of NAME -> extract it fresh and print the directory
+  local name="$1" rec
+  rec="$(awk -v n="$name" '$1 == "source" && $2 == n { print $2, $3, $4, $5 }' "$PIN")"
+  [ -n "$rec" ] || die "the pin has no source record for $name"
+  # shellcheck disable=SC2086
+  unpack $rec
+}
+
+ver_of() { awk -v n="$1" '$1 == "source" && $2 == n { print $3 }' "$PIN"; }
+
+#---------------------------------------------------------------------------#
+# the dependency stack, in the order it is built
+#---------------------------------------------------------------------------#
+build_zlib() {
+  local d; d="$(src_of zlib)"
+  ( cd "$d" && CHOST="$HOSTTRIPLET" ./configure --prefix="$PREFIX" --static >/dev/null \
+      && make -j"$JOBS" >/dev/null && make install >/dev/null )
+}
+
+build_xz() {
+  local d; d="$(src_of xz)"
+  ( cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
+      --enable-static --disable-shared --disable-xz --disable-xzdec \
+      --disable-lzmadec --disable-lzmainfo --disable-scripts --disable-doc \
+      --disable-nls >/dev/null \
+      && make -j"$JOBS" >/dev/null && make install >/dev/null )
+}
+
+build_bzip2() {
+  local d; d="$(src_of bzip2)"
+  ( cd "$d" && make -j"$JOBS" CC="$CC" AR="$AR" RANLIB="$RANLIB" CFLAGS="$CFLAGS" libbz2.a >/dev/null \
+      && install -m 644 libbz2.a "$PREFIX/lib/" && install -m 644 bzlib.h "$PREFIX/include/" )
+}
+
+build_zstd() {
+  local d; d="$(src_of zstd)"
+  ( cd "$d/lib" && make -j"$JOBS" CC="$CC" AR="$AR" RANLIB="$RANLIB" libzstd.a >/dev/null \
+      && install -m 644 libzstd.a "$PREFIX/lib/" \
+      && install -m 644 zstd.h zstd_errors.h "$PREFIX/include/" )
+  # zstd's own libzstd.pc is generated by its install target, which also builds
+  # the shared library. Writing it here keeps the static-only build honest:
+  # libarchive and curl both resolve zstd through pkg-config.
+  #
+  # The ${} below are pkg-config's own variable syntax and are written into the
+  # file literally. Expanding them here would bake this prefix into every line
+  # rather than only into the first.
+  # shellcheck disable=SC2016
+  {
+    echo "prefix=$PREFIX"
+    echo 'exec_prefix=${prefix}'
+    echo 'includedir=${prefix}/include'
+    echo 'libdir=${prefix}/lib'
+    echo ''
+    echo 'Name: zstd'
+    echo 'Description: fast lossless compression algorithm library'
+    echo "Version: $(ver_of zstd)"
+    echo 'Libs: -L${libdir} -lzstd'
+    echo 'Cflags: -I${includedir}'
+  } > "$PREFIX/lib/pkgconfig/libzstd.pc"
+}
+
+build_openssl() {
+  # ⛔ --libdir=lib is not cosmetic. OpenSSL chooses lib64 on some targets and
+  # lib on others, so without it the prefix has two library directories and
+  # which one holds libcrypto.a depends on the architecture. Everything after
+  # this searches one of them, and curl then reports that OpenSSL could not be
+  # detected, which names the option that failed rather than the cause.
+  local d; d="$(src_of openssl)"
+  ( cd "$d" && ./Configure "$OSSLTARGET" no-shared no-tests no-module no-docs \
+      --prefix="$PREFIX" --libdir=lib --openssldir=/etc/ssl >/dev/null \
+      && make -j"$JOBS" build_libs >/dev/null \
+      && make install_dev >/dev/null )
+}
+
+build_libarchive() {
+  local d; d="$(src_of libarchive)"
+  ( cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
+      --enable-static --disable-shared --disable-bsdtar --disable-bsdcpio \
+      --disable-bsdcat --disable-bsdunzip --without-xml2 --without-expat \
+      --without-lzo2 --without-nettle --without-iconv --without-libb2 >/dev/null \
+      && make -j"$JOBS" >/dev/null && make install >/dev/null )
+}
+
+build_curl() {
+  local d; d="$(src_of curl)"
+  # ⚠ --with-ca-bundle names a path, not embedded data. A host with no CA
+  # bundle at that path gets a TLS failure that reads like a mirror problem.
+  # docs/bootstrap-with-pacman-static.md says so and gives the http fallback.
+  ( cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
+      --enable-static --disable-shared --with-openssl="$PREFIX" \
+      --with-zlib="$PREFIX" --with-zstd="$PREFIX" \
+      --without-brotli --without-nghttp2 --without-libpsl --without-libidn2 \
+      --disable-ldap --disable-ldaps --disable-manual \
+      --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt \
+      --with-ca-path=/etc/ssl/certs >/dev/null \
+      && make -j"$JOBS" >/dev/null && make install >/dev/null )
+}
+
+#---------------------------------------------------------------------------#
+# libgpg-error cross compiles only to a host it ships a lock object for.
+#
+# ⛔ It ships one musl file, x86_64-unknown-linux-musl.h, and nothing for
+# aarch64, arm, riscv64, loongarch64 or any PowerPC under musl. mkheader
+# canonicalises the vendor field and stops there: it does not map musl onto
+# gnu, so a cross build for seven of this repository's eight architectures
+# fails on a missing include.
+#
+# ⛔ Copying the gnu file is wrong. It carries sizeof(pthread_mutex_t), and
+# glibc and musl do not agree on it.
+#
+# ⭐ So the size is measured for the target rather than assumed: a translation
+# unit declaring an array of that length is compiled for the target, and the
+# symbol's size is read back out of the object. Nothing is executed, so this
+# needs no emulator, and the value is the target ABI's own.
+#---------------------------------------------------------------------------#
+mutex_size() {
+  local probe="$SRC/.mutex-probe.c" obj="$SRC/.mutex-probe.o" size
+  {
+    echo '#include <pthread.h>'
+    echo 'char gpgrt_probe_mutex[sizeof(pthread_mutex_t)];'
+  } > "$probe"
+  # The compiler's own words are kept and reported. A probe that fails silently
+  # would be read as "this target has no pthread", which is never the cause.
+  if ! probe_err="$("$CC" -c "$probe" -o "$obj" 2>&1)"; then
+    die "cannot compile the pthread_mutex_t probe for $TRIPLE" \
+      "the compiler said: $(awk 'NF { print; exit }' <<< "$probe_err")" \
+      "libgpg-error needs the target's lock object size and ships none for musl here" \
+      "check the toolchain with: $CC -c $probe -o $obj"
+  fi
+  size="$(readelf -sW "$obj" | awk '$8 == "gpgrt_probe_mutex" { print $3 }')"
+  case "$size" in
+    ''|*[!0-9]*) die "could not read the size of pthread_mutex_t for $TRIPLE" \
+      "readelf printed no symbol size for gpgrt_probe_mutex" \
+      "check it with: readelf -sW $obj" ;;
+  esac
+  [ "$size" -gt 0 ] || die "pthread_mutex_t measured as $size bytes for $TRIPLE"
+  printf '%s\n' "$size"
+}
+
+write_lock_obj() { # write_lock_obj SRCDIR SIZE
+  local d="$1" size="$2" f="$1/src/syscfg/lock-obj-pub.$HOSTTRIPLET.h" i zeros
+  zeros=""
+  i=0
+  while [ "$i" -lt "$size" ]; do
+    if [ -z "$zeros" ]; then zeros="0"; else zeros="$zeros,0"; fi
+    i=$((i + 1))
+  done
+  {
+    echo "## lock-obj-pub.$HOSTTRIPLET.h"
+    echo "## Measured by scripts/build-pacman-static, not copied from another host"
+    echo '## To be included by mkheader into gpg-error.h'
+    echo ''
+    echo 'typedef struct'
+    echo '{'
+    echo '  long _vers;'
+    echo '  union {'
+    echo "    volatile char _priv[$size];"
+    echo '    long _x_align;'
+    echo '    long *_xp_align;'
+    echo '  } u;'
+    echo '} gpgrt_lock_t;'
+    echo ''
+    echo "#define GPGRT_LOCK_INITIALIZER {1,{{$zeros}}}"
+    echo '##'
+    echo '## Local Variables:'
+    echo '## mode: c'
+    echo '## buffer-read-only: t'
+    echo '## End:'
+    echo '##'
+  } > "$f"
+}
+
+build_libgpg_error() {
+  local d size; d="$(src_of libgpg-error)"
+  size="$(mutex_size)"
+  echo "    pthread_mutex_t is $size bytes on $TRIPLE"
+  write_lock_obj "$d" "$size"
+  ( cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
+      --enable-static --disable-shared --disable-doc --disable-tests \
+      --disable-languages --disable-nls >/dev/null \
+      && make -j"$JOBS" >/dev/null && make install >/dev/null )
+}
+
+build_libassuan() {
+  local d; d="$(src_of libassuan)"
+  ( cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
+      --enable-static --disable-shared --disable-doc \
+      --with-libgpg-error-prefix="$PREFIX" >/dev/null \
+      && make -j"$JOBS" >/dev/null && make install >/dev/null )
+}
+
+build_gpgme() {
+  # ⚠ _LARGEFILE64_SOURCE is required, and the reason is not portability
+  # nostalgia. gpgme declares struct linux_dirent64 itself, because getdents64
+  # is not in a public header, and it spells the fields ino64_t and off64_t.
+  # musl only defines those two names under _LARGEFILE64_SOURCE, so without it
+  # the build stops at "unknown type name 'ino64_t'" in posix-io.c. Measured
+  # against zig's musl: the same file compiles with the flag and not without.
+  local d; d="$(src_of gpgme)"
+  ( cd "$d" && CPPFLAGS="$CPPFLAGS -D_LARGEFILE64_SOURCE" \
+      ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
+      --enable-static --disable-shared --disable-gpg-test --disable-gpgsm-test \
+      --disable-g13-test --disable-gpgconf-test --enable-languages=cl \
+      --with-libgpg-error-prefix="$PREFIX" --with-libassuan-prefix="$PREFIX" >/dev/null \
+      && make -j"$JOBS" >/dev/null && make install >/dev/null )
+}
+
+build_libseccomp() {
+  local d; d="$(src_of libseccomp)"
+  ( cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
+      --enable-static --disable-shared --disable-python >/dev/null \
+      && make -j"$JOBS" >/dev/null && make install >/dev/null )
+}
+
+#---------------------------------------------------------------------------#
+# ⛔ The prefix leak check.
+#
+# Every architecture reports a full set of .a files and then one link fails
+# with "is incompatible with <other arch>". The cause is upstream of the link:
+# a .pc file in this architecture's prefix naming another architecture's
+# directory. OpenSSL bakes the prefix into configdata.pm and its generated .pc
+# files, and autotools does the same through config.status.
+#
+# ⚠ A non-zero exit here means stop. It is not a warning.
+#---------------------------------------------------------------------------#
+prefix_leak_check() {
+  local other pc_files
+  # ⛔ An empty prefix is a failure, not a pass. A leak check that finds no .pc
+  # file at all reports "no leak", which is the same answer it gives for a
+  # clean build.
+  pc_files="$(find "$PREFIX/lib/pkgconfig" -name '*.pc' -type f | LC_ALL=C sort)"
+  [ -n "$pc_files" ] || die "no pkg-config files in $PREFIX/lib/pkgconfig" \
+    "the stack reported success and installed nothing that later steps can find" \
+    "check it with: ls $PREFIX/lib/pkgconfig"
+
+  # awk rather than grep for the filter: grep exits 1 when nothing survives,
+  # which is the normal result here and would kill the script under set -e.
+  #
+  # $pc_files is unquoted on purpose: it is a newline separated file list and
+  # awk is being handed each path as its own argument. The paths are produced by
+  # find under a directory this script created, so none carries a space.
+  # shellcheck disable=SC2086
+  other="$(awk -v want="$WORK/out/$arch" '
+    {
+      while (match($0, /\/[^ :"]*\/out\/[a-z0-9_]+/)) {
+        p = substr($0, RSTART, RLENGTH)
+        $0 = substr($0, RSTART + RLENGTH)
+        if (p != want) seen[p] = 1
+      }
+    }
+    END { for (p in seen) print p }
+  ' $pc_files | LC_ALL=C sort -u)"
+  if [ -n "$other" ]; then
+    die "this prefix names another architecture's directory" \
+      "$(printf '%s' "$other" | tr '\n' ' ')" \
+      "a source tree configured for one target was reused for another" \
+      "check it with: grep -o '$WORK/out/[a-z0-9_]*' $PREFIX/lib/pkgconfig/*.pc | sort -u"
+  fi
+}
+
+#---------------------------------------------------------------------------#
+# pacman
+#
+# ⚠ -static in LDFLAGS does nothing under a meson cross build: meson takes link
+# arguments from the cross file, and the environment reaches the build machine
+# compiler used for helper programs. The flag goes in c_link_args.
+#---------------------------------------------------------------------------#
+build_pacman() {
+  local commit url d cross
+  read -r commit url <<< "$(pin_field pacman)"
+  d="$SRC/pacman"
+  rm -rf "$d"
+  mkdir -p "$d"
+  ( cd "$d" && git init -q . \
+      && git remote add origin "$url" \
+      && git fetch -q --depth 1 origin "$commit" \
+      && git checkout -q FETCH_HEAD )
+  local got
+  got="$(git -C "$d" rev-parse HEAD)"
+  [ "$got" = "$commit" ] || die "pacman checked out $got, the pin says $commit"
+
+  cross="$SRC/cross.ini"
+  {
+    echo '[binaries]'
+    echo "c = ['$BIN/cc']"
+    echo "cpp = ['$BIN/c++']"
+    echo "ar = ['$BIN/ar']"
+    echo "ranlib = ['$BIN/ranlib']"
+    echo "strip = ['$BIN/strip']"
+    echo "pkg-config = ['$BIN/pkg-config']"
+    echo ''
+    echo '[host_machine]'
+    echo "system = 'linux'"
+    echo "cpu_family = '$CPUFAMILY'"
+    echo "cpu = '$CPUFAMILY'"
+    echo "endian = '$ENDIAN'"
+    echo ''
+    echo '[built-in options]'
+    echo "c_args = ['-I$PREFIX/include']"
+    echo "c_link_args = ['-static', '-L$PREFIX/lib']"
+  } > "$cross"
+
+  # ⛔ use-git-version stays off, and the reason is the shallow fetch above.
+  # It runs `git describe`, which needs the v7.1.0 tag and the nine commits
+  # between it and the pin. A depth 1 fetch of one commit has neither, so meson
+  # setup stops with "No names found, cannot describe anything". Fetching deep
+  # enough would make the recipe depend on how far the pin has drifted from the
+  # last tag, which moves on its own. The commit is checked against the pin two
+  # lines above instead, which says more than a describe string does.
+  #
+  # ⛔ buildstatic is not enough on its own, and the two options do different
+  # jobs. buildstatic asks meson for the static form of each dependency;
+  # default_library decides how pacman's own libalpm is built, and it is
+  # declared with library(), which follows that option. With only the first,
+  # every dependency resolves statically and the final link still names
+  # libalpm.so.16.0.1, which fails as "using shared libraries requires dynamic
+  # linking" after all 168 objects have compiled.
+  #
+  # ⚠ Both meson steps keep their output. A build that fails with its log sent
+  # to /dev/null reports the symptom the next check happens to notice: this
+  # said "meson built no binary" when what actually went wrong was setup.
+  local log="$SRC/meson.log"
+  if ! ( cd "$d" && meson setup build --cross-file "$cross" \
+      -Ddefault_library=static \
+      -Dbuildstatic=true -Duse-git-version=false -Ddoc=disabled \
+      -Ddoxygen=disabled -Di18n=false -Dcrypto=openssl \
+      -Dcurl=enabled -Dgpgme=enabled -Dfile-seccomp=disabled \
+      --prefix=/usr \
+      && meson compile -C build ) > "$log" 2>&1; then
+    die "meson could not build pacman for $TRIPLE" \
+      "$(awk 'NF { keep[NR] = $0 } END { for (i = NR - 8; i <= NR; i++) if (i in keep) print keep[i] }' "$log")" \
+      "the whole log is at $log" \
+      "meson's own log is at $d/build/meson-logs/meson-log.txt"
+  fi
+
+  # ⛔ meson puts the binary at the build root, not at build/src/pacman/pacman.
+  # A script that looks in the wrong place and treats "not found" as anything
+  # other than a failure reports a pass for something it never measured.
+  [ -f "$d/build/pacman" ] || die "meson reported success and produced no binary" \
+    "expected: $d/build/pacman" \
+    "look for it with: find $d/build -name pacman -type f" \
+    "the build log is at $log"
+  printf '%s\n' "$d/build/pacman"
+}
+
+#---------------------------------------------------------------------------#
+# run it
+#---------------------------------------------------------------------------#
+step "$arch: target $TRIPLE, openssl $OSSLTARGET"
+
+for lib in zlib xz bzip2 zstd openssl libarchive curl libgpg-error libassuan gpgme libseccomp; do
+  step "  $lib $(ver_of "$lib")"
+  case "$lib" in
+    zlib)         build_zlib ;;
+    xz)           build_xz ;;
+    bzip2)        build_bzip2 ;;
+    zstd)         build_zstd ;;
+    openssl)      build_openssl ;;
+    libarchive)   build_libarchive ;;
+    curl)         build_curl ;;
+    libgpg-error) build_libgpg_error ;;
+    libassuan)    build_libassuan ;;
+    gpgme)        build_gpgme ;;
+    libseccomp)   build_libseccomp ;;
+  esac
+done
+
+step "  prefix leak check"
+prefix_leak_check
+
+step "  pacman"
+built="$(build_pacman)"
+
+#---------------------------------------------------------------------------#
+# ⭐ Three checks, and only the third means the binary works.
+#
+# meson compiled it; the ELF names the right machine and carries no PT_INTERP;
+# and the binary ran under its architecture's emulator and printed its version.
+#
+# ⛔ An absence is not a zero. With no emulator the third is NOT MEASURED, and
+# that string goes in the evidence file rather than a dash.
+#---------------------------------------------------------------------------#
+machine="$(readelf -hW "$built" | awk -F: '/Machine:/ { sub(/^[[:space:]]+/, "", $2); print $2 }')"
+[ "$machine" = "$ELFMACHINE" ] || die "the binary is for the wrong machine" \
+  "expected: $ELFMACHINE" "readelf says: $machine" \
+  "check it with: readelf -hW $built"
+
+interp="$(readelf -lW "$built" | awk '/INTERP/ { n++ } END { print n + 0 }')"
+[ "$interp" = "0" ] || die "the binary names a dynamic loader, so it is not static" \
+  "readelf -lW found $interp INTERP entries" \
+  "-static in the environment does nothing under a meson cross build; it goes in c_link_args" \
+  "check it with: readelf -lW $built"
+
+reported="NOT MEASURED"
+emulator="NOT MEASURED"
+if command -v "$QEMU" >/dev/null 2>&1; then
+  emulator="$QEMU"
+  if ! run_out="$("$QEMU" "$built" --version 2>&1)"; then
+    die "the binary would not run under $QEMU" \
+      "it said: $(awk 'NF { print; exit }' <<< "$run_out")" \
+      "it linked and it names the right machine, so the fault is at run time" \
+      "check it with: $QEMU $built --version"
+  fi
+  reported="$(awk '/Pacman v/ { sub(/^[^P]*/, ""); print; exit }' <<< "$run_out")"
+  [ -n "$reported" ] || die "the binary did not report a version under $QEMU" \
+    "it said: $(awk 'NF { print; exit }' <<< "$run_out")" \
+    "it linked and it names the right machine, so this is a runtime fault" \
+    "check it with: $QEMU $built --version"
+fi
+
+size="$(wc -c < "$built" | tr -d '[:space:]')"
+sha="$(sha256sum "$built" | cut -c1-64)"
+asset="$OUT/pacman-static-$arch"
+install -m 755 "$built" "$asset"
+
+#---------------------------------------------------------------------------#
+# the evidence file
+#
+# "Built successfully" is not evidence. This records which sources, which
+# versions, which checksums, which commit, and what the binary reported when it
+# was run.
+#---------------------------------------------------------------------------#
+{
+  echo '{'
+  echo "  \"arch\": \"$arch\","
+  echo "  \"triple\": \"$TRIPLE\","
+  echo "  \"pacman_architecture\": \"$PACMAN_ARCH\","
+  echo "  \"built\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
+  echo "  \"pacman_commit\": \"$(git -C "$SRC/pacman" rev-parse HEAD)\","
+  echo "  \"pacman_describe_pinned\": \"$(pin_field describe)\","
+  echo "  \"reported_version\": \"$reported\","
+  echo "  \"emulator\": \"$emulator\","
+  echo "  \"elf_machine\": \"$machine\","
+  echo "  \"interp_segments\": $interp,"
+  echo "  \"size\": $size,"
+  echo "  \"sha256\": \"$sha\","
+  echo "  \"zig\": \"$(pin_field zig | awk '{ print $1 }')\","
+  echo '  "sources": ['
+  pin_sources | awk '{
+    printf "    { \"name\": \"%s\", \"version\": \"%s\", \"url\": \"%s\", \"sha256\": \"%s\" }", $1, $2, $3, $4
+    if (NR > 0) printf "%s", ","
+    printf "\n"
+  }' | sed '$ s/,$//'
+  echo '  ]'
+  echo '}'
+} > "$OUT/pacman-static-$arch.json"
+
+step "$arch done"
+echo "  binary   $asset"
+echo "  size     $size"
+echo "  sha256   $sha"
+echo "  machine  $machine"
+echo "  reported $reported"
+echo "  evidence $OUT/pacman-static-$arch.json"

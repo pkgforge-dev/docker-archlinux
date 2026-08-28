@@ -40,6 +40,17 @@ aliases_for() {
     armv7) printf 'armv7l armv7h armv7\n' ;;
     loong64) printf 'loongarch64 loong64\n' ;;
     riscv64) printf 'riscv64\n' ;;
+    # ⛔ Three architectures, not three spellings of one: powerpc is 32 bit big
+    # endian, powerpc64 is 64 bit big endian and powerpc64le is little endian.
+    # A binary from one runs on none of the others.
+    #
+    # uname -m and the docker architecture agree on all three, so the first
+    # name is both. The second is the spelling ArchPOWER itself uses, which is
+    # what a consumer arriving from that port will look for. Decision 4 says
+    # add what is missing rather than subtract what exists.
+    ppc) printf 'ppc powerpc\n' ;;
+    ppc64) printf 'ppc64 powerpc64\n' ;;
+    ppc64le) printf 'ppc64le powerpc64le\n' ;;
     *) die "unknown architecture: $1" ;;
   esac
 }

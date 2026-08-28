@@ -99,6 +99,17 @@ field() {
     }' "$1"
 }
 
+# field_all FILE KEY -> every KEY = value, in the order the file lists them
+field_all() {
+  awk -F= -v k="$2" '
+    $0 ~ /^[[:space:]]*#/ { next }
+    $1 ~ "^[[:space:]]*" k "[[:space:]]*$" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      sub(/[[:space:]]+$/, "")
+      print
+    }' "$1"
+}
+
 # trusted_lines FILE -> "<fingerprint> <expiry>" per trusted entry
 trusted_lines() {
   awk -F= '
@@ -177,15 +188,31 @@ check_one() {
   #-------------------------------------------------------------------------#
   # What the mirror serves today
   #-------------------------------------------------------------------------#
-  local index
+  # ⛔ Every mirror the pin names, in order. A pin may carry more than one, and
+  # a host that answers from a workstation can answer 403 from a runner: this
+  # job runs on a runner. The first that lists is the one used from here down,
+  # so every later fetch goes to a host known to be answering.
+  local index listed=0
   index="$work/index.html"
-  if ! curl -sSfL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 3 \
-       -o "$index" "$mirror/"; then
-    die "cannot list $mirror/" \
-      "set the mirror field in $pin to another mirror of this port and re-run" \
+  while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    if curl -sSfL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 3 \
+         -o "$index" "$m/"; then
+      mirror="$m"
+      listed=1
+      break
+    fi
+    echo "check-keyring-pin: cannot list $m/, trying the next mirror" >&2
+  done < <(field_all "$pin" mirror)
+
+  if [ "$listed" -ne 1 ]; then
+    die "cannot list any mirror in $pin" \
+      "every failure is printed above" \
+      "add a mirror line to $pin, or point the existing one somewhere that answers" \
       "⚠ a mirror can serve files and answer a directory with a JavaScript page, which lists nothing" \
       "check it with: curl -sS -o /dev/null -w %{http_code} $mirror/"
   fi
+  echo "listed from    : $mirror"
 
   # Sorted by version, newest last. The names carry a date and a pkgrel, so a
   # plain version sort is the right order.

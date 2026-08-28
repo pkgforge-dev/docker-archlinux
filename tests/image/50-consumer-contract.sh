@@ -118,12 +118,13 @@ else
 fi
 
 #---------------------------------------------------------------------------#
-# 5. locale-gen and the data it needs survive NoExtract.
+# 5. locale-gen and the data it needs are present.
 #
-# archlinux.sh lines 43 to 45 append to /etc/locale.gen and run locale-gen.
-# Decision 6 strips usr/share/i18n through NoExtract with re-includes, and the
-# re-include lines are what keep this working. Copying the strip without them
-# leaves an image that cannot generate any locale.
+# archlinux.sh lines 43 to 45 append to /etc/locale.gen and run locale-gen,
+# which reads the charmaps and locale definitions under usr/share/i18n. An
+# image missing either generates no locale at all, and the consumer's own build
+# fails on the line after. The image ships no NoExtract rule, so the whole tree
+# is on disk. HISTORY/noextract-reverted.md.
 #---------------------------------------------------------------------------#
 if img_extract "$cid" /usr/bin/locale-gen "$work/locale-gen" >/dev/null 2>>"$work/err"; then
   ok "locale-gen is present"
@@ -137,15 +138,15 @@ fi
 if img_extract "$cid" /usr/share/i18n/charmaps/UTF-8.gz "$work/UTF-8.gz" >/dev/null 2>>"$work/err"; then
   size="$(wc -c < "$work/UTF-8.gz" | tr -d '[:space:]')"
   if [ "$size" -gt 0 ]; then
-    ok "the UTF-8 charmap survives NoExtract ($size bytes)"
+    ok "the UTF-8 charmap is present ($size bytes)"
   else
-    fail "the UTF-8 charmap survives NoExtract" "the file is $size bytes" \
+    fail "the UTF-8 charmap is present" "the file is $size bytes" \
       "reproduce: $(repro /usr/share/i18n/charmaps/UTF-8.gz)"
   fi
 else
-  fail "the UTF-8 charmap survives NoExtract" \
+  fail "the UTF-8 charmap is present" \
     "runtime said: $(tr -d '\r' < "$work/err" | tail -1)" \
-    "the ! re-include lines in pacman.conf are load-bearing, see decision 6" \
+    "locale-gen reads this file, so an image without it generates no locale" \
     "reproduce: $(repro /usr/share/i18n/charmaps/UTF-8.gz)"
 fi
 

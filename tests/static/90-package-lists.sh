@@ -66,7 +66,7 @@ done <<< "$lists"
 
 # One list per architecture the build matrix covers. A missing one means an
 # architecture builds with whatever the previous COPY left behind.
-for arch in amd64 arm64 armv7 loong64 riscv64; do
+for arch in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
   if [ -f "$REPO_ROOT/bootstrap/$arch/etc/bootstrap-packages.txt" ]; then
     ok "bootstrap/$arch/etc/bootstrap-packages.txt exists"
   else

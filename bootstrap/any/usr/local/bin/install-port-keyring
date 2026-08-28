@@ -62,6 +62,17 @@ field() {
     }' "$1"
 }
 
+# field_all FILE KEY -> every KEY = value, in the order the file lists them
+field_all() {
+  awk -F= -v k="$2" '
+    $0 ~ /^[[:space:]]*#/ { next }
+    $1 ~ "^[[:space:]]*" k "[[:space:]]*$" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      sub(/[[:space:]]+$/, "")
+      print
+    }' "$1"
+}
+
 # trusted_lines FILE -> "<fingerprint> <expiry>" per trusted entry
 trusted_lines() {
   awk -F= '
@@ -141,11 +152,34 @@ echo "    pin carries $pinned_count trusted fingerprint(s)"
 #---------------------------------------------------------------------------#
 # 3. Fetch, and check the checksum before anything is read out of the package
 #---------------------------------------------------------------------------#
+# ⛔ Every mirror the pin names, in order, and each failure is reported.
+#
+# A pin used to carry one mirror, and one host refusing this build was the end
+# of it. ArchPOWER's origin sits behind a bot challenge that answers 403 to
+# datacentre address ranges, so the keyring is fetchable from a workstation and
+# not from a GitHub runner, and the build failed at the first step that touches
+# the network. A second entry is the same fall through pacman itself does.
+#
+# ⚠ The checksum below is what makes this safe. Whichever mirror answers, the
+# package has to be the pinned one byte for byte, so a second source is a
+# transfer path and not a second trust root.
 echo "==> fetching $pkg"
-if ! curl -sSfL --connect-timeout 15 --max-time 180 --retry 3 --retry-delay 3 \
-     -o "$work/keyring.pkg" "$mirror/$pkg"; then
-  die "cannot fetch the pinned keyring package" \
-    "wanted: $mirror/$pkg" \
+got_pkg=0
+while IFS= read -r m; do
+  [ -n "$m" ] || continue
+  if curl -sSfL --connect-timeout 15 --max-time 180 --retry 3 --retry-delay 3 \
+       -o "$work/keyring.pkg" "$m/$pkg"; then
+    echo "    fetched from $m"
+    got_pkg=1
+    break
+  fi
+  echo "install-port-keyring: cannot fetch $m/$pkg, trying the next mirror" >&2
+done < <(field_all "$pin" mirror)
+
+if [ "$got_pkg" -ne 1 ]; then
+  die "cannot fetch the pinned keyring package from any mirror in $pin" \
+    "wanted: $pkg" \
+    "every mirror the pin names was tried and each failure is printed above" \
     "a port removes a superseded keyring package from its mirror, so this usually means the pin is behind" \
     "re-derive the values with scripts/check-keyring-pin --apply, or by hand from the steps in $pin"
 fi

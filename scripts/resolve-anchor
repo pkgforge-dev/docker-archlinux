@@ -2,7 +2,7 @@
 #
 # Print the anchor package version for one architecture.
 #
-#   scripts/resolve-anchor <amd64|arm64|armv7|riscv64>
+#   scripts/resolve-anchor <amd64|arm64|armv7|loong64|riscv64|ppc|ppc64|ppc64le>
 #
 # The anchor is pacman. It exists on every port, and its version already carries
 # the major, minor and patch numbers, the commits since the tag and the commit
@@ -38,7 +38,7 @@ die() {
 }
 
 dir="${1:-}"
-[ -n "$dir" ] || die "usage: resolve-anchor <amd64|arm64|armv7|riscv64>"
+[ -n "$dir" ] || die "usage: resolve-anchor <amd64|arm64|armv7|loong64|riscv64|ppc|ppc64|ppc64le>"
 
 conf="$REPO_ROOT/rootfs/$dir/etc/pacman.conf"
 list="$REPO_ROOT/rootfs/$dir/etc/pacman.d/mirrorlist"
@@ -48,11 +48,31 @@ list="$REPO_ROOT/rootfs/$dir/etc/pacman.d/mirrorlist"
 arch="$(awk -F= '/^[[:space:]]*Architecture[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$conf")"
 [ -n "$arch" ] || die "$conf has no Architecture line"
 
+# ⛔ The primary repository is read from the config, not assumed to be core.
+# ArchPOWER's is named base, it has no extra at all, and it serves the database
+# as base.db. A resolver that hardcodes core asks a mirror for a path that
+# answers 404 on three of this repository's eight architectures.
+#
+# The first uncommented section that is not [options] is the primary one, which
+# is the same rule pacman itself applies when two repositories carry a package
+# of the same name.
+repo="$(awk '
+  /^[[:space:]]*#/ { next }
+  /^[[:space:]]*\[/ {
+    name = $0
+    sub(/^[[:space:]]*\[/, "", name)
+    sub(/\].*$/, "", name)
+    if (name != "options") { print name; exit }
+  }' "$conf")"
+[ -n "$repo" ] || die "$conf declares no repository section" \
+  "the anchor is read from the primary repository's database, so there has to be one" \
+  "reproduce: grep -n '^\[' $conf"
+
 # Try each server in turn. A single mirror being slow or mid sync must not
 # decide the version for a whole release.
 while IFS= read -r server; do
   [ -n "$server" ] || continue
-  url="${server//\$repo/core}"
+  url="${server//\$repo/$repo}"
   url="${url//\$arch/$arch}"
 
   # A mirror that does not answer is a normal result, so the reason is reported
@@ -63,18 +83,46 @@ while IFS= read -r server; do
   # later as "not a readable archive", which sends the reader looking for a
   # corrupt database instead of a blocked path.
   if ! fetch_error="$(curl -sSfL -A "$UA" --connect-timeout 10 --max-time 120 \
-      -o "$db" "$url/core.db" 2>&1)"; then
-    echo "resolve-anchor: cannot fetch $url/core.db: ${fetch_error:-no error text}" >&2
+      -o "$db" "$url/$repo.db" 2>&1)"; then
+    echo "resolve-anchor: cannot fetch $url/$repo.db: ${fetch_error:-no error text}" >&2
     rm -f "$db"
     continue
   fi
 
-  if ! entries="$(tar -tzf "$db" 2>&1)"; then
+  # ⛔ Two compressions, because the ports do not agree. Every Arch family port
+  # ships a gzip database and ArchPOWER ships Zstandard, and neither announces
+  # which: the file is named <repo>.db in both cases. So both are tried and the
+  # complaint names what each one said, rather than reporting the gzip error
+  # for a file that was never gzip.
+  #
+  # ⚠ tar reaches zstd through the zstd program. A host without it can read
+  # five of this repository's eight architectures and not the other three, so
+  # the absence is said out loud rather than folded into "not a readable
+  # archive".
+  # Cleared every iteration. A reason left over from the previous mirror would
+  # be printed against this one, which is worse than no reason at all.
+  entries=""
+  gz_said=""
+  zstd_said=""
+  if entries_gz="$(tar -tzf "$db" 2>&1)"; then
+    entries="$entries_gz"
+  else
     # ⛔ The first non-empty line, not the first line. tar puts a blank line
     # ahead of what gzip printed, so taking line 1 made this diagnostic empty
     # in every case it exists for: "not in gzip format" and "unexpected end of
     # file" are both on line 2.
-    echo "resolve-anchor: $url/core.db is not a readable archive: $(awk 'NF { print; exit }' <<< "$entries")" >&2
+    gz_said="$(awk 'NF { print; exit }' <<< "$entries_gz")"
+    if ! command -v zstd >/dev/null 2>&1; then
+      zstd_said="zstd is not on PATH, so a Zstandard database cannot be read here"
+    elif entries_zst="$(tar --zstd -tf "$db" 2>&1)"; then
+      entries="$entries_zst"
+    else
+      zstd_said="$(awk 'NF { print; exit }' <<< "$entries_zst")"
+    fi
+  fi
+
+  if [ -z "$entries" ]; then
+    echo "resolve-anchor: $url/$repo.db is not a readable archive: gzip said ${gz_said:-nothing}; zstd said ${zstd_said:-nothing}" >&2
     rm -f "$db"
     continue
   fi
@@ -87,10 +135,10 @@ while IFS= read -r server; do
     printf '%s\n' "$version"
     exit 0
   fi
-  echo "resolve-anchor: $ANCHOR_PACKAGE not found in $url/core.db, trying the next server" >&2
+  echo "resolve-anchor: $ANCHOR_PACKAGE not found in $url/$repo.db, trying the next server" >&2
 done < <(awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); print }' "$list")
 
 die "could not resolve the $ANCHOR_PACKAGE version for $dir from any server in rootfs/$dir/etc/pacman.d/mirrorlist" \
-  "every server in that list was tried and none served a readable core database" \
+  "every server in that list was tried and none served a readable $repo database" \
   "probe them with: bash tests/run.sh static" \
   "regenerate the list with: scripts/gen-mirrorlist $dir"

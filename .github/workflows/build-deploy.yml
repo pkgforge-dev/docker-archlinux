@@ -124,7 +124,7 @@ jobs:
           # lockstep, so it is resolved per architecture.
           anchors='{'
           sep=''
-          for arch in amd64 arm64 armv7 loong64 riscv64; do
+          for arch in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
             anchor="$(scripts/resolve-anchor "$arch")"
             anchors="${anchors}${sep}\"${arch}\":\"${anchor}\""
             sep=','
@@ -200,6 +200,20 @@ jobs:
           - docker_arch: riscv64
             platform: linux/riscv64
             runner: ubuntu-latest
+          # The three PowerPC ports are published by ArchPOWER, which carries
+          # its own keyring and lays its repositories out differently from
+          # every other port: the core equivalent is named base, there is no
+          # extra, and `any` architecture packages are in a second database.
+          # HISTORY/powerpc.md has the measurements.
+          - docker_arch: ppc
+            platform: linux/ppc
+            runner: ubuntu-latest
+          - docker_arch: ppc64
+            platform: linux/ppc64
+            runner: ubuntu-latest
+          - docker_arch: ppc64le
+            platform: linux/ppc64le
+            runner: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -208,6 +222,64 @@ jobs:
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      # ⛔ The action does not cover big endian PowerPC, and nothing says so.
+      # tonistiigi/binfmt, which it runs, ships nine emulators: aarch64, arm,
+      # i386, loongarch64, mips64, mips64el, ppc64le, riscv64 and s390x.
+      # qemu-ppc and qemu-ppc64 are not among them. Measured 2026-08-28 by
+      # listing the image's own filesystem.
+      #
+      # The last stage of the Dockerfile runs pacman-key and locale-gen as
+      # target architecture binaries, so without a handler those two jobs fail
+      # at "exec format error" partway through a build that already downloaded
+      # every package.
+      #
+      # Ubuntu's own qemu-user-static ships both. update-binfmts imports the
+      # handler the package describes rather than a magic string written here.
+      - name: Register the big endian PowerPC emulators
+        if: matrix.docker_arch == 'ppc' || matrix.docker_arch == 'ppc64'
+        env:
+          DOCKER_ARCH: ${{ matrix.docker_arch }}
+        run: |
+          set -euo pipefail
+          handler="qemu-${DOCKER_ARCH}"
+
+          # ⛔ Not apt. Ubuntu's qemu-user-static ships the emulators and no
+          # binfmt descriptions at all: /usr/share/binfmts holds one entry,
+          # python3.13, and update-binfmts --import qemu-ppc answers "couldn't
+          # find information about 'qemu-ppc' to import" and exits 2. Measured
+          # 2026-08-28 on this workflow and in a Debian trixie container.
+          #
+          # This image registers every emulator it ships, with the F flag, which
+          # is the thing that has to be true. Pinned by digest like every other
+          # image here, and scripts/check-image-pins reads the marker.
+          # tag: latest
+          docker run --rm --privileged \
+            docker.io/multiarch/qemu-user-static@sha256:fe60359c92e86a43cc87b3d906006245f77bfc0565676b80004cc666e4feb9f0 \
+            --reset -p yes
+
+          # ⛔ Asserted, not assumed. A registration that did nothing leaves the
+          # build to fail much later, inside a buildx step, with a message about
+          # exec format that names no architecture.
+          reg="/proc/sys/fs/binfmt_misc/${handler}"
+          if [ ! -f "$reg" ]; then
+            echo "${handler} is not registered after the binfmt image ran" >&2
+            echo "registered handlers:" >&2
+            ls /proc/sys/fs/binfmt_misc >&2
+            exit 1
+          fi
+          cat "$reg"
+
+          # ⚠ The F flag is what makes the handler usable from inside a
+          # container. Without it the kernel opens the interpreter in the
+          # container's own filesystem, where the emulator does not exist, and
+          # buildkit's target stage cannot run a single target binary.
+          if ! awk '/^flags:/ && $2 ~ /F/ { found = 1 } END { exit !found }' "$reg"; then
+            echo "${handler} is registered without the F flag" >&2
+            echo "the emulator would have to exist inside the build container, and it does not" >&2
+            exit 1
+          fi
+          echo "::notice::${handler} registered with the F flag"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
@@ -384,7 +456,7 @@ jobs:
           if [ "$PUBLISH_HUB" = "true" ]; then
             images+=("$HUB_TARGET")
           fi
-          for arch in amd64 arm64 armv7 loong64 riscv64; do
+          for arch in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
             digest_file="/tmp/digests/$arch"
             if [ ! -s "$digest_file" ]; then
               echo "no digest for $arch, refusing to tag a partial release" >&2
@@ -415,7 +487,7 @@ jobs:
             images+=("$HUB_TARGET")
           fi
           sources=()
-          for arch in amd64 arm64 armv7 loong64 riscv64; do
+          for arch in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
             sources+=("$TARGET_IMAGE@$(cat "/tmp/digests/$arch")")
           done
           mapfile -t tags < <(scripts/tag-names index "$VERSION" "${images[@]}")
@@ -460,7 +532,7 @@ jobs:
             # armv7 renders as arm/v7. A bare match on arm would also match
             # arm64, so the assertion would pass with armv7 missing and mean
             # nothing.
-            for expect in amd64 arm64 loong64 riscv64 arm/v7; do
+            for expect in amd64 arm64 loong64 riscv64 ppc ppc64 ppc64le arm/v7; do
               if ! grep -qw -- "$expect" <<< "$got"; then
                 echo "the index for $dated is missing $expect" >&2
                 echo "it carries: $got" >&2

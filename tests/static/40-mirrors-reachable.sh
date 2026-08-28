@@ -19,6 +19,32 @@ PROBE_RETRIES="${MIRRORLIST_PROBE_RETRIES:-2}"
 CONCURRENCY=8
 MIN_SERVERS=2
 
+# ⛔ The same identity scripts/gen-mirrorlist and scripts/resolve-anchor send.
+# This probe used to send curl's default, so it was not asking the question the
+# tools ask: a mirror that filters on User-Agent would answer one of them and
+# not the other, and the difference would read as the mirror being down.
+UA="${MIRROR_PROBE_UA:-docker-archlinux-mirrorlist/1 (+https://github.com/pkgforge-dev/docker-archlinux)}"
+
+# reachable_floor_for ARCHDIR -> how many of that port's servers must answer
+#
+# ⛔ Not the same question as how many it ships. The three PowerPC ports ship two
+# servers and never have both answer from one network: ArchPOWER's origin sits
+# behind a bot challenge that refuses datacentre address ranges, so a
+# workstation reaches the origin and a GitHub runner reaches only the read
+# through proxy beside it. Measured 2026-08-28 from a runner: 403 for curl's own
+# user agent, for pacman's, for a browser's and for this repository's, with a
+# Cloudflare interstitial as the body every time.
+#
+# ⚠ So one answering is the pass for those three. The count assertion above is
+# unchanged and still requires both entries to be present, so a port that lost
+# its second server fails there rather than here. HISTORY/powerpc.md.
+reachable_floor_for() {
+  case "$1" in
+    ppc | ppc64 | ppc64le) printf '1\n' ;;
+    *) printf '%s\n' "$MIN_SERVERS" ;;
+  esac
+}
+
 lists="$(find "$REPO_ROOT/rootfs" -type f -path '*/etc/pacman.d/mirrorlist' | sort)"
 if [ -z "$lists" ]; then
   fail "at least one mirrorlist exists" "searched: $REPO_ROOT/rootfs" \
@@ -76,10 +102,11 @@ while IFS= read -r list; do
 
   servers="$(awk '/^[[:space:]]*Server[[:space:]]*=/ {sub(/^[^=]*=[[:space:]]*/,""); print}' "$list")"
   count="$(awk 'NF' <<< "$servers" | wc -l | tr -d '[:space:]')"
+  min="$MIN_SERVERS"
 
-  if [ "$count" -lt "$MIN_SERVERS" ]; then
+  if [ "$count" -lt "$min" ]; then
     fail "$rel offers a fallback server" \
-      "active servers: $count, minimum: $MIN_SERVERS" \
+      "active servers: $count, minimum: $min" \
       "with one entry there is nothing to fall through to when it fails" \
       "reproduce: awk '/^Server/ { c++ } END { print c + 0 }' $rel"
   else
@@ -94,13 +121,33 @@ while IFS= read -r list; do
       "reproduce: grep '^Server' $rel"
   fi
 
+  # ⛔ The repository name comes from the config, not from the word core.
+  # ArchPOWER's primary repository is base and its database is base.db, so a
+  # probe that assumes core asks three of the eight ports for a path that
+  # answers 404 and then reports every one of their mirrors as dead.
+  repo="$(awk '
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*\[/ {
+      name = $0
+      sub(/^[[:space:]]*\[/, "", name)
+      sub(/\].*$/, "", name)
+      if (name != "options") { print name; exit }
+    }' "$conf")"
+  if [ -z "$repo" ]; then
+    fail "rootfs/$archdir/etc/pacman.conf declares a repository" \
+      "no uncommented section other than [options]" \
+      "the probe asks that repository for its database, so there has to be one" \
+      "reproduce: grep -n '^\[' rootfs/$archdir/etc/pacman.conf"
+    continue
+  fi
+
   # queue reachability probes
   while IFS= read -r server; do
     [ -n "$server" ] || continue
     # pacman substitutes these two itself, so the probe must do the same
-    url="${server//\$repo/core}"
+    url="${server//\$repo/$repo}"
     url="${url//\$arch/$arch}"
-    url="$url/core.db"
+    url="$url/$repo.db"
     printf '%s\t%s\t%s\n' "$rel" "$server" "$url" > "$resdir/spec.$probe_index"
     probe_index=$((probe_index + 1))
   done <<< "$servers"
@@ -112,7 +159,7 @@ for spec in "$resdir"/spec.*; do
   [ -e "$spec" ] || continue
   (
     url="$(cut -f3 < "$spec")"
-    code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time "$PROBE_TIMEOUT" --retry "$PROBE_RETRIES" --retry-delay 2 --retry-all-errors -L "$url")" || code="000"
+    code="$(curl -s -o /dev/null -w '%{http_code}' -A "$UA" --connect-timeout 10 --max-time "$PROBE_TIMEOUT" --retry "$PROBE_RETRIES" --retry-delay 2 --retry-all-errors -L "$url")" || code="000"
     printf '%s\n' "$code" > "${spec}.code"
   ) &
   started=$((started + 1))
@@ -165,8 +212,8 @@ while IFS= read -r list; do
 
   total=$((alive + dead))
   [ "$total" -gt 0 ] || continue
-  # at least MIN_SERVERS, and at least half the list
-  floor="$MIN_SERVERS"
+  # at least the port's floor, and at least half the list
+  floor="$(reachable_floor_for "$archdir")"
   half=$(((total + 1) / 2))
   [ "$half" -gt "$floor" ] && floor="$half"
 

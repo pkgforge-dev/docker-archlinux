@@ -1,0 +1,12 @@
+# The candidate pool for this port.
+#
+# ⚠ Both entries are anchors, so gen-mirrorlist finds no candidate to rank.
+# ArchPOWER has no second host: searched 2026-08-28, base/any carries no
+# pacman-mirrorlist package among its 2200 packages and both archlinuxpower.org
+# and kth5/archpower name only repo.archlinuxpower.org.
+#
+# ⛔ Leave the file. An architecture with no pool file takes a different branch
+# in gen-mirrorlist, and a missing file would read as an oversight rather than
+# as a measured absence.
+https://repo.archlinuxpower.org/$repo/$arch
+https://api.rv.pkgforge.dev/https://repo.archlinuxpower.org/$repo/$arch

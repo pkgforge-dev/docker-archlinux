@@ -23,8 +23,10 @@ COPY bootstrap/keyrings /usr/local/share/docker-archlinux/keyrings
 
 # pacman -r reads /etc/pacman.conf from the running host, never from the target
 # root, so the per architecture config has to be installed here. It carries
-# Architecture, the mirrors and NoExtract, which is what makes all three take
-# effect during the bootstrap.
+# Architecture and the mirrors, which is what makes both take effect during the
+# bootstrap. It carries no NoExtract rule: the image withholds nothing, and
+# tests/static/80-docs-claims.sh fails on any rule in any shipped config.
+# HISTORY/noextract-reverted.md.
 COPY rootfs/${TARGETARCH}${TARGETVARIANT}/etc /etc
 
 # The same files ship in the image, so a consumer reads and changes the config

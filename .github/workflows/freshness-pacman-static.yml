@@ -1,0 +1,215 @@
+name: Freshness, static pacman sources
+
+# Every input to the static pacman is pinned, and policy 9 says nothing pinned
+# is allowed to go stale. This measures the pin against live upstream, applies
+# the bump on a branch, builds one architecture with it, and opens a pull
+# request carrying the measurement.
+#
+# ⭐ Two different kinds of staleness, and they are reported separately because
+# they mean different things:
+#
+#   the pacman commit  drifting from the anchor this repository publishes means
+#                      the release binary is no longer the pacman in any
+#                      published image, which is the claim the whole pin exists
+#                      to support
+#   a library version  drifting means a newer release exists, which is ordinary
+#                      and is a bump
+#
+# ⛔ A failing run here is a normal result. It means upstream moved.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "45 04 * * 2"  # Tuesdays, 04:45 UTC
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+concurrency:
+  group: freshness-pacman-static
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Compare the source pin against upstream
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # ⛔ The anchor half first, because it is the one that invalidates a claim
+      # rather than merely being behind. The anchor is resolved the way every
+      # build resolves it, from the repository databases, so this compares the
+      # pin against what the ports actually ship rather than against a tag.
+      - name: Compare the pinned commit against the published anchor
+        id: anchor
+        run: |
+          set -euo pipefail
+          describe="$(awk '$1 == "describe" { print $2; exit }' bootstrap/pacman-static/sources.pin)"
+          echo "pinned describe: $describe"
+
+          drift=""
+          for arch in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
+            anchor="$(scripts/resolve-anchor "$arch")"
+            echo "$arch anchor: $anchor"
+            # The anchor is <describe>-<pkgrel>. Only the describe half names a
+            # commit; pkgrel moves for a rebuild against the same source and is
+            # not drift in what this pin claims.
+            got="${anchor%-*}"
+            if [ "$got" != "$describe" ]; then
+              drift="$drift $arch($got)"
+            fi
+          done
+
+          if [ -n "$drift" ]; then
+            echo "::warning::the pinned pacman commit is not what these ports publish:$drift"
+            echo "anchor_drift=$drift" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::every port publishes pacman $describe, which is the pinned commit"
+            echo "anchor_drift=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The library half. Each is a release tarball, so the question is whether
+      # a newer release exists, not whether the pinned one still downloads.
+      - name: Compare each pinned source against its upstream release
+        id: sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          behind=""
+          : > rows.md
+
+          latest_gh() { # latest_gh OWNER/REPO -> the newest release tag
+            gh api "repos/$1/releases/latest" --jq .tag_name
+          }
+
+          while read -r name version; do
+            [ -n "$name" ] || continue
+            case "$name" in
+              zlib)         tag="$(latest_gh madler/zlib)" ;;
+              xz)           tag="$(latest_gh tukaani-project/xz)" ;;
+              zstd)         tag="$(latest_gh facebook/zstd)" ;;
+              libarchive)   tag="$(latest_gh libarchive/libarchive)" ;;
+              curl)         tag="$(latest_gh curl/curl)" ;;
+              libseccomp)   tag="$(latest_gh seccomp/libseccomp)" ;;
+              # ⛔ Not "the newest release". OpenSSL publishes four supported
+              # lines on one day and the pin follows the long term support line
+              # deliberately, so this asks whether 3.5 moved.
+              openssl)      tag="$(gh api 'repos/openssl/openssl/releases?per_page=40' \
+                                    --jq '[.[] | select(.tag_name | startswith("openssl-3.5"))][0].tag_name')" ;;
+              # ⚠ bzip2 1.0.8 is from 2019 and sourceware publishes no release
+              # feed. Its directory listing is the only source, so it is read
+              # rather than queried, and NOT MEASURED is never printed as a dash.
+              bzip2)        tag="$(curl -sSfL --connect-timeout 20 --max-time 120 \
+                                    https://sourceware.org/pub/bzip2/ \
+                                    | grep -oE 'bzip2-[0-9.]+\.tar\.gz' \
+                                    | sed 's/^bzip2-//; s/\.tar\.gz$//' \
+                                    | sort -V | tail -1)" ;;
+              libgpg-error | libassuan | gpgme)
+                            tag="$(curl -sSfL --connect-timeout 20 --max-time 120 \
+                                    "https://gnupg.org/ftp/gcrypt/$name/" \
+                                    | grep -oE "$name-[0-9.]+\.tar\.bz2" \
+                                    | sed "s/^$name-//; s/\.tar\.bz2$//" \
+                                    | sort -V | tail -1)" ;;
+              *)            tag="NOT MEASURED" ;;
+            esac
+
+            # Compare on digits only. The tags are spelled v1.3.2, openssl-3.5.8
+            # and curl-8_21_0, and none of those is the version string.
+            got="$(printf '%s' "$tag" | tr '_' '.' | grep -oE '[0-9]+([.][0-9]+)+' | tail -1)"
+            if [ "$tag" = "NOT MEASURED" ] || [ -z "$got" ]; then
+              printf '| %s | %s | NOT MEASURED |\n' "$name" "$version" >> rows.md
+            elif [ "$got" != "$version" ]; then
+              behind="$behind $name($version to $got)"
+              printf '| %s | %s | **%s** |\n' "$name" "$version" "$got" >> rows.md
+            else
+              printf '| %s | %s | current |\n' "$name" "$version" >> rows.md
+            fi
+          done < <(awk '$1 == "source" { print $2, $3 }' bootstrap/pacman-static/sources.pin)
+
+          # ⚠ Rows go through a file rather than a shell variable. A newline
+          # inside a variable in a YAML block scalar ends the block: the
+          # continuation line sits at column zero, which is less indented than
+          # the block, and actionlint reports it as a YAML syntax error rather
+          # than as a shell one.
+          {
+            echo "report<<PINREPORT"
+            echo "| source | pinned | upstream |"
+            echo "| --- | --- | --- |"
+            awk 'NF' rows.md
+            echo "PINREPORT"
+            echo "behind=$behind"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ -n "$behind" ]; then
+            echo "::warning::pinned sources behind upstream:$behind"
+          else
+            echo "::notice::every pinned source is at its newest upstream release"
+          fi
+
+      # ⛔ The pin is exercised rather than reasoned about. A bump that is not
+      # built is a claim, and the failure modes of this recipe are all at build
+      # time: a source that moved its layout, a configure option that went away,
+      # a target OpenSSL no longer names.
+      - name: Build one architecture against the pin as it stands
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            cmake ninja-build meson gperf diffutils qemu-user-static
+          WORK="${RUNNER_TEMP}/pacman-static" OUT="${RUNNER_TEMP}/dist" \
+            scripts/build-pacman-static amd64
+          jq -r '"built \(.reported_version) from \(.pacman_commit)"' \
+            "${RUNNER_TEMP}/dist/pacman-static-amd64.json"
+
+      # ⛔ Reported, not applied. Bumping a source means re-measuring its sha256
+      # from a host somebody trusts, and a job that rewrote the pin from
+      # whatever a runner downloaded would defeat the pin. What this produces is
+      # the measurement and the command to re-derive each line.
+      - name: Report
+        env:
+          ANCHOR_DRIFT: ${{ steps.anchor.outputs.anchor_drift }}
+          BEHIND: ${{ steps.sources.outputs.behind }}
+          REPORT: ${{ steps.sources.outputs.report }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Static pacman source pin"
+            echo
+            echo "$REPORT"
+            echo
+            if [ -n "$ANCHOR_DRIFT" ]; then
+              echo "⛔ The pinned pacman commit is not what these ports publish:"
+              echo "\`$ANCHOR_DRIFT\`"
+              echo
+              echo "The release binary is no longer the pacman in every published image."
+              echo "Re-pin from the commit the anchor names before the next release."
+            else
+              echo "⭐ Every port publishes the pinned pacman commit."
+            fi
+            echo
+            if [ -n "$BEHIND" ]; then
+              echo "Sources behind upstream: \`$BEHIND\`"
+              echo
+              echo "Re-derive each line from a host you trust, never from this runner:"
+              echo
+              echo '```bash'
+              echo 'curl -sSfL --connect-timeout 20 --max-time 300 -o f URL && sha256sum f'
+              echo '```'
+            fi
+            echo
+            echo "⚠ What this did not verify: that a bump builds. It built the pin as it"
+            echo "stands, on amd64 only, and did not build any newer version of anything."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "$ANCHOR_DRIFT" ]; then
+            echo "the pinned commit no longer matches the published anchor" >&2
+            exit 1
+          fi

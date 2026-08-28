@@ -1,0 +1,61 @@
+# ArchPOWER package signing trust root.
+#
+# The three PowerPC ports are published by ArchPOWER and sign with keys
+# archlinux-keyring does not carry, so a build host that only trusts
+# archlinux-keyring rejects every one of their packages. Pinning the keyring
+# package, its checksum and its trusted key set here lets SigLevel = Required
+# stay on with no signature weakening.
+#
+# ⭐ One pin serves all three architectures. The keyring package is an `any`
+# architecture package and the trust root does not differ between powerpc,
+# powerpc64 and powerpc64le, so three pins would be three copies of one fact.
+#
+# ⛔ The package is in base/any and not in any architecture's own database.
+# ArchPOWER splits arch specific from `any` packages into separate databases, so
+# a probe of base/powerpc64le finds no keyring and concludes the port cannot be
+# trusted. That is the measurement HISTORY/removed-architectures.md recorded as
+# the reason PowerPC was excluded, and it was looking in the wrong database.
+#
+# The field format is described in archlinuxarm.pin. ⚠ This is the first pin
+# with two mirror lines. install-port-keyring tries each in order and reports
+# every failure, and the sha256 below is what makes a second transfer path
+# safe: whichever answers, the package has to be the pinned one byte for byte.
+#
+# ⛔ The second is not another publisher. ArchPOWER's origin sits behind a
+# Cloudflare bot challenge that answers 403 to datacentre address ranges, so
+# the keyring is fetchable from a workstation and not from a GitHub runner.
+# api.rv.pkgforge.dev is a read through proxy in front of the same origin.
+# Measured 2026-08-28 from a runner: 403 for curl's own user agent, pacman's,
+# a browser's and this repository's. HISTORY/powerpc.md.
+#
+# ⚠ 5E8F266C9F31E41DEBFBDC7C80701B1A8BC1A35B is in the keyring and is not
+# pinned. It is the port's own Pacman Keyring Master Key, which is not in
+# archpower-trusted, so it signs no package. The pin holds the set the package
+# marks trusted, which is the set that matters.
+#
+# ⚠ 3B40CFA2B2FC99268DE7B31BF95FE1C7E212CF15 is listed in archpower-revoked and
+# is not in the keyring at all. install-port-keyring installs the revoked list
+# with the keyring, so a package signed by it is rejected rather than unknown.
+#
+# To re-derive, from any host with bsdtar and gpg:
+#   B=https://repo.archlinuxpower.org/base/any
+#   curl -sSL -o k.pkg.tar.zst "$B/<package>"
+#   sha256sum k.pkg.tar.zst
+#   bsdtar -xOf k.pkg.tar.zst usr/share/pacman/keyrings/archpower-trusted
+#   bsdtar -xOf k.pkg.tar.zst usr/share/pacman/keyrings/archpower.gpg | \
+#     gpg --with-colons --show-keys
+#
+# Adopted 2026-08-28. Every value below was measured on that date against the
+# mirror named here, by fetching the package and reading the key material out of
+# it. No expiry is nearer than 2031, so this is the one pin with no key close
+# enough to the horizon for scripts/check-keyring-pin to warn about.
+
+keyring = archpower
+arch    = powerpc powerpc64 powerpc64le
+mirror  = https://repo.archlinuxpower.org/base/any
+mirror  = https://api.rv.pkgforge.dev/https://repo.archlinuxpower.org/base/any
+package = archpower-keyring-20260408-1-any.pkg.tar.zst
+sha256  = 2f3ebb1a9234775e9244bf45ae1121a20bdbe7d27efbd440a3da172a2baf6241
+trusted = 8D3D6CE8D4F0625F4D7109022205B7A06C2656A3 2032-01-03
+trusted = D201F92AE42528456537C3F9B96775F34689694C 2031-02-22
+trusted = DE9D1B4851C66CCD9994459CFBB374D5D026D9DA 2031-04-06

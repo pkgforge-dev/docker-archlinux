@@ -401,9 +401,12 @@ done <<< "$ARCHES"
 # is either one that was removed and left files behind, or one somebody started
 # adding and did not finish.
 #
-# any and keyrings are shared by every architecture and are not one.
+# any, keyrings and pacman-static are shared by every architecture and are not
+# one. pacman-static holds the source pin the release build reads, and it is
+# per source rather than per architecture: one pin serves all eight.
 SHARED="any
-keyrings"
+keyrings
+pacman-static"
 
 orphans=""
 for d in rootfs bootstrap; do

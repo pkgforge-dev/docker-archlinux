@@ -1,0 +1,196 @@
+name: Static pacman
+
+# Build a statically linked pacman for every architecture, from source, and
+# publish the eight binaries as release assets.
+#
+# ⛔ Nothing here touches an image build. The Dockerfile does not read the source
+# pin and does not fetch these binaries. This produces release assets only, and
+# tests/static/85-pacman-static-pin.sh fails if that ever stops being true.
+#
+# ⭐ A dispatch builds and uploads for inspection and stops. Only a v* tag whose
+# commit is on the default branch can create a release, so a manual run cannot
+# publish one by accident.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pacman-static-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  #----------------------------------------------------------------------------------#
+  # One job per architecture. fail-fast is off so one run reports every broken
+  # target rather than the first, and the release job needs the whole matrix, so
+  # a run that lost one architecture publishes nothing.
+  #----------------------------------------------------------------------------------#
+  build:
+    name: Build ${{ matrix.docker_arch }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # ⚠ arch-subset: this is the whole architecture set and is kept in step
+        # with the build matrix by tests/static/85-pacman-static-pin.sh, which
+        # reads build-deploy.yml and fails when a row here is missing from
+        # scripts/build-pacman-static.
+        docker_arch:
+          - amd64
+          - arm64
+          - armv7
+          - loong64
+          - riscv64
+          - ppc
+          - ppc64
+          - ppc64le
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The build runs natively; the emulator is only used to run the finished
+      # binary and print its version. ⛔ Without one the run column reads
+      # NOT MEASURED, so the emulator is what turns a link into a proof.
+      - name: Install the build tools and the emulators
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            cmake ninja-build meson gperf diffutils qemu-user-static
+          echo "meson $(meson --version), ninja $(ninja --version)"
+
+      # ⛔ Asserted, not assumed. The emulator for this target has to be on PATH
+      # before the build starts, because the build treats a missing one as
+      # NOT MEASURED rather than as a failure, and a whole matrix reporting
+      # NOT MEASURED would read like a pass.
+      - name: Check the emulator for this target is installed
+        env:
+          DOCKER_ARCH: ${{ matrix.docker_arch }}
+        run: |
+          set -euo pipefail
+          case "$DOCKER_ARCH" in
+            amd64) emu=qemu-x86_64-static ;;
+            arm64) emu=qemu-aarch64-static ;;
+            armv7) emu=qemu-arm-static ;;
+            loong64) emu=qemu-loongarch64-static ;;
+            riscv64) emu=qemu-riscv64-static ;;
+            ppc) emu=qemu-ppc-static ;;
+            ppc64) emu=qemu-ppc64-static ;;
+            ppc64le) emu=qemu-ppc64le-static ;;
+            *) echo "no emulator recorded for $DOCKER_ARCH" >&2; exit 1 ;;
+          esac
+          if ! command -v "$emu" > /dev/null; then
+            echo "$emu is not installed, so the binary for $DOCKER_ARCH could be built and never run" >&2
+            echo "qemu-user-static supplies it. What is present:" >&2
+            ls /usr/bin/qemu-*-static >&2
+            exit 1
+          fi
+          echo "$emu: $("$emu" --version | awk 'NR == 1')"
+
+      - name: Build
+        env:
+          DOCKER_ARCH: ${{ matrix.docker_arch }}
+        run: |
+          set -euo pipefail
+          WORK="${RUNNER_TEMP}/pacman-static" OUT="${RUNNER_TEMP}/dist" \
+            scripts/build-pacman-static "$DOCKER_ARCH"
+
+      # ⛔ The build says NOT MEASURED when it could not run the binary. That is
+      # the honest value and it must not reach a release, so it is refused here
+      # rather than shipped with a caveat nobody reads.
+      - name: Refuse an asset whose binary was never run
+        env:
+          DOCKER_ARCH: ${{ matrix.docker_arch }}
+        run: |
+          set -euo pipefail
+          ev="${RUNNER_TEMP}/dist/pacman-static-${DOCKER_ARCH}.json"
+          reported="$(jq -r .reported_version "$ev")"
+          if [ "$reported" = "NOT MEASURED" ]; then
+            echo "the ${DOCKER_ARCH} binary linked and was never executed" >&2
+            echo "an asset nobody has run is not evidence that it works" >&2
+            exit 1
+          fi
+          echo "::notice::${DOCKER_ARCH} reported ${reported}"
+
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pacman-static-${{ matrix.docker_arch }}
+          path: |
+            ${{ runner.temp }}/dist/pacman-static-${{ matrix.docker_arch }}
+            ${{ runner.temp }}/dist/pacman-static-${{ matrix.docker_arch }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  #----------------------------------------------------------------------------------#
+  # Publish. Runs only for a v* tag, and only when every architecture built.
+  #----------------------------------------------------------------------------------#
+  release:
+    name: Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # fetch-depth 0 because the tag has to be checked against the default
+      # branch, and a shallow checkout cannot answer that.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # ⛔ A tag on a commit that never reached main would publish assets built
+      # from code nobody reviewed and nothing would say so afterwards.
+      - name: Refuse a tag whose commit is not on the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor HEAD "origin/${DEFAULT_BRANCH}"; then
+            echo "this tag is not an ancestor of origin/${DEFAULT_BRANCH}" >&2
+            echo "assets would be built from a commit that never reached the default branch" >&2
+            exit 1
+          fi
+          echo "::notice::tag commit is on ${DEFAULT_BRANCH}"
+
+      - name: Download every architecture
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: assets
+          merge-multiple: true
+
+      # ⛔ The body is generated from the evidence files, so the release notes
+      # and the assets cannot disagree. A hand written body is a second record
+      # that goes stale on the first bump.
+      - name: Generate the release body
+        run: |
+          set -euo pipefail
+          ls -1 assets
+          scripts/release-notes assets "${GITHUB_REF_NAME}" > body.md
+          cat body.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --notes-file body.md \
+            assets/pacman-static-* assets/SHA256SUMS

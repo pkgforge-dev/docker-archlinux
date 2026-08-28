@@ -25,6 +25,15 @@ podman run --rm --platform linux/ppc64le alpine uname -m   # ppc64le
 
 ## powerpc64le: blocked on a trust root
 
+⛔ **Superseded 2026-08-28. All three PowerPC ports are implemented and this
+section is kept for the measurement, not for the verdict.** `ppc`, `ppc64` and
+`ppc64le` are in the build matrix, each builds under emulation, and each passes
+66 of 66 image assertions. `HISTORY/powerpc.md`.
+
+⚠ Read on for how the exclusion was reached. The two paragraphs below the table
+that say no keyring exists were measured against the wrong database, and the
+re-measurement that corrects them is further down this page.
+
 ⛔ `SigLevel = Required` stays on and policy 5 forbids weakening it. That needs
 the signing key in the keyring before any package is installed.
 
@@ -145,6 +154,27 @@ bootstrap is what settles it, the way `loong64` was settled.
 ⚠ **Found while mining an unrelated reference**, whose `docs/GOTCHAS.md` G-11
 names `archpower-keyring` and so contradicted this page.
 `HISTORY/references/aseem-pacman-static.md`.
+
+### ⭐ Implemented 2026-08-28, and the three obstacles above are closed
+
+Each of the three was closed by measurement rather than argued away.
+`HISTORY/powerpc.md` carries the detail; what follows is only which is which.
+
+1. **Zstandard databases.** `scripts/resolve-anchor`, `scripts/gen-evidence` and
+   `tests/static/40-mirrors-reachable.sh` each read a database in either
+   compression and say what both reported when neither works. The same change
+   also stopped them assuming the repository is named `core`, which ArchPOWER's
+   is not.
+2. **One host.** Not fixed. The floor for these three ports is one server rather
+   than two, in the generator and in the reachability check, and the single
+   point of failure is recorded rather than hidden. It is still TODO 6.
+3. **Two repository sections.** `[base]` and `[base-any]`, each Including its
+   own mirror list, because `base/any` is not `$repo/$arch` for any value of
+   either. The evidence file joins against both, which is what proves the
+   arrangement rather than merely accepting it.
+
+⛔ One obstacle nobody had named turned up in its place: `docker/setup-qemu-action`
+registers no big endian PowerPC emulator. `HISTORY/powerpc.md`.
 
 ## i686: blocked on an expired master key
 

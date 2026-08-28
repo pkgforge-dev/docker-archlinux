@@ -1,0 +1,12 @@
+##
+## The base-any database for ppc64, Architecture = powerpc64
+## Generated on 2026-08-28 by scripts/gen-mirrorlist
+## Every server below answered 200 for base-any.db when it was written.
+##
+## ⛔ A second list, not a second Server line in the first. This is a
+## separate database, and its path is not $repo/$arch for any value
+## of either, so it cannot be expressed in the same list.
+##
+
+Server = https://repo.archlinuxpower.org/base/any
+Server = https://api.rv.pkgforge.dev/https://repo.archlinuxpower.org/base/any

@@ -49,6 +49,14 @@ jobs:
             pin: bootstrap/keyrings/archlinux-lcpu.pin
             docker_arch: loong64
             platform: linux/loong64
+          # All three PowerPC ports share one trust root, so one of the three
+          # exercises it. ppc64le is the one chosen because it is the only
+          # PowerPC target the standard QEMU setup already covers, so this job
+          # needs no emulator registration of its own.
+          - keyring: archpower
+            pin: bootstrap/keyrings/archpower.pin
+            docker_arch: ppc64le
+            platform: linux/ppc64le
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
