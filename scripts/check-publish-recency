@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+#
+# Refuse to stay quiet when the publish has stopped.
+#
+#   scripts/check-publish-recency
+#
+# ⛔ A scheduled workflow that stops firing produces no run, so no failure, no
+# annotation and no red mark. It has already happened here: scheduled
+# build-deploy.yml runs are daily and unbroken to 2026-07-13, then 45 days of
+# nothing. Every workflow reported state "active" throughout, so the state field
+# is not the signal. HISTORY/reviews/19-a-job-that-stops-running.md.
+#
+# What is measured is the outcome, not the attempt: the newest dated index tag
+# on the published repository, read anonymously from the registry. A run that
+# started and published nothing is as much a stop as a run that never started,
+# and only the tag tells them apart from the runs API.
+#
+# ⛔ Nothing here is a written-down constant.
+#   the tag spelling   comes from scripts/tag-names, asked with a sentinel
+#   the tolerance      comes from scripts/cron-tolerance reading the workflow
+#   the calendar       comes from scripts/date-age, which has the only copy
+#   the year           is read out of the tag, never matched as a prefix
+#
+# ⚠ The year matters. A check written as select(startswith("v2026")) passes for
+# sixteen more months and then silently matches nothing, and a check that
+# matches nothing reads exactly like a repository that has never published.
+#
+# ⚠ What this cannot see: itself not running. A check on a schedule can stop the
+# same way the publish did. scripts/check-schedules-fired is the other half, and
+# the two watch each other. Neither sees GitHub stopping every schedule in the
+# repository at once. That is written down rather than solved.
+#
+# ⚠ Docker Hub is not read. The publish job verifies both registries in the same
+# step and a copy that fails there fails the run loudly, so the silence this
+# guards is the run that never happened, which leaves both registries equally
+# untouched.
+#
+# Environment:
+#   PUBLISH_IMAGE   the repository to read, default ghcr.io/pkgforge-dev/archlinux
+#   PUBLISH_WORKFLOW the workflow whose cron sets the tolerance
+#   RECENCY_TODAY   the date to measure against, YYYY-MM-DD, default today in UTC
+#   RECENCY_TAGS_FILE  read the tag names from this file instead of the registry
+#
+# ⚠ The last two are test seams, used by tests/static/95-publish-watchdog.sh to
+# assert which tag this picks with no network and for years that have not
+# happened yet. ⛔ No workflow sets either, and that is asserted.
+#
+# Exit status is the result:
+#   0  the newest dated index tag is within tolerance
+#   3  the publish has stopped
+#   1  the check itself could not run
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+PUBLISH_IMAGE="${PUBLISH_IMAGE:-ghcr.io/pkgforge-dev/archlinux}"
+PUBLISH_WORKFLOW="${PUBLISH_WORKFLOW:-$REPO_ROOT/.github/workflows/build-deploy.yml}"
+
+die() {
+  echo "check-publish-recency: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null || die "$1 is required"
+}
+need curl
+need jq
+need awk
+
+#---------------------------------------------------------------------------#
+# The tolerance, derived from the schedule that is supposed to be publishing.
+#---------------------------------------------------------------------------#
+[ -f "$PUBLISH_WORKFLOW" ] || die "no publish workflow at $PUBLISH_WORKFLOW" \
+  "reproduce: ls .github/workflows/"
+
+if ! tol_line="$("$REPO_ROOT/scripts/cron-tolerance" "$PUBLISH_WORKFLOW")"; then
+  die "cannot derive a tolerance from $PUBLISH_WORKFLOW" \
+    "the schedule is what says how long silence is normal" \
+    "reproduce: scripts/cron-tolerance $PUBLISH_WORKFLOW"
+fi
+read -r gap tolerance <<< "$tol_line"
+[ -n "${tolerance:-}" ] || die "the tolerance is empty" \
+  "reproduce: scripts/cron-tolerance $PUBLISH_WORKFLOW"
+
+echo "check-publish-recency: the schedule's largest gap is $gap day(s), so tolerance is $tolerance days" >&2
+
+#---------------------------------------------------------------------------#
+# The shape of a dated index tag. Asked for with a sentinel rather than written
+# down, so a change to the tag family in scripts/tag-names is followed here
+# instead of leaving this reading a name nothing creates.
+#---------------------------------------------------------------------------#
+SENTINEL=DATEMARK
+shape="$("$REPO_ROOT/scripts/tag-names" index "$SENTINEL" x \
+  | awk -v s="$SENTINEL" 'index($0, s) { sub(/^x:/, ""); print; exit }')"
+[ -n "$shape" ] || die "scripts/tag-names index prints no dated tag" \
+  "the sentinel was $SENTINEL and no line carried it" \
+  "reproduce: scripts/tag-names index $SENTINEL x"
+
+prefix="${shape%%"$SENTINEL"*}"
+suffix="${shape##*"$SENTINEL"}"
+echo "check-publish-recency: a dated index tag is ${prefix}<date>${suffix}" >&2
+
+#---------------------------------------------------------------------------#
+# Every tag on the published repository, read anonymously. Same path as
+# scripts/check-anchor-floor, including the guard that a 200 carrying no name
+# field is not a tag list.
+#---------------------------------------------------------------------------#
+registry="${PUBLISH_IMAGE%%/*}"
+repo="${PUBLISH_IMAGE#*/}"
+case "$registry" in
+  *.* | localhost) ;;
+  *) die "PUBLISH_IMAGE must carry a registry host: $PUBLISH_IMAGE" ;;
+esac
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+# ⚠ RECENCY_TAGS_FILE replaces the registry with a file of tag names, one per
+# line. It exists so tests/static/95-publish-watchdog.sh can assert which tag
+# this picks, without a network and for years that have not happened yet.
+# ⛔ No workflow sets it, and the same test asserts that: a seam something in CI
+# can take is a way for this check to pass without reading anything.
+if [ -n "${RECENCY_TAGS_FILE:-}" ]; then
+  [ -f "$RECENCY_TAGS_FILE" ] || die "no such tag file: $RECENCY_TAGS_FILE"
+  tr -d '\r' < "$RECENCY_TAGS_FILE" | awk 'NF' > "$work/tags.txt"
+  echo "check-publish-recency: tags read from $RECENCY_TAGS_FILE, not from a registry" >&2
+else
+  token="$(curl -sS --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
+    "https://$registry/token?scope=repository:$repo:pull&service=$registry" \
+    | jq -r '.token // empty' | tr -d '\r')"
+  [ -n "$token" ] || die "no anonymous pull token from $registry for $repo" \
+    "the tag list needs no account" \
+    "reproduce: curl -sS \"https://$registry/token?scope=repository:$repo:pull&service=$registry\""
+
+  # ⚠ n=1000. The default page is a subset and is not ordered newest first, so a
+  # check reading the default page can miss the newest tag entirely and report a
+  # stop that did not happen.
+  if ! curl -sS --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 5 \
+       -H "Authorization: Bearer $token" \
+       "https://$registry/v2/$repo/tags/list?n=1000" -o "$work/tags.json"; then
+    die "cannot read the tag list for $repo from $registry" \
+      "reproduce: curl -sS -H 'Authorization: Bearer <token>' https://$registry/v2/$repo/tags/list?n=1000"
+  fi
+
+  name="$(jq -r '.name // empty' "$work/tags.json" | tr -d '\r')"
+  if [ -z "$name" ]; then
+    echo "check-publish-recency: the tag list from $registry has no name field" >&2
+    awk 'NR <= 10 { print "  " substr($0, 1, 200) }' "$work/tags.json" >&2
+    die "the response is not a tag list, so recency cannot be read" \
+      "⛔ passing here would switch this guard off on a transient" \
+      "reproduce: curl -sS -H 'Authorization: Bearer <token>' https://$registry/v2/$repo/tags/list?n=1000"
+  fi
+
+  jq -r '.tags[]? // empty' "$work/tags.json" | tr -d '\r' | awk 'NF' > "$work/tags.txt"
+fi
+
+tag_count="$(awk 'END { print NR + 0 }' "$work/tags.txt")"
+if [ "$tag_count" -eq 0 ]; then
+  die "$repo answered a tag list naming itself and holding no tags" \
+    "a repository consumers pull from is never empty, so this is not a first publish" \
+    "reproduce: curl -sS -H 'Authorization: Bearer <token>' https://$registry/v2/$repo/tags/list?n=1000"
+fi
+
+#---------------------------------------------------------------------------#
+# The newest dated index tag.
+#
+# ⭐ The date in a tag is zero padded, so comparing two of them as text gives the
+# same order as comparing them as dates, for every year. No calendar arithmetic
+# is needed to pick the newest, and none is done here.
+#---------------------------------------------------------------------------#
+report="$(awk -v prefix="$prefix" -v suffix="$suffix" '
+  BEGIN {
+    plen = length(prefix)
+    slen = length(suffix)
+    best = ""
+    bestdate = ""
+    seen = 0
+  }
+
+  {
+    tag = $0
+    if (plen > 0 && substr(tag, 1, plen) != prefix) next
+    if (slen > 0 && substr(tag, length(tag) - slen + 1) != suffix) next
+    core = substr(tag, plen + 1, length(tag) - plen - slen)
+
+    # ⛔ The date is recognised by its shape, never matched as a literal prefix.
+    # A check written as startswith("v2026") matches nothing from the first of
+    # January, and matching nothing reads exactly like a repository that has
+    # never published.
+    if (core !~ /^[0-9][0-9][0-9][0-9]\.[0-9][0-9]\.[0-9][0-9]$/) next
+    split(core, p, ".")
+    if (p[2] + 0 < 1 || p[2] + 0 > 12 || p[3] + 0 < 1 || p[3] + 0 > 31) next
+
+    seen++
+    if (core > bestdate) { bestdate = core; best = tag }
+  }
+
+  END {
+    if (seen == 0) { print "none none 0" ; exit }
+    printf "%s %s %d\n", best, bestdate, seen
+  }' "$work/tags.txt")"
+
+read -r newest newest_date dated_count <<< "$report"
+
+if [ "$newest" = none ]; then
+  die "no dated index tag on $PUBLISH_IMAGE" \
+    "read $tag_count tags and none matched ${prefix}<date>${suffix}" \
+    "either the tag family changed and scripts/tag-names was not the authority for it," \
+    "or this repository has never published, and neither is a normal state" \
+    "reproduce: scripts/tag-names index 1970.01.01 $PUBLISH_IMAGE"
+fi
+
+#---------------------------------------------------------------------------#
+# How old it is. The calendar arithmetic has one home, scripts/date-age.
+#---------------------------------------------------------------------------#
+today="${RECENCY_TODAY:-$(date -u +%Y-%m-%d)}"
+case "$today" in
+  [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+  *) die "RECENCY_TODAY is not YYYY-MM-DD: $today" ;;
+esac
+
+# The tag spells its date with dots, and a date is spelled with dashes.
+if ! age="$("$REPO_ROOT/scripts/date-age" "$(printf '%s' "$newest_date" | tr . -)" "$today")"; then
+  die "cannot measure the age of $newest" \
+    "reproduce: scripts/date-age $(printf '%s' "$newest_date" | tr . -) $today"
+fi
+
+echo "check-publish-recency: $dated_count dated index tag(s), newest $newest" >&2
+
+echo "check-publish-recency: newest dated index tag is $newest, $age day(s) old on $today" >&2
+
+if [ "$age" -lt 0 ]; then
+  die "the newest dated index tag is $((0 - age)) day(s) in the future: $newest" \
+    "a tag dated ahead of today means the clock or the tag is wrong" \
+    "reproduce: scripts/check-publish-recency"
+fi
+
+if [ "$age" -le "$tolerance" ]; then
+  echo "check-publish-recency: $newest is $age day(s) old, within $tolerance"
+  exit 0
+fi
+
+echo "check-publish-recency: the publish has stopped" >&2
+echo "  newest dated index tag: $newest on $PUBLISH_IMAGE" >&2
+echo "  age: $age days, tolerance: $tolerance days, measured on $today" >&2
+echo "  the schedule in $(basename "$PUBLISH_WORKFLOW") has a largest gap of $gap day(s)" >&2
+echo "  ⛔ A schedule that stops firing produces no run and no red mark. This is" >&2
+echo "  that red mark. It has happened before: 45 days of silence to 2026-08-27," >&2
+echo "  with every workflow reporting state active throughout." >&2
+echo "  Next: check whether build-deploy.yml ran at all, and if it did, whether" >&2
+echo "  the publish job created tags." >&2
+echo "  reproduce: gh run list --workflow=build-deploy.yml --limit 10" >&2
+exit 3

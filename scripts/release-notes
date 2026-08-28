@@ -8,11 +8,20 @@
 # ⛔ Generated, never hand written. A body somebody types is a second record of
 # what the release contains, and it goes stale on the first bump while still
 # reading as authoritative. Everything below is read out of the evidence files
-# scripts/build-pacman-static wrote next to each binary.
+# the build jobs wrote next to each asset.
 #
-# ⛔ It refuses to write a body for an asset with no evidence file, and for an
-# evidence file whose binary was never run. A release asset nobody executed is
-# not evidence that it works.
+# ⛔ It refuses to write a body for an asset with no evidence file, for an
+# evidence file whose binary was never run, and for a rootfs whose evidence
+# records no packages. A release asset nobody exercised is not evidence.
+#
+# Five asset families, and each is checked for the thing that makes it useless
+# if it is wrong:
+#
+#   pacman-static-<arch>       ran under its emulator and reported a version
+#   rootfs-<arch>.tar.gz       its evidence records packages and an anchor
+#   bootstrap-set-<arch>.txt   present for every architecture that has a rootfs
+#   oci-<arch>.tar.gz          present for every architecture that has a rootfs
+#   manifest.json              valid JSON carrying this repository's schema name
 #
 # The body goes to stdout. SHA256SUMS is written into the asset directory,
 # because the release carries it as an asset of its own.
@@ -42,6 +51,14 @@ need() {
 need jq
 need sha256sum
 
+# human_size BYTES -> a MiB figure, one decimal
+human_size() {
+  awk -v b="$1" 'BEGIN { printf "%.1f MiB", b / 1048576 }'
+}
+
+#---------------------------------------------------------------------------#
+# The static pacman binaries.
+#---------------------------------------------------------------------------#
 binaries="$(find "$dir" -maxdepth 1 -type f -name 'pacman-static-*' ! -name '*.json' | LC_ALL=C sort)"
 [ -n "$binaries" ] || die "no pacman-static-* binary in $dir" \
   "the release would be published with nothing in it" \
@@ -65,13 +82,44 @@ orphans="$(find "$dir" -maxdepth 1 -type f -name 'pacman-static-*.json' \
 [ -z "$orphans" ] || die "these evidence files arrived with no binary: $(printf '%s' "$orphans" | tr '\n' ' ')" \
   "check it with: ls -1 $dir"
 
+#---------------------------------------------------------------------------#
+# The rootfs archives.
+#
+# ⚠ Optional as a family. A release cut before release.yml existed carries only
+# the binaries, and this has to describe what is there rather than fail on what
+# is not. ⛔ But an archive present without its evidence is a lost upload and is
+# refused, which is the same rule the binaries get.
+#---------------------------------------------------------------------------#
+roots="$(find "$dir" -maxdepth 1 -type f -name 'rootfs-*.tar.gz' | LC_ALL=C sort)"
+root_missing=""
+while IFS= read -r r; do
+  [ -n "$r" ] || continue
+  a="$(basename "$r")"; a="${a#rootfs-}"; a="${a%.tar.gz}"
+  [ -f "$dir/rootfs-$a.json" ] || root_missing="$root_missing rootfs-$a.json"
+  [ -f "$dir/bootstrap-set-$a.txt" ] || root_missing="$root_missing bootstrap-set-$a.txt"
+  [ -f "$dir/oci-$a.tar.gz" ] || root_missing="$root_missing oci-$a.tar.gz"
+done <<< "$roots"
+[ -z "$root_missing" ] || die "a rootfs archive arrived without its companions:$root_missing" \
+  "each architecture publishes an archive, its evidence, its package set and an OCI archive" \
+  "check it with: ls -1 $dir"
+
+#---------------------------------------------------------------------------#
+# SHA256SUMS, over everything the release carries.
+#
 # ⚠ Relative names, so the file reads the way sha256sum -c expects beside the
 # assets it names. -print0 and xargs -0 rather than an unquoted expansion, which
-# would split on whitespace in a name.
-( cd "$dir" && find . -maxdepth 1 -type f -name 'pacman-static-*' -printf '%f\0' \
+# would split on whitespace in a name. ⛔ SHA256SUMS itself is excluded: a
+# checksum file that lists itself cannot verify.
+#---------------------------------------------------------------------------#
+( cd "$dir" && find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -printf '%f\0' \
     | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS )
 
+summed="$(awk 'NF { n++ } END { print n + 0 }' "$dir/SHA256SUMS")"
+[ "$summed" -gt 0 ] || die "SHA256SUMS came out empty" \
+  "check it with: ls -1 $dir"
+
 count="$(awk 'NF { n++ } END { print n + 0 }' <<< "$binaries")"
+root_count="$(awk 'NF { n++ } END { print n + 0 }' <<< "$roots")"
 
 # The pacman commit is one value for the whole release. Two different ones would
 # mean the matrix did not build from one source, which is worse than a failure
@@ -86,23 +134,129 @@ n_commits="$(awk 'NF { n++ } END { print n + 0 }' <<< "$commits")"
   "one release is one source, or the binaries in it are not comparable" \
   "check it with: jq -r .pacman_commit $dir/pacman-static-*.json"
 
-describe="$(jq -r .pacman_describe_pinned "$(printf '%s\n' "$binaries" | awk 'NR == 1').json")"
+first_ev="$(printf '%s\n' "$binaries" | awk 'NR == 1').json"
+describe="$(jq -r .pacman_describe_pinned "$first_ev")"
+signed_tag="$(jq -r '.pacman_signed_tag // "-"' "$first_ev")"
+tag_signer="$(jq -r '.pacman_tag_signer // "-"' "$first_ev")"
 
+#---------------------------------------------------------------------------#
+# The body.
+#
 # ⛔ The static prose goes through quoted heredocs, so nothing in it is a shell
 # expansion and the backticks stay literal. A printf of the same text reads as
 # an attempted command substitution to a linter, and is one editing slip away
 # from being one.
-printf '## Static pacman, %s\n' "$tag"
+#---------------------------------------------------------------------------#
+printf '## %s\n' "$tag"
 cat <<'INTRO'
+
+Everything this repository produces that is not a container tag: a static
+pacman, a root filesystem, a resolved package set and a loadable image archive
+for every architecture, plus one index of every published tag.
+
+⚠ This is a version of the tooling and the assets. It is not an image version.
+Images are tagged by date, `v2026.08.28` shape, and that namespace is separate.
+
+INTRO
+
+#---------------------------------------------------------------------------#
+if [ "$root_count" -gt 0 ]; then
+  cat <<'ROOTS'
+### Root filesystems
+
+`rootfs-<arch>.tar.gz` is the image filesystem as one gzipped tar. It needs no
+container runtime: untar it and chroot into it, or `podman import` it.
+
+`oci-<arch>.tar.gz` is the same image with its metadata, for a host with a
+runtime and no network:
+
+```bash
+podman load < oci-amd64.tar.gz
+```
+
+`bootstrap-set-<arch>.txt` is the resolved package set as `name version sha256`,
+so the same root can be rebuilt without any of this repository's tooling.
+
+ROOTS
+
+  printf '| architecture | packages | anchor | rootfs | image | sha256 |\n'
+  printf '| --- | --- | --- | --- | --- | --- |\n'
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    a="$(basename "$r")"; a="${a#rootfs-}"; a="${a%.tar.gz}"
+    ev="$dir/rootfs-$a.json"
+    pkgs="$(jq -r '.package_count' "$ev")"
+    [ "$pkgs" -gt 0 ] || die "the evidence for rootfs-$a records no packages" \
+      "an empty root is not a release asset" \
+      "check it with: jq .package_count $ev"
+    anchor="$(jq -r '.anchor.name + " " + .anchor.version' "$ev")"
+    # ⚠ sha256sum writes the name with a leading * in binary mode and with none
+    # in text mode, and a ./ prefix survives some find invocations. All three are
+    # stripped before the comparison, because a lookup that silently misses
+    # prints a dash where a checksum belongs and nothing says it missed.
+    sum="$(awk -v n="rootfs-$a.tar.gz" '
+      { f = $2; sub(/^[*]/, "", f); sub(/^[.][/]/, "", f)
+        if (f == n) { print substr($1, 1, 16); exit } }' "$dir/SHA256SUMS")"
+    [ -n "$sum" ] || die "no SHA256SUMS entry for rootfs-$a.tar.gz" \
+      "the checksum file was written from this directory, so a miss is a name mismatch" \
+      "check it with: cat $dir/SHA256SUMS"
+    printf '| %s | %s | %s | %s | %s | %s |\n' \
+      "$a" "$pkgs" "$anchor" \
+      "$(human_size "$(stat -c %s "$r")")" \
+      "$(human_size "$(stat -c %s "$dir/oci-$a.tar.gz")")" \
+      "${sum:--}"
+  done <<< "$roots"
+  printf '\n'
+fi
+
+#---------------------------------------------------------------------------#
+if [ -f "$dir/manifest.json" ]; then
+  schema="$(jq -r '.schema // "-"' "$dir/manifest.json")"
+  [ "$schema" = "docker-archlinux/manifest/1" ] || die "manifest.json carries schema $schema" \
+    "scripts/gen-manifest writes docker-archlinux/manifest/1" \
+    "check it with: jq .schema $dir/manifest.json"
+  mtags="$(jq -r '.tag_count' "$dir/manifest.json")"
+  mres="$(jq -r '.resolved_count' "$dir/manifest.json")"
+  mimg="$(jq -r '.image' "$dir/manifest.json")"
+
+  cat <<'MANIFEST'
+### Every published tag
+
+`manifest.json` lists every tag on the registry with its digest, its platforms
+and its anchor version, read from the registry rather than from what a build
+believed it pushed. It has a stable URL that does not change when a tag does:
+
+```bash
+curl -sSfL --connect-timeout 15 --max-time 120 \
+  https://github.com/pkgforge-dev/docker-archlinux/releases/latest/download/manifest.json \
+  | jq -r '.tags[] | select(.anchor) | "\(.tag) \(.digest)"'
+```
+
+MANIFEST
+  # The backticks are markdown for the release body, not a command substitution.
+  # shellcheck disable=SC2016
+  printf '%s tags on `%s`, %s resolved to a digest.\n\n' "$mtags" "$mimg" "$mres"
+fi
+
+#---------------------------------------------------------------------------#
+cat <<'PACMAN'
+### Static pacman
 
 A statically linked pacman for every architecture this repository builds, built
 from source. No dynamic loader is named, so each binary runs on a system whose
 libc is missing or broken.
 
-INTRO
+PACMAN
+
 printf 'Built from pacman %s, which is %s: the same commit the images in this\n' \
   "$commits" "$describe"
-printf 'release are built from, so the binary and the image agree by construction.\n\n'
+printf 'release are built from, so the binary and the image agree by construction.\n'
+if [ "$signed_tag" != "-" ] && [ "$tag_signer" != "-" ] && [ "$tag_signer" != "NOT VERIFIED" ]; then
+  printf 'Upstream %s is signed by %s, and that signature was checked before the\n' \
+    "$signed_tag" "$tag_signer"
+  printf 'build started. ⚠ It covers the release point, not the nine commits after it.\n'
+fi
+printf '\n'
 
 printf '| asset | machine | size | reported | sha256 |\n'
 printf '| --- | --- | --- | --- | --- |\n'
@@ -135,9 +289,12 @@ bootstrap/pacman-static/sources.pin. Nothing else is fetched.
 
 ### Bootstrapping with it
 
-docs/bootstrap-with-pacman-static.md builds a working Arch root on a host with
-no pacman, no libalpm and no Arch keyring, and ends with an image that passes
-this repository image suite.
+docs/bootstrap-with-pacman-static.md builds an Arch root on a host with no
+pacman, no libalpm and no Arch keyring, and ends with an image that passes this
+repository's image suite.
+
+⚠ That is what the guide is for, not a measurement. Its commands are parsed by
+`tests/static/80-docs-claims.sh` and nothing has executed them end to end.
 
 ### Source
 
@@ -146,9 +303,16 @@ bootstrap/pacman-static/sources.pin names every input by URL and sha256, so the
 exact sources are recoverable from the pin alone.
 
 TAILA
-printf '⚠ %s assets. Every one was executed under its architecture emulator before\n' "$count"
+
+printf -- '- Static pacman binaries: %s. Every one was executed under its architecture\n' "$count"
+printf '  emulator before it was uploaded, and the release job refuses one that was not.\n'
+if [ "$root_count" -gt 0 ]; then
+  printf -- '- Root filesystems: %s. Each came from an image that passed this repository\n' "$root_count"
+  printf '  image suite in the same job that exported it.\n'
+fi
+printf -- '- Files covered by SHA256SUMS: %s.\n' "$summed"
 cat <<'TAILB'
-it was uploaded, and the release job refuses an asset that was not.
-⚠ Every non x86_64 claim here is a qemu-user claim: no target kernel and no
-target page size.
+
+⚠ Every non x86_64 measurement in this release is a qemu-user measurement: no
+target kernel and no target page size.
 TAILB

@@ -550,3 +550,49 @@ jobs:
           else
             echo "::notice::publish_hub is false, so no Docker Hub tag was created or verified"
           fi
+
+  #----------------------------------------------------------------------------------#
+  # The other half of the publish watchdog.
+  #
+  # ⛔ freshness-publish.yml watches whether this workflow's schedule is still
+  # firing. Nothing would watch whether that one's is, so this runs the same
+  # check and the two become each other's witness. A schedule that stops
+  # produces no run, so the only place its silence can be seen is a run of
+  # something else.
+  #
+  # ⛔ needs: nothing, and nothing needs it. A broken watchdog must not be able
+  # to stop a publish: the run goes red while every tag is still created. That
+  # is the correct shape for an alarm that is not a gate.
+  #
+  # ⚠ What this cannot see is itself. If the schedule on this workflow stops,
+  # this job stops with it, which is exactly why the check also lives in a
+  # workflow on a different schedule.
+  #----------------------------------------------------------------------------------#
+  watchdog:
+    name: Check the schedules are still firing
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Every schedule in the repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          scripts/check-schedules-fired
+          rc=$?
+          case "$rc" in
+            0) echo "::notice::every schedule has fired within its own tolerance" ;;
+            3)
+              echo "::error::at least one schedule has stopped firing"
+              echo "⛔ The publish itself is unaffected: this job gates nothing." >&2
+              exit 1
+              ;;
+            *) echo "the schedule check could not run" >&2; exit 1 ;;
+          esac

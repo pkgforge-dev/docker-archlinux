@@ -1,5 +1,12 @@
 # Review 23: a task whose scope was understated
 
+⚠ **Scratch paths in this document** name fixtures under `.tmp/`, which is
+gitignored and wiped between sessions. They record what a measurement was
+taken against, not something a reader can open. ⛔ Nothing in the
+repository depends on them. To re-run one, copy the tree to a scratch
+directory, rebuild the fixture the surrounding text describes, and point the
+command at that copy.
+
 **Lens.** The brief described TODO 10 as two false comments and one stale name.
 The same grep it supplied found four false statements and the stale name. This
 review asks how a task description came to undercount what it described, whether
@@ -17,7 +24,7 @@ was wrong.
 
 ## What was opened
 
-- `.tmp/PROMPT_COMPLETION.md`, TODO 10 as it stood. ⚠ It lives in a gitignored
+- The brief, TODO 10 as it stood. ⚠ At the time it lived in a gitignored
   directory, so no line count here can be checked later.
 - `tests/image/50-consumer-contract.sh`, whole, 183 lines.
 - `Dockerfile`, lines 20 to 32.

@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+#
+# One JSON listing every published tag, its digest, its platforms and its anchor.
+#
+#   scripts/gen-manifest ghcr.io/pkgforge-dev/archlinux manifest.json
+#
+# ⭐ The framing: a consumer who never runs container tooling still needs to know
+# what exists and what it resolves to. Released as an asset, so it has a stable
+# URL that does not change when a tag does:
+#
+#   https://github.com/pkgforge-dev/docker-archlinux/releases/latest/download/manifest.json
+#
+# ⛔ Read from the registry, never assembled from what a build believed it
+# pushed. A manifest generated from intent describes the tags a run meant to
+# create; this describes the ones that are there.
+#
+# ⚠ What it costs. One HEAD per tag, and both registries hold 176 as of
+# 2026-08-28, so a full pass is a few hundred requests rather than the ~2600 a
+# blob sweep would take. Rate limiting is treated as a failure, not skipped.
+#
+# ⚠ Anchors are read out of the tag names, not resolved against a package
+# database. The <alias>-<anchor> family is where that information already lives.
+#
+# Environment:
+#   MANIFEST_TAGS_FILE  read tag names from this file instead of the registry.
+#                       ⚠ Test seam. tests/static/96-release-assets.sh uses it.
+#
+# Exit status:
+#   0  a manifest was written
+#   1  the manifest could not be built
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+die() {
+  echo "gen-manifest: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null || die "$1 is required"
+}
+need curl
+need jq
+need awk
+
+image="${1:-}"
+out="${2:-}"
+[ -n "$image" ] && [ -n "$out" ] || die "usage: gen-manifest <image> <out.json>"
+
+registry="${image%%/*}"
+repo="${image#*/}"
+case "$registry" in
+  *.* | localhost) ;;
+  *) die "the image must carry a registry host: $image" ;;
+esac
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+#---------------------------------------------------------------------------#
+# The tag list.
+#---------------------------------------------------------------------------#
+if [ -n "${MANIFEST_TAGS_FILE:-}" ]; then
+  [ -f "$MANIFEST_TAGS_FILE" ] || die "no such tag file: $MANIFEST_TAGS_FILE"
+  tr -d '\r' < "$MANIFEST_TAGS_FILE" | awk 'NF' > "$work/tags.txt"
+  token=""
+  echo "gen-manifest: tags read from $MANIFEST_TAGS_FILE, no digests will be resolved" >&2
+else
+  token="$(curl -sS --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
+    "https://$registry/token?scope=repository:$repo:pull&service=$registry" \
+    | jq -r '.token // empty' | tr -d '\r')"
+  [ -n "$token" ] || die "no anonymous pull token from $registry for $repo" \
+    "reproduce: curl -sS \"https://$registry/token?scope=repository:$repo:pull&service=$registry\""
+
+  curl -sS --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 5 \
+    -H "Authorization: Bearer $token" \
+    "https://$registry/v2/$repo/tags/list?n=1000" -o "$work/tags.json" \
+    || die "cannot read the tag list for $repo from $registry"
+
+  jq -e '.name' "$work/tags.json" > /dev/null 2>&1 \
+    || die "the response from $registry is not a tag list" \
+      "⛔ a body with no name field is an error object, and reading it as an empty" \
+      "  tag list would publish a manifest saying nothing is published" \
+      "reproduce: curl -sS -H 'Authorization: Bearer <token>' https://$registry/v2/$repo/tags/list?n=1000"
+
+  jq -r '.tags[]? // empty' "$work/tags.json" | tr -d '\r' | awk 'NF' > "$work/tags.txt"
+fi
+
+total="$(awk 'END { print NR + 0 }' "$work/tags.txt")"
+[ "$total" -gt 0 ] || die "$repo has no tags" \
+  "a repository consumers pull from is never empty" \
+  "reproduce: curl -sS -H 'Authorization: Bearer <token>' https://$registry/v2/$repo/tags/list?n=1000"
+
+echo "gen-manifest: $total tags on $image" >&2
+
+#---------------------------------------------------------------------------#
+# The anchor a tag name carries, if any.
+#
+# ⛔ The alias list comes from scripts/tag-names and the architecture set from
+# the build matrix, so adding an architecture adds it here with no edit. A third
+# copy of that table would be a third thing to keep in step.
+#---------------------------------------------------------------------------#
+: > "$work/aliases.txt"
+while read -r docker_arch; do
+  [ -n "$docker_arch" ] || continue
+  "$REPO_ROOT/scripts/tag-names" aliases "$docker_arch" | tr ' ' '\n' | awk -v a="$docker_arch" 'NF { print $0 "\t" a }' \
+    >> "$work/aliases.txt"
+done <<< "$(awk '
+  /^[[:space:]]*-[[:space:]]+docker_arch:/ {
+    s = $0
+    sub(/^[^:]*:[[:space:]]*/, "", s)
+    sub(/[[:space:]]*$/, "", s)
+    print s
+  }
+' "$REPO_ROOT/.github/workflows/build-deploy.yml" | tr -d '\r' | LC_ALL=C sort -u)"
+
+alias_count="$(awk 'END { print NR + 0 }' "$work/aliases.txt")"
+[ "$alias_count" -gt 0 ] || die "no tag aliases could be read" \
+  "the architecture set is read from the build matrix and it produced nothing" \
+  "reproduce: scripts/tag-names aliases amd64"
+
+#---------------------------------------------------------------------------#
+# Resolve each tag.
+#---------------------------------------------------------------------------#
+: > "$work/rows.tsv"
+resolved=0
+while IFS= read -r tag; do
+  [ -n "$tag" ] || continue
+
+  # The alias and the anchor this tag name encodes, if it encodes either.
+  #
+  # ⛔ Two separate questions. Which architecture a tag belongs to is answered by
+  # the alias prefix, and every per architecture tag has one: the rolling
+  # aarch64, the dated aarch64-v2026.08.28 and the pinned
+  # aarch64-7.1.0.r9.g54d9411-2 are all arm64. Which anchor it names is answered
+  # only by the third shape.
+  #
+  # ⚠ The dated family and the anchor family share the prefix, and only the
+  # second is an anchor. An anchor starts with a digit and the dated one with a
+  # v. Answering the first question with the second question's test drops every
+  # dated per architecture tag out of the manifest's architecture index.
+  #
+  # ⚠ Longest alias wins. ppc, ppc64 and ppc64le are three architectures whose
+  # names prefix each other, and so are the three powerpc spellings.
+  read -r alias_name docker_arch anchor <<< "$(awk -F'\t' -v t="$tag" '
+    {
+      if (t == $1) {
+        if (length($1) > length(best)) { best = $1; best_arch = $2; best_rest = "-" }
+        next
+      }
+      p = $1 "-"
+      if (index(t, p) == 1 && length($1) > length(best)) {
+        rest = substr(t, length(p) + 1)
+        best = $1
+        best_arch = $2
+        best_rest = (rest ~ /^[0-9]/) ? rest : "-"
+      }
+    }
+    END { printf "%s %s %s\n", (best == "" ? "-" : best), (best_arch == "" ? "-" : best_arch), (best_rest == "" ? "-" : best_rest) }
+  ' "$work/aliases.txt")"
+
+  digest="-"
+  platforms="-"
+  if [ -n "$token" ]; then
+    hdr="$work/hdr.txt"
+    if ! curl -sS --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
+         -o "$work/body.json" -D "$hdr" \
+         -H "Authorization: Bearer $token" \
+         -H 'Accept: application/vnd.oci.image.index.v1+json' \
+         -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
+         -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+         -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+         "https://$registry/v2/$repo/manifests/$tag"; then
+      die "cannot resolve $tag on $image" \
+        "reproduce: curl -sSI -H 'Authorization: Bearer <token>' https://$registry/v2/$repo/manifests/$tag"
+    fi
+
+    # ⛔ A 429 arrives as a body, not as a curl failure. Reading it as a manifest
+    # would record a tag with no digest and call the manifest complete.
+    status="$(awk 'tolower($1) == "http/1.1" || tolower($1) == "http/2" { code = $2 } END { print code }' "$hdr")"
+    case "$status" in
+      200) ;;
+      *) die "$registry answered $status for $tag" \
+           "⛔ rate limiting and an expired token both land here, and both would" \
+           "  otherwise be recorded as a tag with no digest" \
+           "reproduce: curl -sSI -H 'Authorization: Bearer <token>' https://$registry/v2/$repo/manifests/$tag" ;;
+    esac
+
+    digest="$(awk 'tolower($1) == "docker-content-digest:" { print $2 }' "$hdr" | tr -d '\r')"
+    [ -n "$digest" ] || die "no Docker-Content-Digest header for $tag" \
+      "reproduce: curl -sSI -H 'Authorization: Bearer <token>' https://$registry/v2/$repo/manifests/$tag"
+
+    platforms="$(jq -r '
+      if .manifests then
+        [ .manifests[].platform
+          | select(. != null and .os != "unknown")
+          | .architecture + (if .variant then "/" + .variant else "" end) ]
+        | sort | join(",")
+      else "single" end' "$work/body.json")"
+    [ -n "$platforms" ] || platforms="-"
+    resolved=$((resolved + 1))
+  fi
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$tag" "$digest" "$platforms" "$alias_name" "$docker_arch" "$anchor" >> "$work/rows.tsv"
+done < "$work/tags.txt"
+
+rows="$(awk 'END { print NR + 0 }' "$work/rows.tsv")"
+[ "$rows" = "$total" ] || die "read $total tags and produced $rows rows" \
+  "reproduce: scripts/gen-manifest $image /tmp/m.json"
+
+jq -n \
+  --arg image "$image" \
+  --arg registry "$registry" \
+  --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg source_commit "${SOURCE_COMMIT:--}" \
+  --argjson total "$total" \
+  --argjson resolved "$resolved" \
+  --rawfile rows "$work/rows.tsv" \
+  '{
+     schema: "docker-archlinux/manifest/1",
+     image: $image,
+     registry: $registry,
+     generated: $generated,
+     source_commit: $source_commit,
+     tag_count: $total,
+     resolved_count: $resolved,
+     tags: (
+       $rows
+       | split("\n")
+       | map(select(length > 0))
+       | map(split("\t"))
+       | map({
+           tag:      .[0],
+           digest:   .[1],
+           platforms: (if .[2] == "-" or .[2] == "" then [] elif .[2] == "single" then ["single"] else (.[2] | split(",")) end),
+           alias:    (if .[3] == "-" then null else .[3] end),
+           docker_architecture: (if .[4] == "-" then null else .[4] end),
+           anchor:   (if .[5] == "-" then null else .[5] end)
+         })
+     )
+   }' > "$out"
+
+jq -e . "$out" > /dev/null || die "the generated manifest is not valid JSON: $out"
+
+echo "gen-manifest: wrote $out, $total tags, $resolved resolved to a digest" >&2

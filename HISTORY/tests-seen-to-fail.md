@@ -1,13 +1,21 @@
 # Every test, and the fault that makes it fail
 
+⚠ **Scratch paths in this document** name fixtures under `.tmp/`, which is
+gitignored and wiped between sessions. They record what a measurement was
+taken against, not something a reader can open. ⛔ Nothing in the
+repository depends on them. To re-run one, copy the tree to a scratch
+directory, rebuild the fixture the surrounding text describes, and point the
+command at that copy.
+
 ⭐ **A test that has never been seen to fail is not known to work.** A test can
 pass because the thing it guards is healthy, or because it asserts nothing. The
 two look identical in a green run.
 
 Each row below records a fault that was injected into a scratch copy of the
 tree, and the assertion that caught it. Measured 2026-08-26, the `45` and `60`
-rows on 2026-08-27, and the `68`, `gen-evidence`, `90` and port keyring rows on
-2026-08-28. Nothing here was injected into the repository itself.
+rows on 2026-08-27, the `68`, `gen-evidence`, `90` and port keyring rows on
+2026-08-28, and the publish watchdog, release asset and signed tag rows on
+2026-08-29. Nothing here was injected into the repository itself.
 
 ⚠ A quoted failure message is what that run printed. Counts inside one, such as
 the number of `fail` calls, are the value at the time and are not kept current.
@@ -101,6 +109,60 @@ loop was skipped before it could be reported. The assertion could not fail. It
 now carries the words it did read alongside a flag, and the fault above is what
 exposed that. ⛔ A test written and never broken on purpose would have shipped
 saying nothing.
+
+## The publish watchdog and the release assets
+
+Injected 2026-08-29 into a scratch copy of the tree. `scripts/cron-tolerance`
+and `scripts/date-age` are pure functions of their inputs, so those rows are
+wrong answers rather than broken files.
+
+| test | fault injected | caught by |
+| --- | --- | --- |
+| `95-publish-watchdog.sh` | `date-age` loses the divisible-by-400 term, so 1900 and 2000 both become leap years | `not ok 12 - date-age 2000-02-28 2000-03-01 is 2`, `not ok 13 - date-age 1900-02-28 1900-03-01 is 1` |
+| `95` | `cron-tolerance` reads day-of-month and day-of-week as AND where POSIX says OR | `not ok 30 - cron '0 0 1 * 1' gives gap and tolerance '7 15'` |
+| `95` | an out of range cron field is widened to `*` instead of refused, so `0 0 32 * *` reports a daily schedule | `not ok 33`, `not ok 34`, `not ok 35 - cron '...' is refused rather than guessed at` |
+| `95` | the tag filter anchored on a literal year, `if (tag !~ /^v2026/)`, which is the worked example in the brief this session was given | `not ok 38` through `not ok 41`, including `a run in 2087 still finds the 2030 tag and calls it a stop` |
+| `95` | `check-schedules-fired` given a hand maintained list of workflows to watch | `not ok 25 - scripts/check-schedules-fired names no workflow file` |
+| `95` | `needs: [resolve]` added to the watchdog job in `build-deploy.yml` | `not ok 51 - the watchdog job gates nothing and is gated by nothing` |
+| `95` | `build-deploy.yml` stops running `scripts/check-schedules-fired` | `not ok 50 - build-deploy.yml runs scripts/check-schedules-fired` |
+| `95` | `freshness-publish.yml` sets `RECENCY_TODAY` in a step env, taking the test seam in CI | `not ok 43 - no workflow sets a test seam on either check` |
+| `65-fetch-policy.sh` | `--keyserver-options timeout=30` removed from the keyserver fetch | `not ok 2 - all 1 keyserver fetches set a timeout`, naming `scripts/build-pacman-static:664` |
+| `85-pacman-static-pin.sh` | the `tag` line deleted from the pin | `not ok 6 - the pin names the signed tag` |
+| `85` | the tag pinned by name with no object sha | `not ok 6 - the pin names the signed tag by name and by object sha` |
+| `85` | a signer shortened from a fingerprint to a 16 character key id | `not ok 7 - every signer is a full 40 character fingerprint` |
+| `85` | the second keyserver deleted, leaving one | `not ok 8 - at least two hkps keyservers are pinned` |
+| `85` | `build-pacman-static` stops reading the `keyserver` records | `not ok 11 - scripts/build-pacman-static reads the keyserver records` |
+| `85` | `pacman-static.yml` stops refusing an asset whose tag was not verified | `not ok 12` |
+| `96-release-assets.sh` | `ppc64le` removed from the release matrix | `not ok 12 - the release matrix names the same architectures as the build matrix` |
+| `96` | the publish job stops needing `rootfs` | `not ok 8 - the publish job needs every producing job` |
+| `96` | `gen-manifest` reads an anchor from the dated tag shape too | `not ok 19 - gen-manifest reads an anchor only from the anchor tag shape` |
+| `96` | `gen-manifest` stops assigning an architecture to dated per-architecture tags | `not ok 18`, `not ok 20` |
+| `release-notes` | one `.json` removed from an asset directory | refuses with `these binaries arrived with no evidence file` |
+| `release-notes` | a `rootfs-*.tar.gz` with no evidence, package set or OCI archive | refuses with `a rootfs archive arrived without its companions` |
+| `release-notes` | `manifest.json` schema changed | refuses with `manifest.json carries schema something/else` |
+| `release-notes` | an evidence file edited to `package_count: 0` | refuses with `the evidence for rootfs-amd64 records no packages` |
+
+### The signed tag verification
+
+Driven against the real `verify_pacman_tag` from `scripts/build-pacman-static`,
+in an Alpine container, 2026-08-29.
+
+| fault injected | result |
+| --- | --- |
+| none | `v7.1.0 verified: signed by Allan McRae (6645B0A8C7005E78DB1D7864F99FFE0FEAE999BD)` |
+| the pinned tag object sha set to zeroes, standing for a moved tag | `the tag v7.1.0 is object 208ff2b5..., the pin says 0000...`, exit 1 |
+| the pin names a signer who did not sign this tag | `no valid signature on v7.1.0`, `NO_PUBKEY F99FFE0FEAE999BD`, exit 1 |
+| the `tag` line deleted from the pin | `the pin names no tag`, exit 1 |
+| `PACMAN_TAG_VERIFY=skip` | `the signed tag is NOT verified`, `TAG_VERIFIED=SKIPPED`, exit 0, and `pacman-static.yml` refuses that asset |
+| gpg removed from the host | `gpg is required to verify the signed tag`, exit 1 |
+
+⛔ **One branch is not exercised and saying so costs one line.** The guard that
+refuses a `VALIDSIG` whose fingerprint the pin does not name cannot be reached
+by fault injection: the keyring is wiped at the start of every run and the only
+keys in it are the ones the pin's own `signer` lines imported, so a signature
+from an unpinned key always fails earlier with `NO_PUBKEY`. It is defence
+against a host with a pre-populated keyring or gpg configured to retrieve keys
+automatically, and it has been read but not fired.
 
 ## Image suite
 

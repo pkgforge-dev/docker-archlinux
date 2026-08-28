@@ -171,7 +171,7 @@ sandbox applies to the download user, and with no `DownloadUser` configured the
 path is not taken. A full `pacman -Syu` inside the image succeeds, which is the
 measurement rather than the reasoning.
 
-⚠ ⛔ **Adding `DownloadUser` later would pull this in.** Recorded so that
+⛔ **Adding `DownloadUser` later would pull this in.** Recorded so that
 decision is taken with the landlock requirement known.
 
 ## Other mechanisms read and not adopted

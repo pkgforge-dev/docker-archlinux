@@ -15,7 +15,9 @@
 #   source   NAME  VERSION  URL  SHA256
 #   pacman   COMMIT  URL
 #   describe VALUE
+#   tag      NAME  TAG-OBJECT-SHA
 #   signer   FINGERPRINT  NAME
+#   keyserver URL
 #
 # ⛔ The build fails on a sha256 that does not match. It does not warn and
 # continue, and it does not re-fetch from somewhere else.
@@ -93,13 +95,40 @@ source libseccomp 2.6.1 https://github.com/seccomp/libseccomp/releases/download/
 # any published image.
 #
 # ⚠ The signed tag is checked as well as the commit, which is the one place this
-# recipe takes both halves of the choice policy 10 describes. The two release
-# manager fingerprints below sign v7.1.0. The commit is what decides the
-# checkout; the signature is what says upstream published that history.
-# scripts/build-pacman-static verifies the tag when gpg is on the host and says
-# NOT VERIFIED when it is not. ⛔ It never silently skips.
+# recipe takes both halves of the choice policy 10 describes. The commit is what
+# decides the checkout; the signature is what says upstream published that
+# history under a release manager's key.
+#
+# ⛔ What the tag proves and what it does not, because the two are different and
+# the difference is easy to overstate. v7.1.0 is an annotated tag object whose
+# target is 5683f8477a0afcc6b331766175a83445b2dcfe89, and the pinned build commit
+# is nine commits later. So the signature says a release manager published the
+# 7.1.0 release point. ⚠ It does not say anyone signed the nine commits after
+# it. Those are covered by the commit hash and by nothing else.
+#
+# ⛔ The tag object's own sha is pinned, not just its name. A tag name can be
+# moved and re-pushed; an object sha cannot. Policy 10 names dereferencing the
+# tag object as the step that gets this right.
+#
+# ⛔ scripts/build-pacman-static fetches the tag, imports the signers by
+# fingerprint from the keyserver below, and requires a VALIDSIG naming one of
+# them. It never continues on a failure and it never skips. Taking a build
+# without it needs PACMAN_TAG_VERIFY=skip, which is a named, deliberate act and
+# is recorded in the evidence file. ⚠ Two keyservers are pinned rather than one,
+# so a single outage does not stop a release. Neither is trusted: what each
+# returns is checked against the fingerprint before it is used.
+#
+# ⚠ The fingerprint decides who a key belongs to, and the name beside it is a
+# label for a reader. ⛔ The two names below were swapped until 2026-08-29, and
+# nothing noticed because nothing read these lines. Re-derived on that date by
+# importing each fingerprint and reading its uid:
+#   gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys <fingerprint>
+#   gpg --list-keys --with-colons <fingerprint>
 #---------------------------------------------------------------------------#
 pacman 54d94116164b0b2202c6061c4a59c6f3e70820d8 https://gitlab.archlinux.org/pacman/pacman.git
 describe 7.1.0.r9.g54d9411
-signer 6645B0A8C7005E78DB1D7864F99FFE0FEAE999BD Andrew Gregory
-signer B8151B117037781095514CA7BBDFFC92306B1121 Allan McRae
+tag v7.1.0 208ff2b57e49f2851ce7bca5ac9090c6cb8aa746
+signer 6645B0A8C7005E78DB1D7864F99FFE0FEAE999BD Allan McRae
+signer B8151B117037781095514CA7BBDFFC92306B1121 Andrew Gregory
+keyserver hkps://keyserver.ubuntu.com
+keyserver hkps://keys.openpgp.org

@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+#
+# Refuse to stay quiet when a schedule has stopped firing.
+#
+#   scripts/check-schedules-fired
+#
+# ⛔ Every scheduled workflow in the repository is checked, and the list is
+# discovered from .github/workflows/ rather than written here. Adding a
+# scheduled workflow puts it under this check with no edit, and deleting one
+# takes it out with no edit. ⚠ A watcher with a hand maintained list of what it
+# watches stops watching the thing somebody forgot to add.
+#
+# Each workflow is measured against its own cron, through
+# scripts/cron-tolerance, so a weekly job is not judged by a daily job's
+# threshold and changing a cron changes the threshold with it.
+#
+# ⭐ This is the other half of scripts/check-publish-recency, and the two watch
+# each other:
+#
+#   the publish stops     check-publish-recency sees a stale index tag
+#   this watcher stops    the publish job runs this and finds no recent run of it
+#   a freshness job stops whichever of the two ran most recently sees it
+#
+# ⚠ What neither can see, written down rather than solved: every schedule in the
+# repository stopping at once, which is what GitHub does to a repository with 60
+# days of no activity, and GitHub not scheduling anything at all. Both leave no
+# run for either check to be run by. The publish job is dispatchable and so is
+# this, so a human dispatching either one gets the answer.
+#
+# ⚠ A workflow that has never had a scheduled run is not automatically a
+# failure: on the day one is added it has not fired yet. It becomes a failure
+# once the workflow has existed for longer than its own tolerance and still has
+# no scheduled run, which is a cron that never worked.
+#
+# Environment:
+#   GITHUB_REPOSITORY  owner/name, default read from the origin remote
+#   SCHEDULES_TODAY    the date to measure against, YYYY-MM-DD, default today in
+#                      UTC. ⚠ For fault injection only. HISTORY/tests-seen-to-fail.md
+#
+# Needs a token with actions:read. GH_TOKEN in CI, gh's own login locally.
+#
+# Exit status is the result:
+#   0  every schedule has fired within its own tolerance
+#   3  at least one has stopped
+#   1  the check itself could not run
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+die() {
+  echo "check-schedules-fired: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null || die "$1 is required"
+}
+need gh
+need jq
+need awk
+
+slug="${GITHUB_REPOSITORY:-}"
+if [ -z "$slug" ]; then
+  # ⚠ git's own words are kept and printed. Discarding them leaves "no origin
+  # remote" standing for every reason git can fail, including this not being a
+  # work tree at all.
+  if ! origin="$(git -C "$REPO_ROOT" remote get-url origin 2>&1)"; then
+    die "no GITHUB_REPOSITORY, and the origin remote could not be read" \
+      "git said: $origin" \
+      "reproduce: git -C $REPO_ROOT remote get-url origin"
+  fi
+  [ -n "$origin" ] || die "the origin remote has an empty URL" \
+    "reproduce: git -C $REPO_ROOT remote get-url origin"
+  slug="$(printf '%s' "$origin" | sed -e 's#^.*github\.com[:/]##' -e 's#\.git$##')"
+fi
+case "$slug" in
+  */*) ;;
+  *) die "the repository slug is not owner/name: $slug" ;;
+esac
+
+today="${SCHEDULES_TODAY:-$(date -u +%Y-%m-%d)}"
+case "$today" in
+  [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+  *) die "SCHEDULES_TODAY is not YYYY-MM-DD: $today" ;;
+esac
+
+# age_days <ISO timestamp or YYYY-MM-DD> -> whole days from then to $today
+#
+# ⛔ The calendar arithmetic lives in scripts/date-age and nowhere else. It was
+# written here too until the second copy existed, and two copies of a date
+# routine is two places for an off by one to live in only one of them.
+age_days() {
+  "$REPO_ROOT/scripts/date-age" "$1" "$today"
+}
+
+#---------------------------------------------------------------------------#
+# Discover. Every workflow file carrying a cron, found rather than listed.
+#---------------------------------------------------------------------------#
+wf_dir="$REPO_ROOT/.github/workflows"
+[ -d "$wf_dir" ] || die "no workflow directory at $wf_dir"
+
+scheduled=""
+unscheduled=""
+for wf in "$wf_dir"/*.yml "$wf_dir"/*.yaml; do
+  [ -e "$wf" ] || continue
+  if grep -q '^[[:space:]]*-[[:space:]]*cron:' "$wf"; then
+    scheduled="$scheduled $(basename "$wf")"
+  else
+    unscheduled="$unscheduled $(basename "$wf")"
+  fi
+done
+
+if [ -z "$scheduled" ]; then
+  die "no scheduled workflow found in $wf_dir" \
+    "this check exists because schedules stop silently, so finding none is not a pass" \
+    "reproduce: grep -l 'cron:' .github/workflows/*"
+fi
+
+echo "check-schedules-fired: $slug, measured on $today" >&2
+# ⛔ Named, so a reader can see what was skipped rather than assume the list was
+# complete. A workflow silently left out is the failure this check is about.
+echo "check-schedules-fired: no schedule, not checked:${unscheduled:- none}" >&2
+
+#---------------------------------------------------------------------------#
+# Measure.
+#---------------------------------------------------------------------------#
+stopped=0
+checked=0
+
+for file in $scheduled; do
+  checked=$((checked + 1))
+
+  if ! tol_line="$("$REPO_ROOT/scripts/cron-tolerance" "$wf_dir/$file")"; then
+    die "cannot derive a tolerance for $file" \
+      "reproduce: scripts/cron-tolerance .github/workflows/$file"
+  fi
+  # cron-tolerance prints the largest gap and then the tolerance. Only the
+  # second is used here: the gap is what the tolerance is derived from, and
+  # printing both on every line would say the same thing twice.
+  read -r _ tolerance <<< "$tol_line"
+
+  # ⚠ event=schedule. A workflow kept alive by manual dispatches while its cron
+  # is dead looks healthy to a check that reads every run, and that is exactly
+  # the state this repository was in on 2026-08-27.
+  if ! runs="$(gh api "repos/$slug/actions/workflows/$file/runs?event=schedule&per_page=1" 2>&1)"; then
+    die "cannot read the run list for $file" \
+      "the token needs actions:read" \
+      "gh said: $(printf '%s' "$runs" | awk 'NR == 1')" \
+      "reproduce: gh api repos/$slug/actions/workflows/$file/runs?event=schedule\&per_page=1"
+  fi
+
+  last="$(printf '%s' "$runs" | jq -r '.workflow_runs[0].created_at // empty' | tr -d '\r')"
+
+  if [ -n "$last" ]; then
+    age="$(age_days "$last")"
+    if [ "$age" -le "$tolerance" ]; then
+      printf 'ok        %-34s last scheduled run %s, %s day(s) ago, tolerance %s\n' \
+        "$file" "${last:0:10}" "$age" "$tolerance"
+    else
+      stopped=$((stopped + 1))
+      printf 'STOPPED   %-34s last scheduled run %s, %s day(s) ago, tolerance %s\n' \
+        "$file" "${last:0:10}" "$age" "$tolerance"
+    fi
+    continue
+  fi
+
+  # No scheduled run at all. New is fine, old is a cron that never worked.
+  if ! meta="$(gh api "repos/$slug/actions/workflows/$file" 2>&1)"; then
+    die "cannot read the workflow record for $file" \
+      "gh said: $(printf '%s' "$meta" | awk 'NR == 1')" \
+      "reproduce: gh api repos/$slug/actions/workflows/$file"
+  fi
+  created="$(printf '%s' "$meta" | jq -r '.created_at // empty' | tr -d '\r')"
+  [ -n "$created" ] || die "the workflow record for $file carries no created_at" \
+    "reproduce: gh api repos/$slug/actions/workflows/$file --jq .created_at"
+
+  since="$(age_days "$created")"
+  if [ "$since" -le "$tolerance" ]; then
+    printf 'new       %-34s no scheduled run yet, added %s day(s) ago, tolerance %s\n' \
+      "$file" "$since" "$tolerance"
+  else
+    stopped=$((stopped + 1))
+    printf 'NEVER     %-34s no scheduled run in %s day(s) since it was added, tolerance %s\n' \
+      "$file" "$since" "$tolerance"
+  fi
+done
+
+if [ "$checked" -eq 0 ]; then
+  die "no workflow was checked" \
+    "reproduce: grep -l 'cron:' .github/workflows/*"
+fi
+
+if [ "$stopped" -eq 0 ]; then
+  echo "check-schedules-fired: $checked schedule(s), all firing"
+  exit 0
+fi
+
+echo "check-schedules-fired: $stopped of $checked schedule(s) have stopped" >&2
+echo "  ⛔ A schedule that stops firing produces no run, so no failure and no red" >&2
+echo "  mark. This is that red mark." >&2
+echo "  The workflow state field is not the signal: all five reported active" >&2
+echo "  through the 45 day silence that ended 2026-08-27." >&2
+echo "  HISTORY/reviews/19-a-job-that-stops-running.md." >&2
+echo "  Next: GitHub disables schedules on a repository with 60 days of no" >&2
+echo "  activity, and re-enabling is a button in the Actions tab." >&2
+echo "  reproduce: gh api repos/$slug/actions/workflows --jq '.workflows[] | \"\\(.path) \\(.state)\"'" >&2
+exit 3

@@ -1,5 +1,12 @@
 # pkgforge/devscripts archlinux.sh
 
+⚠ **Scratch paths in this document** name fixtures under `.tmp/`, which is
+gitignored and wiped between sessions. They record what a measurement was
+taken against, not something a reader can open. ⛔ Nothing in the
+repository depends on them. To re-run one, copy the tree to a scratch
+directory, rebuild the fixture the surrounding text describes, and point the
+command at that copy.
+
 Reference study of the direct consumer. `pkgforge/archlinux-base` is built by
 this script, and the script's first line of work runs inside an image this
 repository publishes.

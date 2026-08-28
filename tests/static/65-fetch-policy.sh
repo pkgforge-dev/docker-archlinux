@@ -118,6 +118,105 @@ if [ "$total" -eq 0 ]; then
 fi
 ok "found $total fetch(es) to check, and skipped $skipped written inside a diagnostic"
 
+#---------------------------------------------------------------------------#
+# A keyserver fetch is a fetch.
+#
+# ⛔ The scan above reads curl and nothing else, so gpg --recv-keys, which opens
+# a network connection over hkps, sat outside the policy entirely. It was added
+# to the tree on 2026-08-29 and the scan said nothing, which is the shape of
+# gap this file exists to close: a policy that covers the tool it was written
+# against rather than the thing it was written about.
+#
+# gpg's own option is --keyserver-options timeout=N. There is no separate
+# connect timeout, so one value covers both.
+#---------------------------------------------------------------------------#
+ks_total=0
+ks_untimed=""
+
+# ⚠ A trailing backslash is tested with sprintf("%c", 92) rather than written
+# into a regex. A backslash in a pattern written through an editing tool can
+# arrive halved, and the pattern then matches nothing while the scan still
+# reports a pass. That is what happened to the first version of this block: it
+# found zero keyserver fetches in a tree holding one, and said so as an ok line.
+ks_invocations() {
+  awk '
+    function bs() { return sprintf("%c", 92) }
+    function flush() {
+      if (!collecting) return
+      print start ":" body
+      collecting = 0
+      body = ""
+    }
+    function continued(s) {
+      sub(/[[:space:]]+$/, "", s)
+      return substr(s, length(s), 1) == bs()
+    }
+    {
+      line = $0
+      sub(/(^|[[:space:]])#.*$/, "", line)
+      if (collecting) {
+        body = body " " line
+        if (!continued(line)) flush()
+        next
+      }
+      # ⚠ Any gpg invocation starts a gather, and whether it is a keyserver
+      # fetch is decided on the whole gathered call. A call written across a
+      # continuation puts gpg on one line and --recv-keys on the next, and a
+      # scan that judges the first line alone walks straight past it. That is
+      # the miss this comment exists for: --keyserver-options is not
+      # --keyserver, so matching the first line found nothing at all.
+      if (line ~ /(^|[[:space:]])gpg[[:space:]]+-/) {
+        collecting = 1
+        start = NR
+        body = line
+        if (!continued(line)) flush()
+      }
+    }
+    END { flush() }
+  ' "$1"
+}
+
+while IFS= read -r file; do
+  [ -n "$file" ] || continue
+  rel="${file#"$REPO_ROOT/"}"
+  while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    lineno="${hit%%:*}"
+    body="${hit#*:}"
+    case "$body" in
+      *'reproduce:'* | *'check it with:'*) continue ;;
+    esac
+    # Only the gpg calls that reach a keyserver. --list-keys and --verify are
+    # local and cannot hang on a network.
+    case "$body" in
+      *--recv-keys* | *--refresh-keys* | *--search-keys* | *--send-keys*) ;;
+      *) continue ;;
+    esac
+    ks_total=$((ks_total + 1))
+    case "$body" in
+      *'--keyserver-options'*timeout=*) ;;
+      *) ks_untimed="$ks_untimed $rel:$lineno" ;;
+    esac
+  done <<< "$(ks_invocations "$file")"
+done <<< "$files"
+
+# ⛔ Zero is a failure, not a pass. This repository fetches keys, so a scan that
+# finds none has stopped working rather than found nothing to do.
+if [ "$ks_total" -eq 0 ]; then
+  fail "at least one keyserver fetch was found to check" \
+    "the scan matched nothing, so this assertion checked nothing" \
+    "scripts/build-pacman-static imports the pinned signers before it verifies the tag" \
+    "reproduce: grep -rn 'recv-keys' scripts/"
+elif [ -z "$ks_untimed" ]; then
+  ok "all $ks_total keyserver fetches set a timeout"
+else
+  fail "all $ks_total keyserver fetches set a timeout" \
+    "without one:$ks_untimed" \
+    "gpg has no default total timeout, so a keyserver that stalls holds the job" \
+    "add --keyserver-options timeout=N" \
+    "reproduce: grep -rn 'recv-keys' scripts/"
+fi
+
 if [ -z "$no_connect" ]; then
   ok "all $total fetches set --connect-timeout"
 else

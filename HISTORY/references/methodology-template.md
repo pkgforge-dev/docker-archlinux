@@ -1,5 +1,12 @@
 # The methodology template
 
+⚠ **Scratch paths in this document** name fixtures under `.tmp/`, which is
+gitignored and wiped between sessions. They record what a measurement was
+taken against, not something a reader can open. ⛔ Nothing in the
+repository depends on them. To re-run one, copy the tree to a scratch
+directory, rebuild the fixture the surrounding text describes, and point the
+command at that copy.
+
 Reference study of the nine methodology documents in `Azathothas/TEMPLATE`.
 Policy 11 already routes to one of them, `references.md`. The other nine had
 not been opened. Five deep reviews were written before `reviews.md` was read.

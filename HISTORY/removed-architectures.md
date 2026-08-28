@@ -1,5 +1,12 @@
 # ppc64le and 386
 
+⚠ **Scratch paths in this document** name fixtures under `.tmp/`, which is
+gitignored and wiped between sessions. They record what a measurement was
+taken against, not something a reader can open. ⛔ Nothing in the
+repository depends on them. To re-run one, copy the tree to a scratch
+directory, rebuild the fixture the surrounding text describes, and point the
+command at that copy.
+
 `ppc64le` was removed in `9d1e142` and `386` in `e1e99fc`. Requirement: confirm
 with evidence that a removed architecture cannot build before leaving it out.
 "It was removed" is not evidence. Measured 2026-08-26.

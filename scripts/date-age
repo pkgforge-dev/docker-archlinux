@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+#
+# Whole days between two dates.
+#
+#   scripts/date-age 2026-07-13              days from then until today, in UTC
+#   scripts/date-age 2026-07-13 2026-08-27   days between the two, here 45
+#
+# Either argument may be a full ISO timestamp; only the date part is read. That
+# is the resolution the callers work in: a published tag is named for a date,
+# and a cron tolerance is counted in days.
+#
+# ⛔ This exists so the calendar arithmetic has one home. It was written twice,
+# once in scripts/check-publish-recency and once in
+# scripts/check-schedules-fired, and two copies of a date routine is two places
+# for an off by one to live in only one of them.
+#
+# ⛔ No date -d, no strftime and no mktime. GNU date's -d is not on every host
+# this runs on, and strftime and mktime are gawk extensions while the runners
+# ship mawk, which is the same reason scripts/check-anchor-floor avoids match()
+# with a third argument. Integer arithmetic on the civil calendar instead, which
+# is exact.
+#
+# Prints one integer. Negative when the first date is later than the second.
+#
+# Exit status:
+#   0  a difference was printed
+#   1  an argument is not a date
+set -euo pipefail
+
+die() {
+  echo "date-age: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+from="${1:-}"
+[ -n "$from" ] || die "usage: date-age <from> [<to>]" \
+  "both may be YYYY-MM-DD or a full ISO timestamp"
+to="${2:-$(date -u +%Y-%m-%d)}"
+
+# Only the date part, so an ISO timestamp needs no separate parse.
+from="${from:0:10}"
+to="${to:0:10}"
+
+for d in "$from" "$to"; do
+  case "$d" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+    *) die "not a date: $d" "expected YYYY-MM-DD, or an ISO timestamp starting with one" ;;
+  esac
+done
+
+awk -v a="$from" -v b="$to" '
+  # Days since 1970-01-01, by the civil calendar. March is treated as the first
+  # month of the year, which is what makes the leap day fall at the end and
+  # removes every special case for February.
+  function days(y, m, d,   era, yoe, doy, doe) {
+    y -= (m <= 2)
+    era = int((y >= 0 ? y : y - 399) / 400)
+    yoe = y - era * 400
+    doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+    doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+    return era * 146097 + doe - 719468
+  }
+  BEGIN {
+    split(a, x, "-")
+    split(b, y, "-")
+    if (x[2] + 0 < 1 || x[2] + 0 > 12 || x[3] + 0 < 1 || x[3] + 0 > 31) {
+      printf "date-age: not a real date: %s\n", a > "/dev/stderr"
+      exit 1
+    }
+    if (y[2] + 0 < 1 || y[2] + 0 > 12 || y[3] + 0 < 1 || y[3] + 0 > 31) {
+      printf "date-age: not a real date: %s\n", b > "/dev/stderr"
+      exit 1
+    }
+    print days(y[1] + 0, y[2] + 0, y[3] + 0) - days(x[1] + 0, x[2] + 0, x[3] + 0)
+  }' </dev/null

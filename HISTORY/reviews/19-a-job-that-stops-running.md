@@ -131,7 +131,7 @@ decision with a cost the maintainer carries: decision 2 records that this
 repository is meant to need very little attention, and a new red mark is
 attention.
 
-⭐ **It is tracked as TODO 14** in `.tmp/PROMPT_COMPLETION.md`, carrying the
+⭐ **It is tracked as TODO 14** in `HISTORY/CONTINUE.md`, carrying the
 measurement above, the shape a check must have, and the question to ask first.
 ⚠ That file is scratch and is wiped between sessions, which is why the
 measurement lives here and only the task lives there.
@@ -166,4 +166,5 @@ measurement lives here and only the task lives there.
 ## Change summary
 
 No file was changed by this review. The measurements are in `HISTORY/` and in
-`.tmp/PROMPT_COMPLETION.md` TODO 1, which is not in the repository.
+the brief's TODO 1. ⚠ At the time the brief lived in a gitignored directory
+and was not in the repository. It is `HISTORY/CONTINUE.md` now.

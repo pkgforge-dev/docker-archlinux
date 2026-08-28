@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+#
+# The package set an image was built from, in a form nothing here has to read.
+#
+#   scripts/gen-bootstrap-set <evidence.json> <out>
+#
+# ⭐ The framing this exists for: a third party rebuilds the same root without
+# this repository's tooling. An evidence file is JSON and needs jq; this is
+# whitespace separated text with a commented header, which awk, sort, grep and a
+# shell all read with nothing installed.
+#
+# ⛔ Every line carries the name, the version and the sha256 of the package file
+# as the repository database recorded it. That is what makes the set a
+# specification rather than a description: a rebuild that fetches these names at
+# these versions and checks these hashes gets the same bytes or fails.
+#
+# ⚠ A hash may be a dash. A package whose database entry carries no sha256 is
+# recorded as one rather than dropped, because a shorter list that looks
+# complete is worse than a complete list with a gap named in it. The trailer
+# counts them, so a consumer can refuse a set that has any.
+#
+# ⚠ What this is not: a dependency graph and an install order. pacman resolves
+# both from the databases. This is the resolved answer for one build, which is
+# the thing that cannot be recovered later once the mirrors move on.
+set -euo pipefail
+
+die() {
+  echo "gen-bootstrap-set: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+command -v jq >/dev/null || die "jq is required"
+
+ev="${1:-}"
+out="${2:-}"
+[ -n "$ev" ] && [ -n "$out" ] || die "usage: gen-bootstrap-set <evidence.json> <out>"
+[ -f "$ev" ] || die "no such evidence file: $ev" \
+  "scripts/gen-evidence writes one per platform" \
+  "reproduce: ls $ev"
+
+jq -e . "$ev" > /dev/null 2>&1 || die "$ev is not valid JSON" \
+  "reproduce: jq . $ev"
+
+for field in architecture docker_architecture anchor package_count packages; do
+  jq -e --arg f "$field" 'has($f)' "$ev" > /dev/null \
+    || die "$ev has no $field field" \
+      "this is not an evidence file from scripts/gen-evidence" \
+      "reproduce: jq 'keys' $ev"
+done
+
+count="$(jq -r '.package_count' "$ev")"
+[ "$count" -gt 0 ] || die "$ev records no packages" \
+  "an empty bootstrap set would describe an empty root" \
+  "reproduce: jq .package_count $ev"
+
+{
+  echo "# The resolved package set for one build of this image."
+  echo "#"
+  echo "# Columns, whitespace separated:  name  version  sha256"
+  echo "#"
+  echo "# ⛔ A sha256 of - means the repository database carried none for that"
+  echo "# package. The trailer counts them. A consumer that needs every package"
+  echo "# verifiable refuses a set whose unhashed count is not zero."
+  echo "#"
+  printf '# image                %s\n' "$(jq -r '.image' "$ev")"
+  printf '# platform             %s\n' "$(jq -r '.platform' "$ev")"
+  printf '# architecture         %s\n' "$(jq -r '.architecture' "$ev")"
+  printf '# docker architecture  %s\n' "$(jq -r '.docker_architecture' "$ev")"
+  printf '# version              %s\n' "$(jq -r '.version_id' "$ev")"
+  printf '# built                %s\n' "$(jq -r '.built' "$ev")"
+  printf '# source commit        %s\n' "$(jq -r '.source_commit' "$ev")"
+  printf '# image digest         %s\n' "$(jq -r '.digest' "$ev")"
+  printf '# anchor               %s %s\n' "$(jq -r '.anchor.name' "$ev")" "$(jq -r '.anchor.version' "$ev")"
+  echo "#"
+
+  # ⚠ Sorted by name under LC_ALL=C, so two runs of the same build produce
+  # byte identical files and a diff between two releases is readable.
+  jq -r '.packages[] | [.name, .version, (.sha256 // "-")] | @tsv' "$ev" \
+    | LC_ALL=C sort \
+    | awk -F'\t' '{ printf "%-40s %-28s %s\n", $1, $2, $3 }'
+
+  unhashed="$(jq -r '[.packages[] | select((.sha256 // "-") == "-")] | length' "$ev")"
+  echo "#"
+  printf '# packages             %s\n' "$count"
+  printf '# without a sha256     %s\n' "$unhashed"
+} > "$out"
+
+# ⛔ Counted from what was written, not from what was intended. A header saying
+# 137 above a file holding 12 lines is the shape of failure this catches.
+written="$(awk '!/^#/ && NF { n++ } END { print n + 0 }' "$out")"
+[ "$written" = "$count" ] || die "wrote $written package lines, the evidence records $count" \
+  "reproduce: awk '!/^#/ && NF' $out | wc -l"
+
+echo "gen-bootstrap-set: wrote $out, $written packages, $(awk '/^# without a sha256/ { print $NF }' "$out") without a sha256" >&2

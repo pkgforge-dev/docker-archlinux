@@ -1,0 +1,106 @@
+name: Freshness, the publish itself
+
+# ⛔ A scheduled workflow that stops firing produces no run, so no failure, no
+# annotation and no red mark. It has already happened here: scheduled
+# build-deploy.yml runs were daily and unbroken to 2026-07-13, then 45 days of
+# nothing, then one on 2026-08-27 that failed.
+# HISTORY/reviews/19-a-job-that-stops-running.md has the measurement.
+#
+# ⚠ Every workflow reported state "active" throughout those 45 days, so a check
+# that reads the state field concludes the schedule is healthy. Two things are
+# read instead, and both are outcomes rather than settings:
+#
+#   scripts/check-publish-recency   the newest dated index tag on the registry
+#   scripts/check-schedules-fired   the newest scheduled run of every schedule
+#
+# ⭐ This workflow and build-deploy.yml watch each other. build-deploy.yml runs
+# check-schedules-fired in a job of its own, so this one going quiet turns that
+# run red; this one runs the same check, so build-deploy.yml going quiet turns
+# this run red.
+#
+# ⚠ Written down rather than solved: neither sees every schedule in the
+# repository stopping at once. That is what GitHub does to a repository with 60
+# days of no activity, and it leaves no run for either check to be run by. Both
+# workflows are dispatchable, so a human asking gets the answer.
+#
+# ⛔ This opens no pull request. The other freshness workflows watch a pinned
+# thing and can propose the new pin; there is nothing to apply here. A publish
+# that stopped is fixed by finding out why, and the red run is the whole output.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 07 * * *"  # daily, 07:30 UTC, two hours after the publish cron
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+concurrency:
+  group: freshness-publish
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check the publish is still happening
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # ⛔ Both checks run before either verdict is taken. Stopping at the first
+      # failure would hide the second, and the two answer different questions:
+      # one asks whether tags are still being written, the other whether the
+      # schedules are still firing. A publish job that runs daily and publishes
+      # nothing is green to the second and red to the first, which is the 59
+      # days of green runs that policy 6 exists to prevent.
+      - name: The newest dated index tag
+        id: recency
+        run: |
+          set -uo pipefail
+          scripts/check-publish-recency
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          case "$rc" in
+            0) echo "::notice::the publish is current" ;;
+            3) echo "::error::the newest dated index tag is older than the schedule allows" ;;
+            *) echo "the recency check could not run" >&2; exit 1 ;;
+          esac
+
+      - name: Every schedule in the repository
+        id: schedules
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          scripts/check-schedules-fired
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          case "$rc" in
+            0) echo "::notice::every schedule has fired within its own tolerance" ;;
+            3) echo "::error::at least one schedule has stopped firing" ;;
+            *) echo "the schedule check could not run" >&2; exit 1 ;;
+          esac
+
+      - name: Take the verdict
+        env:
+          RECENCY: ${{ steps.recency.outputs.rc }}
+          SCHEDULES: ${{ steps.schedules.outputs.rc }}
+        run: |
+          set -euo pipefail
+          if [ "$RECENCY" = "0" ] && [ "$SCHEDULES" = "0" ]; then
+            echo "the publish is happening and every schedule is firing"
+            exit 0
+          fi
+          echo "publish recency: $RECENCY, schedules: $SCHEDULES (0 is healthy, 3 is stopped)" >&2
+          echo "⛔ This red mark is the whole point of this workflow: the failure it" >&2
+          echo "reports produces no run of its own to be red." >&2
+          echo "reproduce: scripts/check-publish-recency; scripts/check-schedules-fired" >&2
+          exit 1
