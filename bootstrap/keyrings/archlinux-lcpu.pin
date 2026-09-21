@@ -38,12 +38,19 @@
 # package when it lists.
 #
 # Adopted 2026-08-28. Verified on that date against the mirror below.
+#
+# ⚠ Re-measured 2026-09-21. The mirror removed archlinux-lcpu-keyring-20241126-1
+# on 2026-09-06 and every loong64 build since then failed at install-port-keyring
+# with a 404, because a port removes a superseded keyring package rather than
+# keeping it. The mirror now serves archlinux-lcpu-keyring-20260906-1, so the pin
+# follows it. scripts/check-keyring-pin reports no fingerprint added or removed:
+# the trusted set is the same ten keys and every one keeps its expiry.
 
 keyring = archlinux-lcpu
 arch    = loong64
 mirror  = https://loongarchlinux.lcpu.dev/loongarch/archlinux/core/os/loong64
-package = archlinux-lcpu-keyring-20241126-1-any.pkg.tar.zst
-sha256  = cfdd65dceddbc5824df091787bd8546143beae9adb12f8ecccc25fbb67baa303
+package = archlinux-lcpu-keyring-20260906-1-any.pkg.tar.zst
+sha256  = 09ab1bfa4e4e5c06863f3ce21e5bc8a734c05f88eacbb58ee7de13603cddf42f
 trusted = 49E74F2DF61CFF4217AB8EB737EFC8DBFB4CC627 2029-02-24
 trusted = 5CDE9ADCBD04454BAF547A1C40D0304E1192746B 2026-04-24
 trusted = 60922C5D40F6297BC1616C270A8F993ECADF8CE7 2026-07-14
