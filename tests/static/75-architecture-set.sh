@@ -89,6 +89,20 @@ fi
 ARCHES="$(awk -F= 'NF { print $1 }' <<< "$pairs" | LC_ALL=C sort)"
 n_arch="$(awk 'NF' <<< "$ARCHES" | wc -l | tr -d '[:space:]')"
 
+disabled_arches() {
+  awk '
+    /^[[:space:]]*#[[:space:]]*-[[:space:]]+docker_arch:/ {
+      s = $0
+      sub(/^[^:]*:[[:space:]]*/, "", s)
+      sub(/[[:space:]]*$/, "", s)
+      print s
+    }
+  ' "$1"
+}
+
+KNOWN="$(printf '%s\n%s\n' "$ARCHES" "$(disabled_arches "$WF" | tr -d '\r')" | awk 'NF' | LC_ALL=C sort -u)"
+n_known="$(awk 'NF' <<< "$KNOWN" | wc -l | tr -d '[:space:]')"
+
 dupes="$(printf '%s\n' "$ARCHES" | uniq -d | tr '\n' ' ')"
 no_platform="$(awk -F= '$2 == "-" { print $1 }' <<< "$pairs" | tr '\n' ' ')"
 
@@ -137,7 +151,7 @@ while IFS= read -r arch; do
   else
     tagnames_broken="$tagnames_broken $arch"
   fi
-done <<< "$ARCHES"
+done <<< "$KNOWN"
 
 # The OCI spelling, which is the platform with linux/ taken off. armv7 is the
 # only one where that leaves a slash behind.
@@ -149,7 +163,7 @@ while IFS='=' read -r a p; do
 done <<< "$pairs"
 
 n_tokens="$(awk 'NF' <<< "$TOKENS" | LC_ALL=C sort -u | wc -l | tr -d '[:space:]')"
-diag "$n_tokens spellings map onto $n_arch architectures"
+diag "$n_tokens spellings map onto $n_known known architectures"
 
 #---------------------------------------------------------------------------#
 # 3. every architecture loop names the whole set
@@ -204,7 +218,7 @@ loops() {
   ' "$1"
 }
 
-want="$(printf '%s\n' "$ARCHES" | awk 'NF' | LC_ALL=C sort -u)"
+want="$(printf '%s\n' "$KNOWN" | awk 'NF' | LC_ALL=C sort -u)"
 n_loops=0
 
 while IFS= read -r file; do
@@ -219,12 +233,12 @@ while IFS= read -r file; do
     words_nl="$(printf '%s' "$words" | tr '[:space:]' '\n' | awk 'NF')"
     got=""
     unknown=""
-    n_known=0
+    n_spelled=0
     while IFS= read -r w; do
       [ -n "$w" ] || continue
       a="$(token_arch "$w")"
       if [ -n "$a" ]; then
-        n_known=$((n_known + 1))
+        n_spelled=$((n_spelled + 1))
         got="$got$a
 "
       else
@@ -234,7 +248,7 @@ while IFS= read -r file; do
 
     # Not an architecture loop at all. Every other for loop in the tree is none
     # of this file's business.
-    [ "$n_known" -gt 0 ] || continue
+    [ "$n_spelled" -gt 0 ] || continue
     n_loops=$((n_loops + 1))
 
     got_set="$(printf '%s\n' "$got" | awk 'NF' | LC_ALL=C sort -u)"
@@ -261,6 +275,8 @@ while IFS= read -r file; do
       else
         ok "$rel:$lineno names the whole architecture set"
       fi
+    elif [ "$got_set" = "$ARCHES" ]; then
+      ok "$rel:$lineno names the built architecture set"
     elif [ "$mark" = "subset" ]; then
       ok "$rel:$lineno is a marked subset: $(printf '%s' "$got_set" | tr '\n' ' ')"
     else
@@ -268,8 +284,8 @@ while IFS= read -r file; do
       extra="$(LC_ALL=C comm -13 <(printf '%s\n' "$want") <(printf '%s\n' "$got_set") | tr '\n' ' ')"
       fail "$rel:$lineno names the whole architecture set" \
         "missing: ${missing:-none}" \
-        "not in the build matrix: ${extra:-none}" \
-        "the matrix names: $(printf '%s' "$want" | tr '\n' ' ')" \
+        "not in the set: ${extra:-none}" \
+        "the set names: $(printf '%s' "$want" | tr '\n' ' ')" \
         "if it is meant to cover fewer, write the reason in a comment above it and mark that comment" \
         "reproduce: sed -n '${lineno}p' $rel"
     fi
@@ -317,11 +333,11 @@ else
       "no case label found inside aliases_for" \
       "reproduce: sed -n '/aliases_for()/,/^}/p' scripts/tag-names"
   elif [ "$labels" = "$want" ]; then
-    ok "scripts/tag-names has an alias set for exactly the $n_arch matrix architectures"
+    ok "scripts/tag-names has an alias set for exactly the $n_known known architectures"
   else
     only_matrix="$(LC_ALL=C comm -23 <(printf '%s\n' "$want") <(printf '%s\n' "$labels") | tr '\n' ' ')"
     only_table="$(LC_ALL=C comm -13 <(printf '%s\n' "$want") <(printf '%s\n' "$labels") | tr '\n' ' ')"
-    fail "scripts/tag-names has an alias set for exactly the $n_arch matrix architectures" \
+    fail "scripts/tag-names has an alias set for exactly the $n_known known architectures" \
       "built and has no alias set: ${only_matrix:-none}" \
       "has an alias set and is not built: ${only_table:-none}" \
       "reproduce: sed -n '/aliases_for()/,/^}/p' scripts/tag-names"
@@ -352,11 +368,11 @@ else
   else
     named="$(printf '%s' "$usage" | tr '|' '\n' | awk 'NF && $0 != "all"' | LC_ALL=C sort -u)"
     if [ "$named" = "$want" ]; then
-      ok "the gen-mirrorlist usage string names exactly the $n_arch matrix architectures"
+      ok "the gen-mirrorlist usage string names exactly the $n_known known architectures"
     else
-      fail "the gen-mirrorlist usage string names exactly the $n_arch matrix architectures" \
+      fail "the gen-mirrorlist usage string names exactly the $n_known known architectures" \
         "it says: <$usage>" \
-        "the matrix names: $(printf '%s' "$want" | tr '\n' ' ')" \
+        "the set names: $(printf '%s' "$want" | tr '\n' ' ')" \
         "reproduce: grep -n 'usage: scripts/gen-mirrorlist' scripts/gen-mirrorlist"
     fi
   fi
@@ -392,12 +408,12 @@ while IFS= read -r arch; do
   else
     fail "$arch has all $n_paths of its per architecture files" \
       "not in the tree:$absent" \
-      "the build matrix names $arch, so the build will go looking for these" \
+      "the set names $arch, so its files are expected" \
       "reproduce: ls$absent"
   fi
-done <<< "$ARCHES"
+done <<< "$KNOWN"
 
-# The other direction. A directory for an architecture the matrix does not name
+# The other direction. A directory for an architecture the set does not name
 # is either one that was removed and left files behind, or one somebody started
 # adding and did not finish.
 #
@@ -417,7 +433,7 @@ for d in rootfs bootstrap; do
     if grep -qxF "$name" <<< "$SHARED"; then
       continue
     fi
-    if grep -qxF "$name" <<< "$ARCHES"; then
+    if grep -qxF "$name" <<< "$KNOWN"; then
       continue
     fi
     orphans="$orphans $d/$name"
@@ -425,9 +441,9 @@ for d in rootfs bootstrap; do
 done
 
 if [ -z "$(printf '%s' "$orphans" | tr -d '[:space:]')" ]; then
-  ok "no rootfs or bootstrap directory belongs to an architecture the matrix does not build"
+  ok "no rootfs or bootstrap directory belongs to an architecture the set does not name"
 else
-  fail "no rootfs or bootstrap directory belongs to an architecture the matrix does not build" \
+  fail "no rootfs or bootstrap directory belongs to an architecture the set does not name" \
     "not in the matrix:$orphans" \
     "either the matrix lost an architecture or these files outlived one" \
     "reproduce: ls -d$orphans"
@@ -451,11 +467,11 @@ else
       "no expect_alias_count call found" \
       "reproduce: grep -n expect_alias_count tests/static/60-tag-families.sh"
   elif [ "$covered" = "$want" ]; then
-    ok "60-tag-families.sh checks an alias count for all $n_arch architectures"
+    ok "60-tag-families.sh checks an alias count for all $n_known known architectures"
   else
     uncovered="$(LC_ALL=C comm -23 <(printf '%s\n' "$want") <(printf '%s\n' "$covered") | tr '\n' ' ')"
     stale="$(LC_ALL=C comm -13 <(printf '%s\n' "$want") <(printf '%s\n' "$covered") | tr '\n' ' ')"
-    fail "60-tag-families.sh checks an alias count for all $n_arch architectures" \
+    fail "60-tag-families.sh checks an alias count for all $n_known known architectures" \
       "built and unchecked there: ${uncovered:-none}" \
       "checked there and not built: ${stale:-none}" \
       "reproduce: grep -n expect_alias_count tests/static/60-tag-families.sh"
