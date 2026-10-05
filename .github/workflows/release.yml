@@ -119,12 +119,12 @@ jobs:
             platform: linux/loong64
           - docker_arch: riscv64
             platform: linux/riscv64
-          - docker_arch: ppc
-            platform: linux/ppc
-          - docker_arch: ppc64
-            platform: linux/ppc64
-          - docker_arch: ppc64le
-            platform: linux/ppc64le
+          # - docker_arch: ppc
+          #   platform: linux/ppc
+          # - docker_arch: ppc64
+          #   platform: linux/ppc64
+          # - docker_arch: ppc64le
+          #   platform: linux/ppc64le
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
