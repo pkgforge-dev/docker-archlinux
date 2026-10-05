@@ -45,6 +45,15 @@ reachable_floor_for() {
   esac
 }
 
+disabled_arches="$(awk '
+  /^[[:space:]]*#[[:space:]]*-[[:space:]]+docker_arch:/ {
+    s = $0
+    sub(/^[^:]*:[[:space:]]*/, "", s)
+    sub(/[[:space:]]*$/, "", s)
+    print s
+  }
+' "$REPO_ROOT/.github/workflows/build-deploy.yml" | tr -d '\r')"
+
 lists="$(find "$REPO_ROOT/rootfs" -type f -path '*/etc/pacman.d/mirrorlist' | sort)"
 if [ -z "$lists" ]; then
   fail "at least one mirrorlist exists" "searched: $REPO_ROOT/rootfs" \
@@ -64,6 +73,9 @@ while IFS= read -r list; do
   [ -n "$list" ] || continue
   rel="${list#"$REPO_ROOT/"}"
   archdir="$(basename "$(dirname "$(dirname "$(dirname "$list")")")")"
+  if printf '%s\n' "$disabled_arches" | grep -qxF "$archdir"; then
+    continue
+  fi
   conf="$REPO_ROOT/rootfs/$archdir/etc/pacman.conf"
 
   # pacman substitutes $arch with the Architecture from its own config

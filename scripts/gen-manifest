@@ -112,7 +112,7 @@ while read -r docker_arch; do
   "$REPO_ROOT/scripts/tag-names" aliases "$docker_arch" | tr ' ' '\n' | awk -v a="$docker_arch" 'NF { print $0 "\t" a }' \
     >> "$work/aliases.txt"
 done <<< "$(awk '
-  /^[[:space:]]*-[[:space:]]+docker_arch:/ {
+  /^[[:space:]]*#?[[:space:]]*-[[:space:]]+docker_arch:/ {
     s = $0
     sub(/^[^:]*:[[:space:]]*/, "", s)
     sub(/[[:space:]]*$/, "", s)
