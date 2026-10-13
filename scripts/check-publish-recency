@@ -131,33 +131,15 @@ if [ -n "${RECENCY_TAGS_FILE:-}" ]; then
   tr -d '\r' < "$RECENCY_TAGS_FILE" | awk 'NF' > "$work/tags.txt"
   echo "check-publish-recency: tags read from $RECENCY_TAGS_FILE, not from a registry" >&2
 else
-  token="$(curl -sS --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
-    "https://$registry/token?scope=repository:$repo:pull&service=$registry" \
-    | jq -r '.token // empty' | tr -d '\r')"
-  [ -n "$token" ] || die "no anonymous pull token from $registry for $repo" \
-    "the tag list needs no account" \
-    "reproduce: curl -sS \"https://$registry/token?scope=repository:$repo:pull&service=$registry\""
-
-  # ⚠ n=1000. The default page is a subset and is not ordered newest first, so a
-  # check reading the default page can miss the newest tag entirely and report a
-  # stop that did not happen.
-  if ! curl -sS --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 5 \
-       -H "Authorization: Bearer $token" \
-       "https://$registry/v2/$repo/tags/list?n=1000" -o "$work/tags.json"; then
-    die "cannot read the tag list for $repo from $registry" \
-      "reproduce: curl -sS -H 'Authorization: Bearer <token>' https://$registry/v2/$repo/tags/list?n=1000"
-  fi
-
-  name="$(jq -r '.name // empty' "$work/tags.json" | tr -d '\r')"
-  if [ -z "$name" ]; then
-    echo "check-publish-recency: the tag list from $registry has no name field" >&2
-    awk 'NR <= 10 { print "  " substr($0, 1, 200) }' "$work/tags.json" >&2
-    die "the response is not a tag list, so recency cannot be read" \
+  # ⛔ Every page, through scripts/registry-tags. The registry pages the list
+  # oldest first, so a check that read one page would stop seeing the newest
+  # tag as the repository grew, and report a stop that did not happen.
+  if ! "$REPO_ROOT/scripts/registry-tags" "$registry" "$repo" > "$work/tags.txt" 2> "$work/tags.err"; then
+    sed 's/^/  /' "$work/tags.err" >&2
+    die "the tag list for $repo on $registry cannot be read, so recency cannot be read" \
       "⛔ passing here would switch this guard off on a transient" \
-      "reproduce: curl -sS -H 'Authorization: Bearer <token>' https://$registry/v2/$repo/tags/list?n=1000"
+      "reproduce: scripts/registry-tags $registry $repo"
   fi
-
-  jq -r '.tags[]? // empty' "$work/tags.json" | tr -d '\r' | awk 'NF' > "$work/tags.txt"
 fi
 
 tag_count="$(awk 'END { print NR + 0 }' "$work/tags.txt")"

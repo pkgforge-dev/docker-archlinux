@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+#
+# Every tag a repository on an OCI registry carries, one per line.
+#
+#   scripts/registry-tags <registry> <repository>
+#   scripts/registry-tags ghcr.io pkgforge-dev/archlinux
+#
+# Read anonymously, the way any consumer can, so no caller needs a credential.
+#
+# ⛔ Every page, followed through its Link header. A registry answers one page
+# per request, and GHCR orders the list by when each tag was created, oldest
+# first. A reader that stops at the first page loses the newest tags as soon as
+# the repository outgrows a page, and the newest tags are what every caller
+# here is looking for: the anchor floor, the publish recency check and the
+# manifest. 330 tags on 2026-10-13, and about seventeen more each day.
+#
+# ⛔ Each page has to be a tag list that names its repository, not merely a 200.
+# A registry answering an error object, or an intermediary answering anything
+# at all, would otherwise read as a repository with no tags, and every caller
+# treats that as a fact.
+#
+# Exit status: 0 the list is complete, possibly empty for a new repository, 1
+# it could not be read.
+set -euo pipefail
+
+MAX_PAGES="${REGISTRY_TAGS_MAX_PAGES:-200}"
+
+die() {
+  echo "registry-tags: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null || die "$1 is required"
+}
+need curl
+need jq
+need awk
+
+registry="${1:-}"
+repo="${2:-}"
+[ -n "$registry" ] && [ -n "$repo" ] || die "usage: registry-tags <registry> <repository>"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+token="$(curl -sS --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
+  "https://$registry/token?scope=repository:$repo:pull&service=$registry" \
+  | jq -r '.token // empty' | tr -d '\r')"
+[ -n "$token" ] || die "no anonymous pull token from $registry for $repo" \
+  "the tag list needs no account" \
+  "reproduce: curl -sS \"https://$registry/token?scope=repository:$repo:pull&service=$registry\""
+
+next="/v2/$repo/tags/list?n=1000"
+pages=0
+: > "$work/tags.txt"
+while [ -n "$next" ]; do
+  pages=$((pages + 1))
+  [ "$pages" -le "$MAX_PAGES" ] || die "$repo on $registry is still paging after $MAX_PAGES pages" \
+    "a registry that keeps answering with a next page would hold the caller forever" \
+    "raise REGISTRY_TAGS_MAX_PAGES if the repository really is that large"
+
+  code="$(curl -sS --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 5 \
+    -H "Authorization: Bearer $token" -D "$work/headers.txt" -o "$work/page.json" \
+    -w '%{http_code}' "https://$registry$next")"
+  if [ "$code" != "200" ]; then
+    awk 'NR <= 10 { print "  " substr($0, 1, 200) }' "$work/page.json" >&2
+    die "page $pages of the tag list for $repo answered HTTP $code" \
+      "reproduce: curl -sS -H 'Authorization: Bearer <token>' 'https://$registry$next'"
+  fi
+
+  name="$(jq -r '.name // empty' "$work/page.json" | tr -d '\r')"
+  if [ "$name" != "$repo" ]; then
+    awk 'NR <= 10 { print "  " substr($0, 1, 200) }' "$work/page.json" >&2
+    die "page $pages from $registry is not a tag list for $repo" \
+      "it names: ${name:-nothing}" \
+      "⛔ reading it as an empty list would switch off every check built on this" \
+      "reproduce: curl -sS -H 'Authorization: Bearer <token>' 'https://$registry$next'"
+  fi
+  jq -r '.tags[]? // empty' "$work/page.json" | tr -d '\r' | awk 'NF' >> "$work/tags.txt"
+
+  # The next page, from a header like
+  #   Link: </v2/<repo>/tags/list?last=<tag>&n=1000>; rel="next"
+  # ⚠ The last one only. A retried request leaves every attempt's headers in
+  # the dump, and two lines here would become one URL with a newline in it.
+  next="$(tr -d '\r' < "$work/headers.txt" | awk '
+    tolower($1) == "link:" && /rel="next"/ {
+      if (match($0, /<[^>]*>/)) { link = substr($0, RSTART + 1, RLENGTH - 2) }
+    }
+    END { print link }')"
+done
+
+awk '!seen[$0]++' "$work/tags.txt"
+echo "registry-tags: $(awk 'END { print NR + 0 }' "$work/tags.txt") tag(s) from $registry/$repo over $pages page(s)" >&2

@@ -5,8 +5,15 @@ name: 🐬 Builds ArchLinux Images for DockerHub 🐬
 #For: https://github.com/pkgforge/devscripts/tree/main/Github/Runners
 #------------------------------------------------------------------------------------#
 # One job per architecture builds and pushes by digest. No tag is created there.
-# A merge job with needs: over the whole matrix creates every tag from those
-# digests, so a run that lost one architecture publishes nothing at all.
+# The publish job creates every tag from those digests.
+#
+# ⛔ One architecture failing does not hold the others back. Every architecture
+# that built is tagged. One that did not keeps its last published image in the
+# multi architecture index, so `latest` never loses a platform and never stops
+# moving because one port had a bad day. The run is still red when a build
+# failed, and the report job keeps one issue open per architecture until it
+# publishes again. Before this, one port failing published nothing for any
+# port: no tag moved from 2026-09-06 to 2026-10-13. HISTORY/outage-2026-09.md.
 #
 # Run it with dry_run to build against a scratch repository and create no public
 # tag. That is how a branch is tested without a consumer seeing anything.
@@ -32,7 +39,11 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: "30 05 * * *"  # 08:30 PM UTC everyday
+    - cron: "30 05 * * *"  # daily, 05:30 UTC
+    # ⭐ The second chance. GitHub drops scheduled runs under load, and a run
+    # that dies before it publishes loses the day. This one stands down when the
+    # day's dated index tag already exists, so it never moves a dated tag.
+    - cron: "30 17 * * *"  # daily, 17:30 UTC, only when 05:30 published nothing
 
 defaults:
   run:
@@ -54,6 +65,9 @@ env:
   # of the publish that a GHCR-only dry run cannot reach, so it needs a scratch
   # repository of its own on the other registry.
   HUB_SCRATCH_IMAGE: pkgforge/archlinux-ci
+  # ⛔ The cron above that is the second chance. Written once, here, and compared
+  # against the cron that fired, so the two cannot drift apart.
+  BACKUP_CRON: "30 17 * * *"
 
 #------------------------------------------------------------------------------------#
 jobs:
@@ -61,6 +75,11 @@ jobs:
   # Resolve every input once. Each architecture then builds against the same
   # version, the same commit and an anchor pinned before any build started, so a
   # run is reproducible as a unit and not only job by job.
+  #
+  # ⛔ A port that cannot be read from this runner is held back on its own. It is
+  # named, it is not built, and the rest go ahead. Before this, one unreachable
+  # port stopped the whole run in this job: ArchPOWER answered 403 from
+  # 2026-09-18 and no architecture built at all.
   #----------------------------------------------------------------------------------#
   resolve:
     name: Resolve inputs
@@ -69,6 +88,10 @@ jobs:
       version: ${{ steps.inputs.outputs.version }}
       build_date: ${{ steps.inputs.outputs.build_date }}
       anchors: ${{ steps.inputs.outputs.anchors }}
+      unreachable: ${{ steps.inputs.outputs.unreachable }}
+      refused: ${{ steps.floor.outputs.refused }}
+      cleared: ${{ steps.clear.outputs.cleared }}
+      skip: ${{ steps.inputs.outputs.skip }}
       target_image: ${{ steps.inputs.outputs.target_image }}
       hub_image: ${{ steps.inputs.outputs.hub_image }}
       publish_hub: ${{ steps.inputs.outputs.publish_hub }}
@@ -83,6 +106,7 @@ jobs:
         env:
           DRY_RUN: ${{ inputs.dry_run }}
           DRY_RUN_HUB: ${{ inputs.dry_run_hub }}
+          FIRED_CRON: ${{ github.event.schedule }}
         run: |
           set -euo pipefail
           version="$(date -u +'%Y.%m.%d')"
@@ -120,19 +144,59 @@ jobs:
             echo "publish_hub=$publish_hub"
           } >> "$GITHUB_OUTPUT"
 
+          # ⭐ The second chance stands down when the day already published. The
+          # dated index tag is the record of that, read anonymously from the
+          # registry like every other published fact here.
+          skip=false
+          if [ "${FIRED_CRON:-}" = "$BACKUP_CRON" ]; then
+            repo="${target_image#ghcr.io/}"
+            token="$(curl -sS --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
+              "https://ghcr.io/token?scope=repository:${repo}:pull&service=ghcr.io" | jq -r '.token // empty')"
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 15 --max-time 60 \
+              -H "Authorization: Bearer $token" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json' \
+              -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
+              "https://ghcr.io/v2/${repo}/manifests/v${version}")"
+            if [ "$code" = "200" ]; then
+              skip=true
+              echo "::notice::v${version} is already published, so the second chance has nothing to do"
+            else
+              echo "::warning::v${version} is not published (HTTP ${code}), so the second chance builds"
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          if [ "$skip" = "true" ]; then
+            echo "anchors={}" >> "$GITHUB_OUTPUT"
+            echo "unreachable=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           # The anchor names the pinned tag family. The ports are not in
           # lockstep, so it is resolved per architecture.
+          #
+          # ⛔ A port no mirror answers for is named and held back, and the loop
+          # goes on. resolve-anchor has already tried every server in that
+          # port's list and printed each refusal.
           anchors='{'
           sep=''
+          unreachable=''
           for arch in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
-            anchor="$(scripts/resolve-anchor "$arch")"
-            anchors="${anchors}${sep}\"${arch}\":\"${anchor}\""
-            sep=','
-            echo "anchor for $arch: $anchor"
+            rc=0
+            anchor="$(scripts/resolve-anchor "$arch" 2> "/tmp/resolve-$arch.err")" || rc=$?
+            if [ "$rc" -eq 0 ] && [ -n "$anchor" ]; then
+              anchors="${anchors}${sep}\"${arch}\":\"${anchor}\""
+              sep=','
+              echo "anchor for $arch: $anchor"
+            else
+              unreachable="$unreachable $arch"
+              echo "::warning::$arch is held back: no mirror in rootfs/$arch/etc/pacman.d/mirrorlist served its database to this runner"
+              sed 's/^/  /' "/tmp/resolve-$arch.err"
+            fi
           done
           anchors="${anchors}}"
           jq -e . <<< "$anchors" > /dev/null
           echo "anchors=$anchors" >> "$GITHUB_OUTPUT"
+          echo "unreachable=${unreachable# }" >> "$GITHUB_OUTPUT"
 
       # ⛔ A build whose anchor went backwards is refused here, before anything
       # is built or pushed. 20 of the 46 shipped mirrors are plain http, all on
@@ -144,15 +208,62 @@ jobs:
       # public tag list with no token and no state file. FLOOR_IMAGE is the
       # real repository even in a dry run: the floor is a fact about the
       # packages, not about where this run intends to push.
+      #
+      # ⛔ Refused per architecture. The port that went backwards is held and
+      # its build job goes red; the rest are not held hostage by it. A floor
+      # that cannot be read at all refuses every port, because a guard that a
+      # transient switches off is not a guard.
       - name: Refuse a build whose anchor went backwards
+        id: floor
+        if: steps.inputs.outputs.skip != 'true'
         env:
           ANCHORS: ${{ steps.inputs.outputs.anchors }}
           FLOOR_IMAGE: ${{ env.GHCR_IMAGE }}
           ALLOW_ANCHOR_DOWNGRADE: ${{ inputs.allow_anchor_downgrade && '1' || '0' }}
           CONTAINER_RUNTIME: docker
-        run: scripts/check-anchor-floor "$ANCHORS"
+        run: |
+          set -euo pipefail
+          if [ "$ANCHORS" = "{}" ]; then
+            echo "no port served its database to this runner, so there is nothing to check and nothing to build" >&2
+            exit 1
+          fi
+          rc=0
+          scripts/check-anchor-floor "$ANCHORS" > /tmp/floor.txt || rc=$?
+          cat /tmp/floor.txt
+          case "$rc" in
+            0) refused="" ;;
+            3)
+              refused="$(awk '$1 == "BEHIND" { printf "%s ", $2 }' /tmp/floor.txt)"
+              echo "::error::the anchor went backwards on: ${refused% }. Those are not built. Re-run with allow_anchor_downgrade if upstream really reverted."
+              ;;
+            *)
+              echo "the anchor floor could not be read, so no port is cleared to publish" >&2
+              exit 1
+              ;;
+          esac
+          echo "refused=${refused% }" >> "$GITHUB_OUTPUT"
+
+      - name: Decide what builds
+        id: clear
+        if: steps.inputs.outputs.skip != 'true'
+        env:
+          ANCHORS: ${{ steps.inputs.outputs.anchors }}
+          REFUSED: ${{ steps.floor.outputs.refused }}
+        run: |
+          set -euo pipefail
+          cleared="$(jq -c --arg refused "$REFUSED" '
+            ($refused | split(" ") | map(select(length > 0))) as $r
+            | with_entries(select(.key as $k | ($r | index($k)) == null))' <<< "$ANCHORS")"
+          echo "cleared=$cleared" >> "$GITHUB_OUTPUT"
+          n="$(jq -r 'length' <<< "$cleared")"
+          if [ "$n" -eq 0 ]; then
+            echo "no port is cleared to build: each is unreachable or refused, named above" >&2
+            exit 1
+          fi
+          echo "::notice::$n port(s) cleared to build: $(jq -r 'keys | join(" ")' <<< "$cleared")"
 
       - name: Check the repository before building it
+        if: steps.inputs.outputs.skip != 'true'
         run: tests/run.sh static
 
   #----------------------------------------------------------------------------------#
@@ -174,8 +285,7 @@ jobs:
       contents: read
       packages: write
     strategy:
-      # One run reports every broken architecture. The merge job still refuses
-      # unless all of them passed.
+      # One run reports every broken architecture, and none stops another.
       fail-fast: false
       matrix:
         include:
@@ -215,13 +325,48 @@ jobs:
             platform: linux/ppc64le
             runner: ubuntu-latest
     steps:
+      # ⛔ The first step decides, and every step after it asks. A port the
+      # resolve job held back is not built: unreachable is a warning and a green
+      # job, because the cause is a network this repository does not own and the
+      # report job keeps an issue open for it; refused by the anchor floor is a
+      # red job, because that one needs a decision.
+      - name: Check this architecture is cleared to build
+        id: gate
+        env:
+          DOCKER_ARCH: ${{ matrix.docker_arch }}
+          CLEARED: ${{ needs.resolve.outputs.cleared }}
+          REFUSED: ${{ needs.resolve.outputs.refused }}
+          SKIP: ${{ needs.resolve.outputs.skip }}
+        run: |
+          set -euo pipefail
+          if [ "$SKIP" = "true" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::today is already published, nothing to build"
+            exit 0
+          fi
+          cleared="${CLEARED:-}"
+          [ -n "$cleared" ] || cleared='{}'
+          if jq -e --arg a "$DOCKER_ARCH" 'has($a)' <<< "$cleared" > /dev/null; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "$DOCKER_ARCH is cleared, anchor $(jq -r --arg a "$DOCKER_ARCH" '.[$a]' <<< "$cleared")"
+            exit 0
+          fi
+          echo "build=false" >> "$GITHUB_OUTPUT"
+          if tr ' ' '\n' <<< "$REFUSED" | awk -v a="$DOCKER_ARCH" '$0 == a { found = 1 } END { exit found ? 0 : 1 }'; then
+            echo "::error::$DOCKER_ARCH is refused: its anchor went backwards. Its last published image stays in the index."
+            exit 1
+          fi
+          echo "::warning::$DOCKER_ARCH is not built today: no mirror served its database to this runner. Its last published image stays in the index."
+
       - name: Checkout
+        if: steps.gate.outputs.build == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        if: steps.gate.outputs.build == 'true'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       # ⛔ The action does not cover big endian PowerPC, and nothing says so.
       # tonistiigi/binfmt, which it runs, ships nine emulators: aarch64, arm,
@@ -237,7 +382,7 @@ jobs:
       # Ubuntu's own qemu-user-static ships both. update-binfmts imports the
       # handler the package describes rather than a magic string written here.
       - name: Register the big endian PowerPC emulators
-        if: matrix.docker_arch == 'ppc' || matrix.docker_arch == 'ppc64'
+        if: steps.gate.outputs.build == 'true' && (matrix.docker_arch == 'ppc' || matrix.docker_arch == 'ppc64')
         env:
           DOCKER_ARCH: ${{ matrix.docker_arch }}
         run: |
@@ -282,9 +427,11 @@ jobs:
           echo "::notice::${handler} registered with the F flag"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        if: steps.gate.outputs.build == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Login to GHCR
+        if: steps.gate.outputs.build == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -293,7 +440,8 @@ jobs:
 
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        if: steps.gate.outputs.build == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ github.workspace }}
           platforms: ${{ matrix.platform }}
@@ -321,7 +469,8 @@ jobs:
       # package it cannot account for, so the check is unchanged either way.
       # HISTORY/evidence-race.md.
       - name: Export the databases the build resolved against
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        if: steps.gate.outputs.build == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ github.workspace }}
           platforms: ${{ matrix.platform }}
@@ -332,6 +481,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.docker_arch }}
 
       - name: Record the evidence for what was pushed
+        if: steps.gate.outputs.build == 'true'
         env:
           IMAGE: ${{ needs.resolve.outputs.target_image }}@${{ steps.build.outputs.digest }}
           PLATFORM: ${{ matrix.platform }}
@@ -356,6 +506,7 @@ jobs:
             "/tmp/evidence/evidence-${DOCKER_ARCH}.json"
 
       - name: Test what was actually pushed
+        if: steps.gate.outputs.build == 'true'
         env:
           IMAGE: ${{ needs.resolve.outputs.target_image }}@${{ steps.build.outputs.digest }}
           PLATFORM: ${{ matrix.platform }}
@@ -369,14 +520,18 @@ jobs:
           tests/run.sh image
 
       - name: Upload the evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.gate.outputs.build == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: evidence-${{ matrix.docker_arch }}
           path: /tmp/evidence/evidence-${{ matrix.docker_arch }}.json
           if-no-files-found: error
           retention-days: 90
 
+      # ⛔ Last, after every test. A digest is what the publish job tags, so an
+      # image that failed anything above leaves none behind and is never tagged.
       - name: Export the digest
+        if: steps.gate.outputs.build == 'true'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
@@ -389,7 +544,8 @@ jobs:
           printf '%s' "$DIGEST" > "/tmp/digests/${{ matrix.docker_arch }}"
 
       - name: Upload the digest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.gate.outputs.build == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: digest-${{ matrix.docker_arch }}
           path: /tmp/digests/${{ matrix.docker_arch }}
@@ -399,9 +555,14 @@ jobs:
   #----------------------------------------------------------------------------------#
   # Create every tag from the digests the matrix produced.
   #
-  # needs: over the whole matrix is what makes a partial failure publish nothing.
-  # There is no if: always() here on purpose: one architecture failing means no
-  # tag moves, rather than an index with a hole in it.
+  # ⛔ It runs when any architecture built, not only when all of them did. Each
+  # architecture that built gets its own tags. One that did not keeps the image
+  # its tags already point at, and that same image goes into the index, so the
+  # index always carries every platform ever published. An architecture never
+  # published at all is left out of the index and named.
+  #
+  # ⛔ A run in which nothing built moves no tag at all, because a dated index
+  # made only of carried images would date a build that never happened.
   #
   # The per architecture tags are created first and the index tags last, so
   # :latest only moves after everything else has succeeded.
@@ -409,10 +570,15 @@ jobs:
   publish:
     name: Create tags
     needs: [resolve, build]
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.resolve.outputs.skip != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    outputs:
+      fresh: ${{ steps.plan.outputs.fresh }}
+      carried: ${{ steps.plan.outputs.carried }}
+      absent: ${{ steps.plan.outputs.absent }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -420,14 +586,71 @@ jobs:
           persist-credentials: false
 
       - name: Download the digests
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: /tmp/digests
           pattern: digest-*
           merge-multiple: true
 
+      # ⛔ Every architecture gets a line: a digest built in this run, or the
+      # digest its own rolling tag already points at, or nothing. The carried
+      # digest is read from the real repository even in a dry run, because what
+      # was published is a fact about the real one; nothing is written there.
+      - name: Decide what each architecture publishes
+        id: plan
+        env:
+          TARGET_IMAGE: ${{ needs.resolve.outputs.target_image }}
+          CARRY_IMAGE: ${{ env.GHCR_IMAGE }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          repo="${CARRY_IMAGE#ghcr.io/}"
+          token="$(curl -sS --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
+            "https://ghcr.io/token?scope=repository:${repo}:pull&service=ghcr.io" | jq -r '.token // empty')"
+          [ -n "$token" ] || { echo "no anonymous pull token for ${repo}, so nothing can be carried" >&2; exit 1; }
+
+          : > /tmp/plan.tsv
+          fresh=""
+          carried=""
+          absent=""
+          for arch in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
+            if [ -s "/tmp/digests/$arch" ]; then
+              printf '%s\t%s\tfresh\n' "$arch" "$TARGET_IMAGE@$(cat "/tmp/digests/$arch")" >> /tmp/plan.tsv
+              fresh="$fresh $arch"
+              continue
+            fi
+            # The rolling single architecture tag is the docker architecture
+            # name itself, and scripts/tag-names always emits it.
+            digest="$(curl -sSI --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
+              -H "Authorization: Bearer $token" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json' \
+              -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
+              -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+              -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+              "https://ghcr.io/v2/${repo}/manifests/${arch}" \
+              | awk 'tolower($1) == "docker-content-digest:" { print $2 }' | tr -d '\r')"
+            if [ -n "$digest" ]; then
+              printf '%s\t%s\tcarried\n' "$arch" "$CARRY_IMAGE@$digest" >> /tmp/plan.tsv
+              carried="$carried $arch"
+              echo "::warning::$arch did not build in this run, so the index carries its last published image, $digest"
+            else
+              absent="$absent $arch"
+              echo "::error::$arch did not build and was never published, so the index goes out without it"
+            fi
+          done
+          cat /tmp/plan.tsv
+          {
+            echo "fresh=${fresh# }"
+            echo "carried=${carried# }"
+            echo "absent=${absent# }"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$fresh" ]; then
+            echo "no architecture built in this run, so no tag moves" >&2
+            exit 1
+          fi
+
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -443,13 +666,15 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Only for what built in this run. A carried architecture's tags already
+      # point at the image it carries, so they are left exactly where they are.
       - name: Create the per architecture tags
         env:
           TARGET_IMAGE: ${{ needs.resolve.outputs.target_image }}
           HUB_TARGET: ${{ needs.resolve.outputs.hub_image }}
           PUBLISH_HUB: ${{ needs.resolve.outputs.publish_hub }}
           VERSION: ${{ needs.resolve.outputs.version }}
-          ANCHORS: ${{ needs.resolve.outputs.anchors }}
+          ANCHORS: ${{ needs.resolve.outputs.cleared }}
         run: |
           set -euo pipefail
           images=("$TARGET_IMAGE")
@@ -457,21 +682,20 @@ jobs:
             images+=("$HUB_TARGET")
           fi
           for arch in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
-            digest_file="/tmp/digests/$arch"
-            if [ ! -s "$digest_file" ]; then
-              echo "no digest for $arch, refusing to tag a partial release" >&2
-              exit 1
+            source="$(awk -F'\t' -v a="$arch" '$1 == a && $3 == "fresh" { print $2 }' /tmp/plan.tsv)"
+            if [ -z "$source" ]; then
+              echo "==> $arch was not built in this run, its tags stay where they are"
+              continue
             fi
-            digest="$(cat "$digest_file")"
             anchor="$(jq -er --arg a "$arch" '.[$a]' <<< "$ANCHORS")"
             mapfile -t tags < <(scripts/tag-names arch "$arch" "$VERSION" "$anchor" "${images[@]}")
             args=()
             for t in "${tags[@]}"; do
               args+=(-t "$t")
             done
-            echo "==> $arch $digest"
+            echo "==> $arch $source"
             printf '    %s\n' "${tags[@]}"
-            docker buildx imagetools create "${args[@]}" "$TARGET_IMAGE@$digest"
+            docker buildx imagetools create "${args[@]}" "$source"
           done
 
       - name: Create the index tags
@@ -486,16 +710,18 @@ jobs:
           if [ "$PUBLISH_HUB" = "true" ]; then
             images+=("$HUB_TARGET")
           fi
-          sources=()
-          for arch in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
-            sources+=("$TARGET_IMAGE@$(cat "/tmp/digests/$arch")")
-          done
+          mapfile -t sources < <(awk -F'\t' 'NF >= 2 { print $2 }' /tmp/plan.tsv)
+          if [ "${#sources[@]}" -eq 0 ]; then
+            echo "the plan names no image, so there is no index to create" >&2
+            exit 1
+          fi
           mapfile -t tags < <(scripts/tag-names index "$VERSION" "${images[@]}")
           args=()
           for t in "${tags[@]}"; do
             args+=(-t "$t")
           done
           printf '    %s\n' "${tags[@]}"
+          printf '    from %s\n' "${sources[@]}"
           docker buildx imagetools create "${args[@]}" "${sources[@]}"
 
       - name: Verify what was published
@@ -512,7 +738,7 @@ jobs:
           # fail on its own, and until this step covered it a Docker Hub tag that
           # never arrived, or arrived without every platform, ended a green run.
           verify_index() {
-            local image="$1" dated got expect
+            local image="$1" dated got expect arch
             # The dated index tag carries a leading v. scripts/tag-names is the
             # authority on the spelling, so it is asked rather than
             # reconstructed: inspecting a tag the publish job never created
@@ -520,8 +746,9 @@ jobs:
             dated="$(scripts/tag-names index "$VERSION" "$image" | grep -v ':latest$')"
             echo "verifying $dated"
 
-            # The index must carry every platform the matrix built. An index with
-            # a hole in it is the failure this whole topology exists to prevent.
+            # The index must carry every platform the plan put in it, built or
+            # carried. An index with a hole in it is the failure this whole
+            # topology exists to prevent.
             got="$(docker buildx imagetools inspect "$dated" --raw \
               | jq -r '[ .manifests[].platform
                          | select(.os != "unknown")
@@ -531,8 +758,13 @@ jobs:
 
             # armv7 renders as arm/v7. A bare match on arm would also match
             # arm64, so the assertion would pass with armv7 missing and mean
-            # nothing.
+            # nothing. An architecture the plan left out is skipped, and the
+            # plan step has already named it as an error.
             for expect in amd64 arm64 loong64 riscv64 ppc ppc64 ppc64le arm/v7; do
+              arch="${expect/arm\/v7/armv7}"
+              if ! awk -F'\t' -v a="$arch" '$1 == a { found = 1 } END { exit found ? 0 : 1 }' /tmp/plan.tsv; then
+                continue
+              fi
               if ! grep -qw -- "$expect" <<< "$got"; then
                 echo "the index for $dated is missing $expect" >&2
                 echo "it carries: $got" >&2
@@ -550,6 +782,101 @@ jobs:
           else
             echo "::notice::publish_hub is false, so no Docker Hub tag was created or verified"
           fi
+
+  #----------------------------------------------------------------------------------#
+  # ⛔ The loud half of carrying an architecture forward. One issue per
+  # architecture that did not publish fresh, opened the first day, kept current
+  # while it lasts, and closed by the first run that publishes it again. A port
+  # that is down for a month is one notification, not thirty red runs that teach
+  # everyone to stop reading them.
+  #
+  # ⛔ needs: everything, and if: always(), so it reports on a run that broke
+  # anywhere. Nothing needs it. A dry run reports nothing.
+  #----------------------------------------------------------------------------------#
+  report:
+    name: Track what did not publish
+    needs: [resolve, build, publish]
+    if: ${{ always() && inputs.dry_run != true && needs.resolve.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Open, update or close one issue per architecture
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RESOLVE: ${{ needs.resolve.result }}
+          PUBLISH: ${{ needs.publish.result }}
+          UNREACHABLE: ${{ needs.resolve.outputs.unreachable }}
+          REFUSED: ${{ needs.resolve.outputs.refused }}
+          FRESH: ${{ needs.publish.outputs.fresh }}
+          CARRIED: ${{ needs.publish.outputs.carried }}
+          ABSENT: ${{ needs.publish.outputs.absent }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          today="$(date -u +%Y-%m-%d)"
+
+          # The run as a whole. Nothing per architecture can be said when the
+          # inputs never resolved or the tags never moved.
+          if [ "$RESOLVE" != "success" ] || [ "$PUBLISH" != "success" ]; then
+            # The printf formats are markdown. Backticks inside them are
+            # literal text for the issue body, not shell expansions.
+            # shellcheck disable=SC2016
+            {
+              printf 'The scheduled build did not publish on %s.\n\n' "$today"
+              printf '| job | result |\n| --- | --- |\n'
+              printf '| Resolve inputs | `%s` |\n| Create tags | `%s` |\n\n' "$RESOLVE" "$PUBLISH"
+              printf 'Run: %s\n\n' "$RUN_URL"
+              printf 'Every architecture keeps the image its tags already point at. This\n'
+              printf 'issue closes itself on the first run that publishes again.\n'
+            } > /tmp/run.md
+            scripts/track-issue raise build-run "build: the daily publish did not run to the end" /tmp/run.md
+          else
+            scripts/track-issue clear build-run "Published again in $RUN_URL."
+          fi
+
+          member() {
+            tr ' ' '\n' <<< "$2" | awk -v a="$1" '$0 == a { found = 1 } END { exit found ? 0 : 1 }'
+          }
+
+          for arch in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
+            if member "$arch" "$FRESH"; then
+              scripts/track-issue clear "build-$arch" "$arch published again in $RUN_URL."
+              continue
+            fi
+            if [ "$RESOLVE" != "success" ] || [ "$PUBLISH" != "success" ]; then
+              # Already reported as a whole above.
+              continue
+            fi
+            if member "$arch" "$UNREACHABLE"; then
+              why="no mirror in \`rootfs/$arch/etc/pacman.d/mirrorlist\` served its database to a GitHub runner. The port is not built until one does, and nothing here needs to change for it to come back."
+            elif member "$arch" "$REFUSED"; then
+              why="its anchor went backwards against what is already published, so the rollback guard refused it. If upstream really reverted, dispatch the build with \`allow_anchor_downgrade\`. HISTORY/arm-rollback.md."
+            else
+              why="its build job failed. The job log in the run below names the step and the reason."
+            fi
+            if member "$arch" "$CARRIED"; then
+              state="The multi architecture index keeps carrying the last image published for it, so \`latest\` still serves $arch."
+            elif member "$arch" "$ABSENT"; then
+              state="⛔ It has never been published, so the index goes out without it."
+            else
+              state="-"
+            fi
+            # shellcheck disable=SC2016
+            {
+              printf '`%s` did not publish on %s: %s\n\n' "$arch" "$today" "$why"
+              printf '%s\n\n' "$state"
+              printf 'Last checked: %s\n\n' "$RUN_URL"
+              printf 'This issue closes itself on the first run that publishes `%s` again.\n' "$arch"
+            } > "/tmp/$arch.md"
+            scripts/track-issue raise "build-$arch" "build: $arch is not publishing" "/tmp/$arch.md"
+          done
 
   #----------------------------------------------------------------------------------#
   # The other half of the publish watchdog.
@@ -584,9 +911,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -uo pipefail
-          scripts/check-schedules-fired
-          rc=$?
+          set -euo pipefail
+          rc=0
+          scripts/check-schedules-fired || rc=$?
           case "$rc" in
             0) echo "::notice::every schedule has fired within its own tolerance" ;;
             3)
@@ -596,3 +923,29 @@ jobs:
               ;;
             *) echo "the schedule check could not run" >&2; exit 1 ;;
           esac
+
+  #----------------------------------------------------------------------------------#
+  # ⛔ GitHub disables every scheduled workflow in a repository with 60 days of
+  # no activity, and a disabled schedule produces no run that could notice. This
+  # turns every workflow in the repository back on, every day, so a quiet
+  # stretch never reaches the cut off. freshness-publish.yml does the same, so
+  # either one firing keeps both alive.
+  #
+  # ⛔ It depends on no job and no job depends on it, like the watchdog.
+  #----------------------------------------------------------------------------------#
+  keepalive:
+    name: Keep every schedule enabled
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Enable every workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/keep-schedules-enabled

@@ -18,14 +18,16 @@ name: Freshness, the publish itself
 # run red; this one runs the same check, so build-deploy.yml going quiet turns
 # this run red.
 #
-# ⚠ Written down rather than solved: neither sees every schedule in the
-# repository stopping at once. That is what GitHub does to a repository with 60
-# days of no activity, and it leaves no run for either check to be run by. Both
-# workflows are dispatchable, so a human asking gets the answer.
+# ⭐ Every schedule stopping at once is what GitHub does to a repository with 60
+# days of no activity, and it leaves no run for either check to be run by. So
+# both workflows also turn every workflow back on, daily, through
+# scripts/keep-schedules-enabled, which keeps the quiet stretch from ever
+# reaching the cut off.
 #
 # ⛔ This opens no pull request. The other freshness workflows watch a pinned
 # thing and can propose the new pin; there is nothing to apply here. A publish
-# that stopped is fixed by finding out why, and the red run is the whole output.
+# that stopped is fixed by finding out why. The red run and one issue, kept
+# open until the publish is healthy again, are the whole output.
 on:
   workflow_dispatch:
   schedule:
@@ -49,6 +51,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,12 +64,16 @@ jobs:
       # schedules are still firing. A publish job that runs daily and publishes
       # nothing is green to the second and red to the first, which is the 59
       # days of green runs that policy 6 exists to prevent.
+      # ⛔ The status is captured with || rc=$?. Actions runs a bash step with
+      # -e, so the shape this used to have, the check and then rc=$? on the
+      # next line, died on the check's own exit 3 and never printed the
+      # ::error line or reached the verdict. HISTORY/outage-2026-09.md.
       - name: The newest dated index tag
         id: recency
         run: |
-          set -uo pipefail
-          scripts/check-publish-recency
-          rc=$?
+          set -euo pipefail
+          rc=0
+          scripts/check-publish-recency || rc=$?
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           case "$rc" in
             0) echo "::notice::the publish is current" ;;
@@ -79,9 +86,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -uo pipefail
-          scripts/check-schedules-fired
-          rc=$?
+          set -euo pipefail
+          rc=0
+          scripts/check-schedules-fired || rc=$?
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           case "$rc" in
             0) echo "::notice::every schedule has fired within its own tolerance" ;;
@@ -89,18 +96,59 @@ jobs:
             *) echo "the schedule check could not run" >&2; exit 1 ;;
           esac
 
+      # ⭐ The red run is kept, and an issue is opened beside it, once, so the
+      # stop reaches a person through a notification and not only through a
+      # run list nobody is reading. It closes on the first healthy day.
       - name: Take the verdict
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RECENCY: ${{ steps.recency.outputs.rc }}
           SCHEDULES: ${{ steps.schedules.outputs.rc }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           if [ "$RECENCY" = "0" ] && [ "$SCHEDULES" = "0" ]; then
             echo "the publish is happening and every schedule is firing"
+            scripts/track-issue clear publish-stopped "Healthy again: the publish is current and every schedule fired, $RUN_URL."
             exit 0
           fi
+          # The printf formats are markdown. Backticks inside them are literal
+          # text for the issue body, not shell expansions.
+          # shellcheck disable=SC2016
+          {
+            printf 'The publish watchdog found a stop on %s.\n\n' "$(date -u +%Y-%m-%d)"
+            printf '| check | result |\n| --- | --- |\n'
+            printf '| `scripts/check-publish-recency` | `%s` |\n' "$RECENCY"
+            printf '| `scripts/check-schedules-fired` | `%s` |\n\n' "$SCHEDULES"
+            printf '0 is healthy and 3 is stopped. The run names what stopped: %s\n\n' "$RUN_URL"
+            printf 'This issue closes itself on the first day both checks pass.\n'
+          } > /tmp/stopped.md
+          scripts/track-issue raise publish-stopped "publish: the daily publish or a schedule has stopped" /tmp/stopped.md
           echo "publish recency: $RECENCY, schedules: $SCHEDULES (0 is healthy, 3 is stopped)" >&2
           echo "⛔ This red mark is the whole point of this workflow: the failure it" >&2
           echo "reports produces no run of its own to be red." >&2
           echo "reproduce: scripts/check-publish-recency; scripts/check-schedules-fired" >&2
           exit 1
+
+  #----------------------------------------------------------------------------------#
+  # ⛔ The other copy of the keepalive in build-deploy.yml. GitHub disables every
+  # schedule in a repository with 60 days of no activity, so each of the two
+  # daily workflows turns every workflow back on, and either one firing keeps
+  # both alive.
+  #----------------------------------------------------------------------------------#
+  keepalive:
+    name: Keep every schedule enabled
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Enable every workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/keep-schedules-enabled

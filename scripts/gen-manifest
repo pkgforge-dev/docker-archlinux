@@ -78,18 +78,15 @@ else
   [ -n "$token" ] || die "no anonymous pull token from $registry for $repo" \
     "reproduce: curl -sS \"https://$registry/token?scope=repository:$repo:pull&service=$registry\""
 
-  curl -sS --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 5 \
-    -H "Authorization: Bearer $token" \
-    "https://$registry/v2/$repo/tags/list?n=1000" -o "$work/tags.json" \
-    || die "cannot read the tag list for $repo from $registry"
-
-  jq -e '.name' "$work/tags.json" > /dev/null 2>&1 \
-    || die "the response from $registry is not a tag list" \
-      "⛔ a body with no name field is an error object, and reading it as an empty" \
-      "  tag list would publish a manifest saying nothing is published" \
-      "reproduce: curl -sS -H 'Authorization: Bearer <token>' https://$registry/v2/$repo/tags/list?n=1000"
-
-  jq -r '.tags[]? // empty' "$work/tags.json" | tr -d '\r' | awk 'NF' > "$work/tags.txt"
+  # ⛔ Every page, through scripts/registry-tags, which also refuses a page that
+  # is not a tag list. One page stops holding the newest tags as the
+  # repository grows, and a manifest missing them would say they were never
+  # published.
+  if ! "$REPO_ROOT/scripts/registry-tags" "$registry" "$repo" > "$work/tags.txt" 2> "$work/tags.err"; then
+    sed 's/^/  /' "$work/tags.err" >&2
+    die "the tag list for $repo on $registry cannot be read" \
+      "reproduce: scripts/registry-tags $registry $repo"
+  fi
 fi
 
 total="$(awk 'END { print NR + 0 }' "$work/tags.txt")"

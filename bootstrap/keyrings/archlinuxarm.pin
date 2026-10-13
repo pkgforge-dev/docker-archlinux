@@ -13,7 +13,9 @@
 #   keyring   the pacman keyring name, so --populate can be told what to add
 #   arch      the pacman Architecture values this pin serves, space separated
 #   mirror    the directory the package is fetched from
-#   package   the pinned package, name carrying its version
+#   package   the pinned package, name carrying its version. ⛔ The package
+#             itself is carried in this directory under exactly that name,
+#             because a port deletes a superseded keyring from its mirror
 #   sha256    over that package
 #   trusted   one line per fingerprint in the keyring's own -trusted file,
 #             with the primary key's expiry as YYYY-MM-DD or never

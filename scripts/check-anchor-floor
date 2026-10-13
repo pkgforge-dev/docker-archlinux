@@ -131,42 +131,21 @@ esac
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# ⚠ Both fetches below carry a connect timeout and a total timeout. A registry
-# that accepts the connection and then stalls would otherwise hold the whole
-# publish open until the job hits its own limit, with no message about why.
-token="$(curl -sS --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
-  "https://$registry/token?scope=repository:$repo:pull&service=$registry" \
-  | jq -r '.token // empty' | tr -d '\r')"
-[ -n "$token" ] || die "no anonymous pull token from $registry for $repo" \
-  "the floor is read from the public tag list, which needs no account" \
-  "reproduce: curl -sS \"https://$registry/token?scope=repository:$repo:pull&service=$registry\""
-
-if ! curl -sS --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 5 \
-     -H "Authorization: Bearer $token" \
-     "https://$registry/v2/$repo/tags/list?n=1000" -o "$work/tags.json"; then
-  die "cannot read the tag list for $repo from $registry" \
-    "reproduce: curl -sS -H 'Authorization: Bearer <token>' https://$registry/v2/$repo/tags/list?n=1000"
-fi
-
-# ⛔ The response has to be a tag list, not merely 200. A registry answering an
-# error object, or an intermediary answering anything at all, produces a body
-# with no tags, and an empty tag list reads as "no floor yet" and passes. A
-# guard that a transient can switch off is not a guard. Every real tag list
-# names its repository, so that is what is checked before the tags are trusted.
-name="$(jq -r '.name // empty' "$work/tags.json" | tr -d '\r')"
-if [ -z "$name" ]; then
-  echo "check-anchor-floor: the tag list from $registry has no name field" >&2
-  # The first 400 bytes of what did arrive, indented, so the reason is in the
-  # log rather than a step away from it.
-  awk 'NR <= 10 { print "  " substr($0, 1, 200) }' "$work/tags.json" >&2
-  die "the response is not a tag list, so the floor cannot be read" \
+# ⛔ Every page of the tag list, through scripts/registry-tags. The list grows by
+# about seventeen tags a day and the registry pages it oldest first, so a
+# single page stops holding the newest anchors within weeks. A floor read from
+# the oldest page is a lower floor, which is the rollback guard quietly
+# switching itself off.
+#
+# ⛔ registry-tags refuses a page that is not a tag list naming its repository.
+# An error body read as "no tags" would read as "no floor yet" and pass. A
+# guard that a transient can switch off is not a guard.
+if ! "$REPO_ROOT/scripts/registry-tags" "$registry" "$repo" > "$work/tags.txt" 2> "$work/tags.err"; then
+  sed 's/^/  /' "$work/tags.err" >&2
+  die "the tag list for $repo on $registry cannot be read, so the floor cannot be read" \
     "⛔ passing here would switch the rollback guard off on a transient" \
-    "reproduce: curl -sS -H 'Authorization: Bearer <token>' https://$registry/v2/$repo/tags/list?n=1000"
+    "reproduce: scripts/registry-tags $registry $repo"
 fi
-
-# ⚠ tr -d '\r' on every jq result. jq on Windows writes CRLF, and a version
-# carrying one compares as a different string and reads as a rollback.
-jq -r '.tags[]? // empty' "$work/tags.json" | tr -d '\r' | awk 'NF' > "$work/tags.txt"
 tag_count="$(awk 'END { print NR + 0 }' "$work/tags.txt")"
 if [ "$tag_count" -eq 0 ]; then
   # A real repository with no tags at all is the first run for a new one.

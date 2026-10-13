@@ -17,12 +17,19 @@
 # checksum with no explanation of what moved.
 #
 # Exit status is the result, not just success or failure. With several pins it
-# is the worst of them:
+# is the highest of them:
 #   0  the pin matches the newest package on the mirror, and the bytes still hash
 #   3  a newer package exists, the pinned one is still fetchable
-#   4  the pinned package is gone from the mirror, so that port is broken now
+#   4  the pinned package is gone from the mirror. The build reads the copy in
+#      the tree, so the port still builds, and the pin is behind
 #   5  the pinned package is still served and its bytes changed
+#   6  no mirror the pin names answered from here, so nothing was compared
+#   7  a newer package exists and no key the pin trusts signed it. --apply
+#      refuses this one
 #   1  the check itself could not run
+#
+# ⭐ --apply rewrites the pin and the copy of the package in the tree together,
+# and only for a package whose signature traces back to a key the pin trusts.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -205,12 +212,18 @@ check_one() {
     echo "check-keyring-pin: cannot list $m/, trying the next mirror" >&2
   done < <(field_all "$pin" mirror)
 
+  # ⛔ A port no mirror answers for is a result, not a failure of this check. The
+  # build carries the pinned package in the tree, so the pin keeps working while
+  # the port is out of reach, and there is nothing to compare it with.
   if [ "$listed" -ne 1 ]; then
-    die "cannot list any mirror in $pin" \
-      "every failure is printed above" \
-      "add a mirror line to $pin, or point the existing one somewhere that answers" \
-      "⚠ a mirror can serve files and answer a directory with a JavaScript page, which lists nothing" \
-      "check it with: curl -sS -o /dev/null -w %{http_code} $mirror/"
+    echo "result: UNREACHABLE, no mirror in the pin answered from here"
+    echo "  every failure is printed above"
+    echo "  the package in the tree keeps the build working, and the pin is compared again next run"
+    echo "  ⚠ a mirror can serve files and answer a directory with a JavaScript page, which lists nothing"
+    write_outputs "$pin" "$keyring" "$old_pkg" "$old_sha" "-" "-" \
+      "-" "$old_trusted_count" "$expired_now" "$soon" "-" 6 "" ""
+    note_result 6
+    return 0
   fi
   echo "listed from    : $mirror"
 
@@ -317,12 +330,65 @@ check_one() {
   echo "added          : ${added:-none}"
   echo "removed        : ${removed:-none}"
 
+  #-------------------------------------------------------------------------#
+  # Who signed the new package
+  #
+  # ⛔ The new trust root has to be vouched for by the old one. Its detached
+  # signature is checked against the keys of the package the pin names now,
+  # taken from the copy in the tree, and the signer's primary key has to be one
+  # the pin trusts. That is the rotation pacman itself accepts on a running
+  # system. A package nobody the pin trusts has signed is reported and never
+  # applied: that is a trust root moving with nothing tying it to the old one.
+  #-------------------------------------------------------------------------#
+  local signer="-" old_src=""
+  if [ -f "$KEYRING_DIR/$old_pkg" ]; then
+    old_src="$KEYRING_DIR/$old_pkg"
+  elif [ "$pinned_code" = "200" ]; then
+    old_src="$work/pinned.pkg"
+  fi
+  if [ -z "$old_src" ]; then
+    echo "signed by      : NOT CHECKED, the tree carries no copy of $old_pkg and the mirror no longer serves it"
+    result=7
+  elif ! curl -sSfL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 3 \
+         -o "$work/k.pkg.sig" "$mirror/$new_pkg.sig"; then
+    echo "signed by      : NOT CHECKED, $mirror/$new_pkg.sig did not answer"
+    result=7
+  else
+    mkdir -p "$work/old-x" "$work/gnupg"
+    chmod 0700 "$work/gnupg"
+    unpack "$old_src" "$work/old-x"
+    gpg --homedir "$work/gnupg" --batch --quiet \
+      --import "$work/old-x/usr/share/pacman/keyrings/$keyring.gpg" > "$work/import.log" 2>&1
+    # gpg's exit status says nothing this needs: an unknown key, an expired
+    # one and a bad signature all exit non-zero, and the status lines below
+    # tell them apart. It is kept for the log rather than discarded.
+    local verify_rc=0
+    gpg --homedir "$work/gnupg" --batch --status-fd 1 \
+      --verify "$work/k.pkg.sig" "$work/k.pkg" > "$work/verify.status" 2> "$work/verify.log" || verify_rc=$?
+    echo "gpg --verify exited $verify_rc" >> "$work/verify.log"
+    signer="$(awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print ($12 != "" ? $12 : $3); exit }' "$work/verify.status")"
+    if [ -n "$signer" ] && awk -v f="$signer" '$1 == f { found = 1 } END { exit found ? 0 : 1 }' "$work/old-trusted.txt"; then
+      echo "signed by      : $signer, a key the pin trusts"
+    else
+      echo "signed by      : ${signer:-no valid signature}, which the pin does not trust"
+      sed 's/^/  /' "$work/verify.log"
+      signer="${signer:--}"
+      result=7
+    fi
+  fi
+  note_result "$result"
+
   write_outputs "$pin" "$keyring" "$old_pkg" "$old_sha" "$new_pkg" "$new_sha" \
     "$new_size" "$new_count" "$expired_now" "$soon" "$pinned_code" "$result" \
     "$added" "$removed"
 
   if [ "$apply" -eq 0 ]; then
     return 0
+  fi
+  if [ "$result" -eq 7 ]; then
+    die "refusing to apply $new_pkg: no key the pin trusts signed it" \
+      "a trust root that moves with nothing tying it to the old one needs a person, not a job" \
+      "verify it by hand from the steps at the top of $pin, then edit the pin and the copy in the tree"
   fi
 
   #-------------------------------------------------------------------------#
@@ -346,7 +412,11 @@ check_one() {
       }
       next
     }
-    /^# Adopted .* Verified on that date against$/ { printf "# Adopted %s. Verified on that date against\n", today; next }
+    /^# Adopted [0-9-]+\. Verified on that date against/ {
+      sub(/^# Adopted [0-9-]+\./, "# Adopted " today ".")
+      print
+      next
+    }
     { print }
   ' "$pin" > "$tmp"
 
@@ -362,7 +432,16 @@ check_one() {
 
   mv "$tmp" "$pin"
   chmod 0644 "$pin"
-  echo "applied: $pin now pins $new_pkg with $written trusted fingerprint(s)"
+
+  # ⛔ The copy in the tree moves with the pin, in the same change. The build
+  # reads the package from the tree, and tests/static/88-keyring-pins-vendored.sh
+  # fails on a pin without its copy and on a copy no pin names.
+  cp "$work/k.pkg" "$KEYRING_DIR/$new_pkg"
+  chmod 0644 "$KEYRING_DIR/$new_pkg"
+  if [ "$new_pkg" != "$old_pkg" ] && [ -f "$KEYRING_DIR/$old_pkg" ]; then
+    rm -f "$KEYRING_DIR/$old_pkg"
+  fi
+  echo "applied: $pin now pins $new_pkg with $written trusted fingerprint(s), and the tree carries it"
 }
 
 # Machine readable, for the job that opens the pull request. Prefixed with

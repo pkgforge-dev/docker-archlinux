@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+#
+# Keep every workflow in the tree enabled on GitHub.
+#
+#   scripts/keep-schedules-enabled
+#
+# ⛔ GitHub disables the scheduled workflows of a repository that has had no
+# activity for 60 days, and a disabled schedule leaves no run behind that could
+# notice. A workflow in state disabled_inactivity is enabled again here, and an
+# active one is enabled again too, which GitHub accepts as a no-op. Run daily by
+# build-deploy.yml and freshness-publish.yml, so either one firing keeps both.
+#
+# ⚠ A workflow disabled by hand is left disabled and named. That is a decision
+# somebody made, and undoing it daily would be overruling them.
+#
+# Only workflows whose file is in this tree are touched. GitHub keeps a record
+# for a deleted workflow file, and enabling that record does nothing useful.
+#
+# Needs GH_TOKEN with actions: write, and GITHUB_REPOSITORY.
+#
+# Exit status: 0 every workflow in the tree is enabled or deliberately
+# disabled, 1 could not.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+die() {
+  echo "keep-schedules-enabled: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null || die "$1 is required"
+}
+need gh
+need jq
+
+slug="${GITHUB_REPOSITORY:-}"
+case "$slug" in
+  */*) ;;
+  *) die "GITHUB_REPOSITORY is not owner/name: ${slug:-<unset>}" ;;
+esac
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+gh api --paginate "repos/$slug/actions/workflows?per_page=100" \
+  | jq -r '.workflows[] | "\(.id)\t\(.state)\t\(.path)"' | tr -d '\r' > "$work/workflows.tsv"
+
+[ -s "$work/workflows.tsv" ] || die "GitHub listed no workflow for $slug" \
+  "the token needs actions: read at least" \
+  "reproduce: gh api repos/$slug/actions/workflows --jq '.workflows[].path'"
+
+seen=0
+while IFS=$'\t' read -r id state path; do
+  [ -n "$id" ] || continue
+  [ -f "$REPO_ROOT/$path" ] || continue
+  seen=$((seen + 1))
+  case "$state" in
+    active | disabled_inactivity)
+      gh api -X PUT "repos/$slug/actions/workflows/$id/enable" > /dev/null
+      printf 'enabled   %-48s was %s\n' "$path" "$state"
+      ;;
+    disabled_manually)
+      echo "::warning::$path was disabled by hand and is left disabled"
+      ;;
+    *)
+      printf 'skipped   %-48s state %s\n' "$path" "$state"
+      ;;
+  esac
+done < "$work/workflows.tsv"
+
+[ "$seen" -gt 0 ] || die "none of the workflows GitHub listed is in this tree" \
+  "reproduce: gh api repos/$slug/actions/workflows --jq '.workflows[].path'"
+echo "keep-schedules-enabled: $seen workflow(s) in the tree checked"

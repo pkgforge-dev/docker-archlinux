@@ -144,17 +144,36 @@ for file in $scheduled; do
   # printing both on every line would say the same thing twice.
   read -r _ tolerance <<< "$tol_line"
 
-  # ⚠ event=schedule. A workflow kept alive by manual dispatches while its cron
-  # is dead looks healthy to a check that reads every run, and that is exactly
-  # the state this repository was in on 2026-08-27.
-  if ! runs="$(gh api "repos/$slug/actions/workflows/$file/runs?event=schedule&per_page=1" 2>&1)"; then
+  # ⚠ Only scheduled runs count. A workflow kept alive by manual dispatches while
+  # its cron is dead looks healthy to a check that reads every run, and that is
+  # exactly the state this repository was in on 2026-08-27.
+  #
+  # ⛔ Filtered here, not by the API. Asked with event=schedule, the API
+  # answered weeks stale: on 2026-10-06 it named 2026-09-05 as
+  # build-deploy.yml's last scheduled run, from inside a scheduled run of
+  # build-deploy.yml, and turned the watchdog red for a schedule that had not
+  # missed a day. ⚠ GitHub documents the filtered form as a search, which is
+  # the likely reason, and that is not measured. The filtered query is asked
+  # only when the plain list holds no scheduled run.
+  if ! runs="$(gh api "repos/$slug/actions/workflows/$file/runs?per_page=100" 2>&1)"; then
     die "cannot read the run list for $file" \
       "the token needs actions:read" \
       "gh said: $(printf '%s' "$runs" | awk 'NR == 1')" \
-      "reproduce: gh api repos/$slug/actions/workflows/$file/runs?event=schedule\&per_page=1"
+      "reproduce: gh api repos/$slug/actions/workflows/$file/runs?per_page=100"
   fi
+  last="$(printf '%s' "$runs" \
+    | jq -r '[ .workflow_runs[] | select(.event == "schedule") | .created_at ] | max // empty' \
+    | tr -d '\r')"
 
-  last="$(printf '%s' "$runs" | jq -r '.workflow_runs[0].created_at // empty' | tr -d '\r')"
+  if [ -z "$last" ]; then
+    if ! runs="$(gh api "repos/$slug/actions/workflows/$file/runs?event=schedule&per_page=1" 2>&1)"; then
+      die "cannot read the scheduled run list for $file" \
+        "the token needs actions:read" \
+        "gh said: $(printf '%s' "$runs" | awk 'NR == 1')" \
+        "reproduce: gh api repos/$slug/actions/workflows/$file/runs?event=schedule\&per_page=1"
+    fi
+    last="$(printf '%s' "$runs" | jq -r '.workflow_runs[0].created_at // empty' | tr -d '\r')"
+  fi
 
   if [ -n "$last" ]; then
     age="$(age_days "$last")"

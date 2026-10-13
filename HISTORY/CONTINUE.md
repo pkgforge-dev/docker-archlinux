@@ -262,8 +262,8 @@ name anyway, the spelling ArchPOWER itself uses: `powerpc`, `powerpc64`,
 It is a fork of `fwcd/docker-archlinux` in GitHub's data model only. ⛔ Treat it
 as independent. Do not sync from upstream. Do not describe it as a fork.
 
-180 tracked files, 15 scripts, 9 workflows, 30 test files, 7 examples,
-52 documents under `HISTORY/`. Measured 2026-08-29 at this session's last
+193 tracked files, 20 scripts, 10 workflows, 33 test files, 7 examples,
+53 documents under `HISTORY/`. Measured 2026-10-13 at this session's last
 commit, with `git ls-files | wc -l`,
 `ls scripts`, `ls .github/workflows`, `ls tests/static/*.sh tests/image/*.sh`,
 `ls examples | grep -v README` and `find HISTORY -name '*.md'`.
@@ -304,18 +304,21 @@ asserted by `tests/image/50-consumer-contract.sh`.
 | path | what it is |
 | --- | --- |
 | `Dockerfile` | two stages: bootstrap on `$BUILDPLATFORM`, then `FROM scratch` |
-| `.github/workflows/build-deploy.yml` | resolve, an eight way build matrix, then publish. Carries the `watchdog` job, which gates nothing |
+| `.github/workflows/build-deploy.yml` | resolve, an eight way build matrix, publish, and report. ⛔ A port that cannot be built is held back alone and its last image carried in the index; the report job keeps one issue per port that did not publish. Carries the `watchdog` and `keepalive` jobs, which gate nothing. Two crons, the second publishing only when the first did not |
 | `.github/workflows/ci.yml` | static suite and both linters. **This is the required status check** |
-| `.github/workflows/freshness-keyring.yml` | weekly, the ARM keyring pin |
-| `.github/workflows/freshness-mirrors.yml` | monthly, the mirror lists and the riscv64 pool |
+| `.github/workflows/freshness-keyring.yml` | weekly, the three keyring pins. Applies and proposes a bump signed by a key the pin trusts, opens an issue for one that is not |
+| `.github/workflows/freshness-mirrors.yml` | monthly, the mirror lists and the riscv64 pool. A port nothing answers for is left as it is and named |
 | `.github/workflows/freshness-image-pins.yml` | weekly, every `@sha256:` in the tree |
 | `.github/workflows/pacman-static.yml` | builds the static pacman for all eight. ⛔ Creates no release: `release.yml` calls it. Pins meson by version, because apt's is too old to know zig's linker |
 | `.github/workflows/release.yml` | owns the `v*` tag. Rootfs tarballs, OCI archives, package sets, the manifest, and the static pacman, in one release |
-| `.github/workflows/freshness-publish.yml` | daily, whether the publish is still happening and whether every schedule is still firing |
+| `.github/workflows/freshness-publish.yml` | daily, whether the publish is still happening and whether every schedule is still firing, with one issue while either is not. Carries the second `keepalive` |
+| `.github/workflows/bot-merge.yml` | after CI passes on a Renovate branch, approves and merges the pull request when every changed line only moves a pin. ⛔ Never a freshness pull request, decision 10 |
+| `.github/renovate.json` | the one dependency bot's configuration: actions weekly and three days old, image digests, and the `# tag:` pinned images in the workflows |
 | `.github/workflows/freshness-pacman-static.yml` | weekly, the source pin against upstream and the pinned commit against the live anchor on all eight ports |
 | `bootstrap/any/` | `pacstrap-docker`, `install-port-keyring`, `write-os-release` |
 | `bootstrap/<arch>/etc/bootstrap-packages.txt` | ⛔ package names only, no comments. xargs has no comment syntax |
 | `bootstrap/keyrings/*.pin` | one trust root per port: keyring name, the architectures it serves, mirror, package, sha256, and every trusted fingerprint with its expiry. ⛔ Adding a port is a file here, not a script. Three pins, and `archpower.pin` serves all three PowerPC ports |
+| `bootstrap/keyrings/*.pkg.tar.*` | ⛔ the pinned keyring packages themselves, byte for byte. The build reads them from here, because a port deletes a superseded one from its mirror |
 | `bootstrap/pacman-static/sources.pin` | every input to the static pacman: zig by sha256 per host, eleven library tarballs by sha256, pacman by commit. ⛔ Read by `scripts/build-pacman-static` only. The `Dockerfile` never reads it |
 | `docs/` | the bootstrapping guide. ⚠ Every fenced block in it is parsed by `tests/static/80-docs-claims.sh`, which discovers this directory |
 | `rootfs/any/` | locale files, and the two shipped pacman hooks |
@@ -336,12 +339,17 @@ asserted by `tests/image/50-consumer-contract.sh`.
 | `scripts/release-notes` | writes a release body and `SHA256SUMS` from the evidence files beside the assets |
 | `scripts/tag-names` | prints the tags for one architecture, or for the index |
 | `scripts/gen-evidence` | writes the per-platform evidence file |
-| `scripts/check-keyring-pin` | exit 0 current, 3 behind, 4 gone. ⛔ **4 means the ARM builds are already failing** |
+| `scripts/check-keyring-pin` | exit 0 current, 3 behind, 4 gone from the mirror, 5 bytes changed, 6 unreachable, 7 a newer package no pinned key signed. `--apply` moves the pin and the package in the tree together |
 | `scripts/check-image-pins` | every `@sha256:` against its `# tag:` marker. `--apply` rewrites |
-| `scripts/check-anchor-floor` | refuses a build whose anchor is older than one already published |
-| `tests/static/` | 24 files, no container needed |
+| `scripts/check-anchor-floor` | refuses a build whose anchor is older than one already published, per architecture |
+| `scripts/registry-tags` | every tag of a registry repository, every page. ⛔ The only reader of a tag list |
+| `scripts/track-issue` | one issue per problem: opened once, kept current, closed when it clears |
+| `scripts/propose-change` | one branch and one pull request per kind of freshness change, with CI dispatched on it. `--withdraw` closes it once nothing is left to change |
+| `scripts/merge-bot-pr` | what `bot-merge.yml` runs. `--check-diff` is the pin guard on its own |
+| `scripts/keep-schedules-enabled` | enables every workflow in the tree, so 60 quiet days cannot switch the schedules off |
+| `tests/static/` | 27 files, no container needed |
 | `tests/image/` | 6 files, against a built image |
-| `HISTORY/` | 52 documents, 28 of them reviews. ⛔ never the manual. `CONTINUE.md` is the exception: it is this file |
+| `HISTORY/` | 53 documents, 28 of them reviews. ⛔ never the manual. `CONTINUE.md` is the exception: it is this file |
 | `README.md`, `docs/` | the manual |
 
 ### Running the tests
@@ -459,7 +467,11 @@ Set by the maintainer. Requirements, not preferences.
    more than the decision: a check that lives as a script on the maintainer's
    machine will never be run. What those would test belongs in CI.
 2. **The repository maintains itself.** Very low maintenance: the maintainer
-   occasionally merges a Dependabot pull request and otherwise does not touch it.
+   does not have to touch it for the images to keep publishing. Restated
+   2026-10-13 after a 37 day outage that each of three upstream changes caused
+   on its own: one port failing never stops another, every pinned input the
+   build reads has a second path, and Renovate's pin bumps merge themselves.
+   What still needs a person opens an issue. `HISTORY/outage-2026-09.md`.
    Secret scanning is GitGuardian, needing a repository secret. ⛔ Creating that
    secret is the maintainer's action. Ask, do not create.
 3. **Effort goes into tests and scripts**, not documentation scaffolding.
@@ -493,6 +505,12 @@ Set by the maintainer. Requirements, not preferences.
 9. **The three PowerPC ports are implemented.** Decided by the maintainer
    2026-08-28 over `ppc64le` alone and over the two 64 bit ports, and added
    the same day. Eight architectures now. `HISTORY/powerpc.md`.
+10. **A freshness pull request is merged by hand, occasionally.** Decided by
+    the maintainer 2026-10-13: no token for opening them and no change to
+    branch protection, as long as the build keeps working while they wait,
+    which it does and which is measured. Renovate's pin bumps merge
+    themselves; nothing else a bot opens does. ⛔ Do not propose a token or a
+    protection change for it again. `HISTORY/maintainer-actions.md` section 4.
 
 ---
 
@@ -693,6 +711,13 @@ manual cross reference remap.
 | 50 | The dangling `.tmp/` citations, and a test that stops them coming back | `tests/static/97-scratch-citations.sh` |
 | 51 | This file moved into the repository, so it is no longer one wiped directory away from being lost | `HISTORY/CONTINUE.md` |
 | 52 | The first release, `v0.1.0`: 50 assets, eight architectures, six families, verified by downloading three of them and checking them against the published `SHA256SUMS`. It took three runs and the two that failed published nothing | run `33213236059`, `HISTORY/releases.md` |
+| 53 | The 37 day outage measured: loong64's pinned keyring deleted upstream, ArchPOWER refusing runners and the proxy, and a sparse member in Arch RISC-V's `extra.db`, each turned into a stop for every port by a topology that published nothing when one port failed | `HISTORY/outage-2026-09.md` |
+| 54 | ⛔ Row 3 reversed. A port that cannot be built is held back alone: the rest publish, its own tags stay put, its last image stays in the index, and one issue tracks it until it publishes again. Five built and three carried, the index listing all eight | `.github/workflows/build-deploy.yml`, dry run `38402706119` |
+| 55 | The keyring packages are carried in the tree and followed forward through pacman's own signature check against the pinned keys. `check-keyring-pin --apply` moves pin and package together, and refuses a package no pinned key signed | `tests/static/88-keyring-pins-vendored.sh`, `bootstrap/any/usr/local/bin/install-port-keyring` |
+| 56 | `gen-evidence` reads past a sparse database member, names it, and tells a damaged entry from a cache miss. riscv64 recorded 135 packages against an `extra.db` of 14715 records, naming `ntk-1.3.1001-4` | `tests/static/69-evidence-damaged-database.sh`, dry run `38402706119` |
+| 57 | Every freshness job acts on its own result. Status captured with `\|\| rc=$?` where `bash -e` had killed the step on it, one branch and one pull request per kind of change, CI dispatched on the branch, and one issue for what needs a person | `scripts/propose-change`, `scripts/track-issue` |
+| 58 | Renovate configured in the tree, and its pin bumps approved and merged once CI passes, behind a guard that refuses anything but a hash, a digest or a version comment. Six Renovate pull requests merged by hand first, each hash checked against its tag | `.github/workflows/bot-merge.yml`, `tests/static/89-bot-merge-guard.sh` |
+| 59 | Tag lists read page by page, every schedule re-enabled daily from two workflows, the watchdog reading the plain run list it had been misreading, and mirror age and reachability reported rather than gating every build | `scripts/registry-tags`, `scripts/keep-schedules-enabled`, `tests/static/40-mirrors-reachable.sh` |
 
 ---
 
@@ -780,15 +805,18 @@ spellings exist on both registries.
 
 ⚠ **What is open:**
 
-- ⛔ **The origin refuses GitHub runners, and it is policy rather than a bot
-  rule.** `repo.archlinuxpower.org` answers 403 with a Cloudflare interstitial
-  to every user agent tried from a runner, and 200 from a workstation. The
-  ArchPOWER tracker records the maintainer blocking whole networks deliberately,
-  issue 69: "After careful consideration I blocked all traffic from the Russian
-  Federation". ⚠ Nothing upstream names GitHub's ranges or a CI runner, so that
-  is a lead and not a diagnosis. ⛔ What it settles is the posture: treat
-  `api.rv.pkgforge.dev` as a permanent second path, not a workaround waiting for
-  upstream to fix something. `HISTORY/references/kth5-archpower.md`.
+- ⛔ **No path from a GitHub runner reaches ArchPOWER, since 2026-09-18.**
+  `repo.archlinuxpower.org` answers 403 with a Cloudflare interstitial to every
+  user agent tried from a runner, and from 2026-09-18 so does
+  `api.rv.pkgforge.dev`, which the origin sees as Cloudflare's own Worker
+  address. Both answer 200 from a residential network, measured 2026-10-13.
+  The tracker records one blocking policy, issue 69, against one country, and
+  nothing that names GitHub's ranges, so the cause is not known. ⭐ The ports are
+  held back by `resolve` and carried in the index, and come back with no edit
+  on the first day a runner can read a server in `mirrors/ppc*.anchors`. ⛔ What
+  would make that day come is infrastructure, and the maintainer's call: a
+  mirror outside Cloudflare's bot rules synced from a network the origin
+  accepts, about 57.7 GiB, or a self-hosted runner. `HISTORY/outage-2026-09.md`.
 - ⚠ **One publisher.** The proxy is a second transfer path, not a second
   publisher. Issue 140 names `Link4Electronics/archpower-packages` as an
   alternative package repository, and it was read and refused as a second trust
@@ -809,34 +837,35 @@ states the layout as a by-product. Re-read that on every bump.
 
 ### 4. Emergency CVE patch path. Priority: medium
 
-There is no way to publish faster than the daily cron, and no way to rebuild one
-architecture without rebuilding all of them.
+A dispatch of `build-deploy.yml` publishes at once, so publishing faster than
+the daily cron is one click. There is still no way to rebuild one architecture
+without rebuilding all of them.
 
-Consider a `workflow_dispatch` input naming a single architecture and a reason,
-publishing only that architecture's tags and leaving the index alone until all
-agree. ⛔ **The invariant it must respect**: a run that loses one architecture
-publishes nothing. A single-architecture path is a deliberate hole in that, so it
-must be impossible to take by accident, and the index must not move until all
-architectures agree.
+⚠ **The invariant this task was written against changed on 2026-10-13.** A run
+that loses one architecture no longer publishes nothing: every architecture
+that builds is tagged and the rest are carried. Completed row 54. So a single
+architecture path is no longer a hole in anything. What remains to decide is
+whether a dispatch input naming one architecture is worth the saved runner
+time, given that the others would be rebuilt identically and tagged anyway.
 
-### 5. Mirror outage fallback. Priority: medium
+### 5. Done. See Completed row 54.
 
-Today, every mirror for one architecture being down fails the build, which is
-correct but total.
+⛔ **The number is kept and the body is gone.**
 
-Consider a pinned last-known-good package set as a fallback producing an image
-with a loud annotation saying it is not current. ⚠ **Weigh it against what a
-consumer pulling `:latest` gets.** A stale image that says it is stale, in a
-label nobody reads, may be worse than a build that failed loudly and left
-yesterday's image in place. ⭐ **Record the decision either way.** ⚠ This overlaps
-TODO 2: a pinned package set is most of a bootstrap set.
+⭐ **The decision, recorded as the task asked.** No last-known-good package set
+and no stale rebuild. A port whose every mirror is down is held back, and the
+image it last published stays where its tags already point and in the index.
+That is yesterday's image left in place, which this task named as the better of
+the two, without the loud failure costing every other port its publish. The
+loud part is one issue per port, opened once and closed by the first publish.
 
 ### 6. Redundancy for the things with one of something. Priority: medium
 
 | single point | today |
 | --- | --- |
 | the `FROM` digest | one image, one registry |
-| the Arch Linux ARM keyring | one mirror path, one package name |
+| ⭐ the port keyrings | carried in the tree since 2026-10-13, and followed forward through the pinned keys. Not single any more |
+| ArchPOWER | one publisher, and no runner reaches it. TODO 3 |
 | the anchor package | `pacman` only |
 | the riscv64 pool | six hand maintained servers in `mirrors/riscv64.pool` |
 | GHCR as the digest staging area | the whole publish depends on it |
@@ -943,12 +972,10 @@ being asked.**
   and nothing else. Once `GITGUARDIAN_API_KEY` exists, add the scanning
   workflow. ⛔ Do not add the workflow first: one that fails every run for a
   missing secret trains people to ignore a red mark.
-- ⛔ **A freshness pull request carries no status check.** Its run is created and
-  held at `action_required`, because the pull request is opened with the built-in
-  `GITHUB_TOKEN`. The required check never reports, so merging takes two
-  deliberate actions. Fixing it needs a personal access token or a GitHub App
-  installation token, which is a credential and so the maintainer's.
-  `HISTORY/maintainer-actions.md` section 4.
+- ⭐ **A freshness pull request carries its check now, and is merged by hand.**
+  `scripts/propose-change` dispatches CI on the branch, so the required check
+  reports, and closes the pull request again once a later run finds nothing to
+  change. Decision 10. `HISTORY/maintainer-actions.md` section 4.
 - `default_workflow_permissions` is `write`. Every workflow declares its own, so
   narrowing the default to `read` is safe in principle and untested in practice.
   Still `write` on 2026-08-29.
@@ -1035,6 +1062,30 @@ unexplained; what is new is that a recurrence now turns something red.
 `HISTORY/publish-watchdog.md`.
 
 ## Where things stand
+
+⭐ **2026-10-13: the publish is self-healing, and the outage that proved it was
+needed is written down.** No tag moved for 37 days to 2026-10-13, because
+three unrelated upstream changes each stopped every port.
+`HISTORY/outage-2026-09.md` has the measurements, the 17 changes and what is
+not solved. In short:
+
+- One port failing holds back that port alone. Dry run `38402706119` built five,
+  held back the three PowerPC ports on the 403, and published an index listing
+  all eight.
+- loong64 builds again from the keyring carried in the tree. riscv64 builds
+  again past the sparse member in its `extra.db`.
+- ⛔ **The PowerPC ports are not publishing.** No runner reaches ArchPOWER, and
+  `latest` carries their 2026-09-05 images. TODO 3.
+- Renovate's pull requests 4, 5, 7, 8, 9, 10 and 12 were merged, each hash and
+  digest checked against its tag first, and later ones merge themselves through
+  `bot-merge.yml`. Pull requests 3 and 11 were closed unmerged.
+- ⛔ **`main` was rewritten the same day**, by the maintainer's decision:
+  `1a2b1da`, then one commit carrying everything since. `HISTORY/rewrite.md`,
+  which also records the one day of images naming a commit this history does
+  not have.
+- `.github/dependabot.yml` is gone. Renovate opened every dependency pull
+  request this repository has had, and two bots would open two per bump.
+- ⭐ Freshness pull requests are merged by hand, occasionally. Decision 10.
 
 Measured 2026-08-29 unless a date says otherwise.
 

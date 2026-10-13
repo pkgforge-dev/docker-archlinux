@@ -331,3 +331,25 @@ Run `33180365462` proves `gen-evidence` still fetches, parses and joins on a
 runner for all five architectures. It does **not** prove the fetch path is safe:
 upstream simply did not move during those four minutes. Scheduled run
 `33094128354` failed on a 63 second window. `HISTORY/evidence-race.md`.
+
+## The outage of 2026-09, measured 2026-10-13
+
+Injected into a copy of the tree inside the project's own image,
+`ghcr.io/pkgforge-dev/archlinux:latest`, run through `wsl-toolkit run`.
+`HISTORY/outage-2026-09.md` carries the faults these guard against.
+
+| test | fault injected | caught by |
+| --- | --- | --- |
+| `69-evidence-damaged-database.sh` | `scripts/gen-evidence` as it was on `main` before this change, which redirected `tar -O` straight to a file | `not ok 2 - gen-evidence writes evidence past a sparse member in the database`, `not ok 3`, naming `beta` without a sha256, `not ok 4 - the damaged member is named in the log`, and `not ok 5`, whose last line was the old advice to export the snapshot again. ⭐ The same wrong cause the riscv64 builds printed for eight days |
+| `88-keyring-pins-vendored.sh` | the loong64 pin's `sha256` changed in its first hex digit | `not ok 5 - archlinux-lcpu-keyring-20260906-1-any.pkg.tar.zst hashes to the pin's sha256` |
+| `88` | the archpower package deleted from `bootstrap/keyrings/` | `not ok 7 - bootstrap/keyrings/archpower.pin has its package in the tree` |
+| `88` | a second archpower package left beside the pinned one | `not ok 10 - every keyring package in the tree is one a pin names` |
+| `88` | one loong64 trusted expiry moved a year in the pin | `not ok 6 - archlinux-lcpu-keyring-20260906-1-any.pkg.tar.zst trusts exactly what bootstrap/keyrings/archlinux-lcpu.pin pins` |
+| `89-bot-merge-guard.sh` | the mask widened from a whole 40 digit hash to any run of eight hex digits | `not ok 5 - a change to hex that is not a whole hash or digest is refused` |
+| `89` | the comparison replaced with `if false`, so every diff reads as pins only | `not ok 3`, `not ok 4`, `not ok 5`, `not ok 6`, `# failed 4 of 7`. ⚠ 1, 2 and 7 stay green, correctly: they are the diffs that should pass and the empty one |
+| `40-mirrors-reachable.sh` | every riscv64 server but the anchor pointed at `example.invalid` | default: `ok 32 - ... keeps at least 4 reachable servers, reported and not failed`. With `MIRRORLIST_STRICT=1`: `not ok 32 - rootfs/riscv64/etc/pacman.d/mirrorlist keeps at least 4 reachable servers` |
+| `40` | the amd64 list dated 2025-01-01 | default: `ok 1 - ... is not stale, reported and not failed`. With `MIRRORLIST_STRICT=1`: `not ok 1 - rootfs/amd64/etc/pacman.d/mirrorlist is not stale` |
+
+⚠ **A fault that did not fail, and why.** Four of ten riscv64 servers dead
+left six answering against a floor of five, so `40` passed in both modes. That
+is the floor working, not missing. The row above takes the list below it.

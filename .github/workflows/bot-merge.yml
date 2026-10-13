@@ -1,0 +1,59 @@
+name: Merge Renovate's pin bumps
+
+# ⭐ Renovate keeps every action and image pin moving. Each of its pull requests
+# used to wait for a person, and while it waited the pin went stale. This
+# merges the ones that only move pins, as soon as CI passes on them.
+#
+# ⛔ What qualifies is decided by scripts/merge-bot-pr, from the pull request's
+# metadata and its diff, and it is narrow: Renovate's own branch, and every
+# changed line differing only in a hash, a digest or a version comment.
+# Anything labelled hold, a draft, and anything from a fork are left alone.
+#
+# ⛔ The freshness pull requests are not merged here. The maintainer merges those
+# by hand, occasionally, decided 2026-10-13, and nothing breaks while one waits.
+# HISTORY/maintainer-actions.md section 4.
+#
+# ⛔ workflow_run, so this runs the default branch's copy of this file and of
+# the script, with nothing from the pull request executed. The branch name is
+# passed through env, never into the script text: a branch name is chosen by
+# whoever pushed it.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bot-merge-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    name: Merge it if it only moves pins
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'renovate/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Decide, approve and merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: scripts/merge-bot-pr "$HEAD_BRANCH" "$HEAD_SHA"

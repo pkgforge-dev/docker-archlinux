@@ -12,6 +12,12 @@
 # databases: 724493 for powerpc64le, 741715 for powerpc and 684273 for
 # powerpc64. HISTORY/powerpc.md carries the measurement.
 #
+# ⛔ From 2026-09-18 the proxy answers 403 from a runner too, and both answer
+# 200 from a residential network. The build holds the three ports back on its
+# own while that lasts and carries their last published images, and a server
+# added here that a runner can read brings them back with no other edit.
+# HISTORY/outage-2026-09.md.
+#
 # ⭐ The direct host is first, so a consumer that can reach the origin uses the
 # origin and the proxy carries only what cannot. pacman falls through to the
 # next Server on a failed transfer, which is what makes the ordering work.

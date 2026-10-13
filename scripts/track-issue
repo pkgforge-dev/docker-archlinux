@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+#
+# Keep one GitHub issue per problem: open it when the problem starts, keep its
+# body current while it lasts, close it when it clears.
+#
+#   scripts/track-issue raise <key> <title> <body-file>
+#   scripts/track-issue clear <key> <note>
+#
+# ⭐ raise opens the issue the first time and only rewrites its body after that,
+# so a problem that lasts a month is one notification, not thirty. clear
+# comments, closes, and does nothing when nothing is open. The key is written
+# into the body as an HTML comment, which is what finds the issue again.
+#
+# ⛔ Found by listing the open issues, never by search. The search index lags,
+# and a lagging search opens a second issue for a problem that already has one.
+#
+# Needs GH_TOKEN with issues: write, and GITHUB_REPOSITORY.
+#
+# Exit status: 0 done, 1 could not.
+set -euo pipefail
+
+LABEL="${TRACK_ISSUE_LABEL:-automation}"
+
+die() {
+  echo "track-issue: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null || die "$1 is required"
+}
+need gh
+need jq
+
+slug="${GITHUB_REPOSITORY:-}"
+case "$slug" in
+  */*) ;;
+  *) die "GITHUB_REPOSITORY is not owner/name: ${slug:-<unset>}" ;;
+esac
+
+mode="${1:-}"
+key="${2:-}"
+case "$key" in
+  '' | *[!a-z0-9._-]*)
+    die "the key must be lowercase letters, digits, dot, dash or underscore: ${key:-<empty>}" \
+      "usage: track-issue raise <key> <title> <body-file> | clear <key> <note>"
+    ;;
+esac
+marker="<!-- track: $key -->"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+# find_open -> the number of the open issue carrying this key, or nothing
+#
+# ⚠ awk reads the whole stream rather than exiting on the first match. Exiting
+# early would close the pipe under jq, and pipefail turns that into a failure on
+# a perfectly normal result.
+find_open() {
+  gh api --paginate "repos/$slug/issues?state=open&labels=$LABEL&per_page=100" \
+    | jq -r --arg m "$marker" \
+        '.[] | select(.pull_request == null) | select((.body // "") | contains($m)) | .number' \
+    | awk 'NF && !n { print; n = 1 }'
+}
+
+ensure_label() {
+  if gh api "repos/$slug/labels/$LABEL" > "$work/label.json" 2> "$work/label.err"; then
+    return 0
+  fi
+  gh api -X POST "repos/$slug/labels" -f name="$LABEL" -f color=ededed \
+    -f description="Opened and closed by this repository's workflows" > /dev/null
+}
+
+case "$mode" in
+  raise)
+    title="${3:-}"
+    body_file="${4:-}"
+    [ -n "$title" ] || die "raise needs a title"
+    [ -f "$body_file" ] || die "raise needs a body file, and ${body_file:-<none>} is not one"
+    body="$marker
+$(cat "$body_file")"
+    n="$(find_open)"
+    if [ -n "$n" ]; then
+      gh api -X PATCH "repos/$slug/issues/$n" -f title="$title" -f body="$body" > /dev/null
+      echo "track-issue: $key is still open as #$n, its body is current"
+    else
+      ensure_label
+      n="$(gh api -X POST "repos/$slug/issues" -f title="$title" -f body="$body" \
+        -f "labels[]=$LABEL" --jq '.number')"
+      echo "track-issue: $key opened as #$n"
+    fi
+    ;;
+  clear)
+    note="${3:-}"
+    [ -n "$note" ] || die "clear needs a note saying what cleared it"
+    n="$(find_open)"
+    if [ -z "$n" ]; then
+      echo "track-issue: $key has no open issue, nothing to close"
+      exit 0
+    fi
+    gh api -X POST "repos/$slug/issues/$n/comments" -f body="$note" > /dev/null
+    gh api -X PATCH "repos/$slug/issues/$n" -f state=closed -f state_reason=completed > /dev/null
+    echo "track-issue: $key closed #$n"
+    ;;
+  *)
+    die "usage: track-issue raise <key> <title> <body-file> | clear <key> <note>"
+    ;;
+esac

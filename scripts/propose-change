@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+#
+# Keep exactly one pull request open for each kind of freshness change, and none
+# once the change stops being needed.
+#
+#   scripts/propose-change <branch> <title> <body-file> <path>...
+#   scripts/propose-change --withdraw <branch> <note>
+#
+# ⭐ One branch per kind of change, with no date in its name, pushed over on
+# every run. A bump nobody has merged yet is updated in place by the next run
+# instead of being joined by a second pull request carrying the same change, and
+# a bump that upstream has since overtaken is replaced by the newer one.
+#
+# ⭐ --withdraw closes the pull request on a branch when the check that opened it
+# finds nothing to change any more, because the change landed some other way or
+# upstream moved back. The maintainer merges these by hand, occasionally, so an
+# open freshness pull request has to be one worth merging. Decided 2026-10-13.
+# HISTORY/maintainer-actions.md section 4.
+#
+# ⛔ The pull request gets its check. One opened with the built-in token starts no
+# workflow of its own, so the required check would never report. A
+# workflow_dispatch is the one event that token may start, so CI is dispatched
+# on the branch, and its result lands on the very commit the pull request shows.
+#
+# Needs GH_TOKEN with contents, pull-requests and actions write, and
+# GITHUB_REPOSITORY. Run from inside the work tree, on the commit to build on.
+#
+# Exit status: 0 proposed, withdrawn, or nothing to do; 1 could not.
+set -euo pipefail
+
+die() {
+  echo "propose-change: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null || die "$1 is required"
+}
+need git
+need gh
+
+[ -n "${GITHUB_REPOSITORY:-}" ] || die "GITHUB_REPOSITORY is not set"
+
+# open_pr BRANCH -> the number of the open pull request with BRANCH as its head
+#
+# ⚠ awk reads the whole stream rather than exiting on the first line. Exiting
+# early would close the pipe under gh, and pipefail turns that into a failure on
+# a perfectly normal result.
+open_pr() {
+  gh pr list --repo "$GITHUB_REPOSITORY" --head "$1" --state open \
+    --json number --jq '.[].number' | awk 'NF && !n { print; n = 1 }'
+}
+
+check_branch() {
+  case "$1" in
+    freshness/*) ;;
+    *) die "a proposed change goes on a freshness/ branch, and $1 is not one" ;;
+  esac
+}
+
+if [ "${1:-}" = "--withdraw" ]; then
+  [ "$#" -eq 3 ] || die "usage: propose-change --withdraw <branch> <note>"
+  branch="$2"
+  note="$3"
+  check_branch "$branch"
+  existing="$(open_pr "$branch")"
+  if [ -z "$existing" ]; then
+    echo "propose-change: no open pull request on $branch, nothing to withdraw"
+    exit 0
+  fi
+  gh pr close "$existing" --repo "$GITHUB_REPOSITORY" --comment "$note" --delete-branch
+  echo "propose-change: #$existing withdrawn, $branch deleted"
+  exit 0
+fi
+
+[ "$#" -ge 4 ] || die "usage: propose-change <branch> <title> <body-file> <path>..."
+branch="$1"
+title="$2"
+body="$3"
+shift 3
+check_branch "$branch"
+[ -f "$body" ] || die "no body file at $body"
+
+git add -A -- "$@"
+if git diff --cached --quiet; then
+  echo "propose-change: nothing changed under $*, nothing to propose"
+  exit 0
+fi
+
+git -c user.name="github-actions[bot]" \
+    -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+    commit -q -m "$title"
+git push --force origin "HEAD:refs/heads/$branch"
+
+existing="$(open_pr "$branch")"
+if [ -n "$existing" ]; then
+  gh pr edit "$existing" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body" > /dev/null
+  echo "propose-change: #$existing updated in place, $branch now carries $(git rev-parse --short HEAD)"
+else
+  gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+    --title "$title" --body-file "$body"
+fi
+
+gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
+echo "propose-change: CI dispatched on $branch"

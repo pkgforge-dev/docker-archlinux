@@ -1,7 +1,8 @@
 # Actions only the maintainer can take
 
-Five items, measured 2026-08-26. Item 1 is applied. The other four are proposed
-with the reason and the exact command, and none of them has been applied.
+Six items, first measured 2026-08-26. Item 1 is applied, item 4 is decided and
+item 6 is done. The rest are proposed with the reason and the exact command,
+and none of them has been applied.
 
 ## 1. Branch protection on `main`  ⭐ applied
 
@@ -221,8 +222,8 @@ that clone is cleaned, and nobody is told.
 
 ## 4. Actions creating pull requests
 
-All three freshness workflows open pull requests with `gh pr create` and the
-built-in token. The repository already allows it:
+The freshness workflows propose their changes through `scripts/propose-change`,
+with the built-in token. The repository allows it:
 
 ```bash
 gh api repos/pkgforge-dev/docker-archlinux/actions/permissions/workflow
@@ -232,81 +233,86 @@ gh api repos/pkgforge-dev/docker-archlinux/actions/permissions/workflow
 {"default_workflow_permissions":"write","can_approve_pull_request_reviews":true}
 ```
 
-⚠ **No change is needed, and one is worth considering.**
-`default_workflow_permissions` is `write`, which grants every workflow write
+⚠ `default_workflow_permissions` is `write`, which grants every workflow write
 access by default. Every workflow here declares `permissions: contents: read` at
 the top and elevates per job, so the default does not apply to them. Setting the
-default to `read` would make that explicit for anything added later:
+default to `read` would make that explicit for anything added later. ⛔
+`can_approve_pull_request_reviews` has to stay `true`: it is what lets
+`.github/workflows/bot-merge.yml` approve a Renovate pull request.
 
 ```bash
 gh api -X PUT repos/pkgforge-dev/docker-archlinux/actions/permissions/workflow \
   -f default_workflow_permissions=read \
-  -F can_approve_pull_request_reviews=false
+  -F can_approve_pull_request_reviews=true
 ```
 
-⛔ Verify the freshness jobs still open pull requests after changing it. The
-per-job `pull-requests: write` should be enough, and that is untested.
+### ⭐ A freshness pull request now carries its check
 
-### ⛔ A freshness pull request carries no status check
+Measured 2026-08-26: a pull request opened with the built-in token starts no
+check of its own. Its run is held at `action_required`, so the required check
+`Static suite and linters` never reports. Pull request 2 was merged with
+`--admin` for exactly that reason.
 
-Measured on 2026-08-26, the first time these workflows were fired. Run
-`33001891317` opened pull request 2. Its CI run was created and then held:
+⭐ **Fixed 2026-10-13 without a credential.** `scripts/propose-change` pushes the
+branch, opens or updates the one pull request on it, and then dispatches
+`ci.yml` on the branch. A `workflow_dispatch` is the one event the built-in
+token may start, and its check lands on the very commit the pull request shows.
+
+### ⭐ Decided: a freshness pull request is merged by hand, occasionally
+
+Branch protection requires one approving review, and GitHub refuses the
+approval of the account that opened a pull request. The freshness pull
+requests are opened by `github-actions[bot]`, the account that would otherwise
+approve them, so no workflow can merge them.
+
+⭐ **Decided by the maintainer on 2026-10-13: they are merged by hand,
+occasionally, as long as the build keeps working while they wait.** No token is
+created for opening them, and branch protection is unchanged. ⛔ Do not propose
+either again.
+
+What makes the wait safe, each one measured:
+
+| a freshness pull request waits on | what the build does meanwhile |
+| --- | --- |
+| a keyring pin | reads the pinned package from the tree, then follows the port's newer keyring forward through pacman's signature check against the pinned keys. Measured 2026-10-13 with the loong64 pin set older than the port: `followed forward to archlinux-lcpu-keyring-20260906-1-any.pkg.tar.zst, 8 of its trusted keys fully valid` |
+| a mirror list | pacman falls through the servers already listed, and a port none of them answers for is held back alone and carried. A list's age is reported, never failed on |
+| an image digest | Renovate moves the same digest and `bot-merge.yml` merges it. The freshness proposal is closed by its own next run once the pin on `main` is current |
+
+⭐ **Every open freshness pull request is one worth merging.** Each job closes its
+own pull request when a later run finds nothing left to change, and the mirror
+job proposes only when a list's set of servers changes, not its date or its
+order.
+
+⚠ **What still needs a person whatever is merged.** A keyring that no pinned key
+signed stops that port and opens an issue, by design: a trust root moving with
+nothing tying it to the old one is a person's decision.
+
+## 5. One dependency bot, and it keeps hash pins
+
+⭐ **Renovate is the dependency bot.** It opened every dependency pull request
+this repository has had, through the Mend app installed on the organisation.
+`.github/dependabot.yml` described a second bot that opened none. It was
+removed on 2026-10-13 rather than left to start opening a second pull request
+for every bump the day someone enabled it.
+
+`.github/renovate.json` is the configuration, in the tree so it is reviewed
+like code: actions move weekly in one pull request and only to a release at
+least three days old, and the `docker run` images pinned under a `# tag:` marker
+in the workflows are followed too.
+
+⭐ **Renovate keeps commit hash pins as hashes.** Measured on pull requests 5, 7,
+8, 9 and 10, merged 2026-10-13: each moved a 40 character hash to another and
+rewrote the version comment beside it, and each hash was checked against its
+tag on the action's own repository before merging:
 
 ```bash
-gh run list --branch freshness/mirrors-20260826 --json databaseId,event,status,conclusion
+gh api repos/docker/build-push-action/git/ref/tags/v7.4.0 --jq .object.sha
 ```
 
-```
-33002123968  pull_request  completed  action_required
-```
-
-```bash
-gh pr checks 2
-```
-
-```
-no checks reported on the 'freshness/mirrors-20260826' branch
-```
-
-⚠ **A pull request opened with the built-in `GITHUB_TOKEN` does not start its
-own checks.** The run exists and waits for a human to approve it, so the
-required check `Static suite and linters` never reports and branch protection
-cannot be satisfied on its own.
-
-⛔ **The consequence is the opposite of very low maintenance.** Merging a
-freshness pull request takes two deliberate actions rather than one: approve the
-held run, then merge. Pull request 2 was merged with `--admin` for exactly this
-reason.
-
-⭐ **The fix needs a credential, so it is the maintainer's.** Opening these pull
-requests with a personal access token or a GitHub App installation token instead
-of `GITHUB_TOKEN` makes their checks start normally. ⛔ Creating that secret is
-not the agent's action. Ask, do not create.
-
-⚠ **What is not verified.** Whether a token would also need `workflow` scope
-here, and whether the organisation applies a policy of its own. The
-organisation-level endpoint refuses this account:
-
-```bash
-gh api orgs/pkgforge-dev/actions/permissions/workflow
-```
-
-```
-You must be an org admin or have the actions policies fine-grained permission. (HTTP 403)
-```
-
-⭐ Until it is fixed, each freshness pull request body says so and names the run
-that did test the tree, so a reviewer is not left wondering where the check is.
-
-## 5. Dependabot preserving hash pins
-
-`.github/dependabot.yml` covers `github-actions` and `docker`. Whether
-Dependabot updates a commit-hash pin to a new hash, rather than rewriting it
-back to a tag, is **not verified here**. It cannot be: Dependabot runs
-server-side and only on a branch it has been enabled for.
-
-⭐ **The risk is guarded rather than assumed.** Three tests fail on a pin that
-has become a tag, so such a change fails CI on the bot's own pull request:
+⭐ **The risk is still guarded rather than assumed.** Three tests fail on a pin
+that has become a tag, so such a change fails CI on the bot's own pull request,
+and `scripts/merge-bot-pr` merges nothing whose diff changes more than a hash,
+a digest or a version comment:
 
 | test | fails on |
 | --- | --- |
@@ -322,9 +328,6 @@ not ok 1 - actions/checkout is pinned to a commit hash
 not ok 1 - action is pinned to a commit hash at .github/workflows/build-deploy.yml:59
 not ok 1 - every base image is pinned by digest
 ```
-
-⚠ If Dependabot does rewrite pins to tags, its pull requests will be red and
-that dependency belongs to a freshness job of its own instead.
 
 ## 6. Forks and the fork relationship  ⭐ done
 

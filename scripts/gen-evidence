@@ -212,33 +212,60 @@ db_sources() {
   awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); print }' "$from"
 }
 
+# extract_desc FILE COMPRESSION -> the desc stream in $work/desc.txt
+#
+# COMPRESSION is the tar flag, -z or --zstd. tar's own complaint is left in
+# $work/tar.err.
+#
+# ⛔ Through a pipe, never redirected straight to a file. A database can store a
+# desc member sparse, and GNU tar extracts a sparse member to standard output
+# by seeking. When standard output is a regular file, that seek lands near the
+# start of the file, every record written before the member is overwritten, and
+# tar still exits 0. A pipe cannot seek, so tar writes the hole out as NUL bytes
+# instead. Arch RISC-V's extra.db carries one, ntk-1.3.1001-4/desc, 576 NUL
+# bytes stored as GNU.sparse 1.0. It took the three installed packages that
+# sort before it out of the evidence on every riscv64 build from 2026-10-05.
+# HISTORY/outage-2026-09.md.
+#
+# The NUL bytes are dropped, and every %FILENAME% is put at the start of a line
+# of its own, so a member holding nothing readable cannot fuse with the next.
+extract_desc() {
+  local file="$1" compression="$2"
+  tar "$compression" -xOf "$file" --wildcards '*/desc' 2> "$work/tar.err" \
+    | tr -d '\000' \
+    | sed 's/%FILENAME%/\n&/g' > "$work/desc.txt"
+}
+
 # read_desc FILE LABEL -> writes the desc stream to $work/desc.txt
 #
 # LABEL is what the reader is told the database came from. Returns 1, having
 # left nothing behind, when FILE is not a readable archive in either
 # compression, so a caller working down a mirrorlist can step over one that is
-# mid sync.
+# mid sync. On success desc_compression names the flag that read it.
 #
 # ⛔ Two compressions, because the ports do not agree. Every Arch family port
 # ships gzip and ArchPOWER ships Zstandard, and the file is named <repo>.db in
 # both cases, so neither announces which. Reporting the gzip error for a file
 # that was never gzip sends the reader looking for a corrupt database.
+desc_compression=""
 read_desc() {
-  local file="$1" label="$2" descs gz_said zstd_said
+  local file="$1" label="$2" gz_said zstd_said
   # The desc members are streamed rather than extracted. extra carries
   # roughly 15000 of them, and writing that many small files costs minutes
   # where the stream costs seconds. %FILENAME% opens every record.
-  if descs="$(tar -xzOf "$file" --wildcards '*/desc' 2>&1 >"$work/desc.txt")"; then
+  if extract_desc "$file" -z; then
+    desc_compression=-z
     return 0
   fi
-  gz_said="$(awk 'NF { print; exit }' <<< "$descs")"
+  gz_said="$(awk 'NF { print; exit }' "$work/tar.err")"
 
   if ! command -v zstd > /dev/null; then
     zstd_said="zstd is not on PATH, so a Zstandard database cannot be read here"
-  elif descs="$(tar --zstd -xOf "$file" --wildcards '*/desc' 2>&1 >"$work/desc.txt")"; then
+  elif extract_desc "$file" --zstd; then
+    desc_compression=--zstd
     return 0
   else
-    zstd_said="$(awk 'NF { print; exit }' <<< "$descs")"
+    zstd_said="$(awk 'NF { print; exit }' "$work/tar.err")"
   fi
 
   echo "gen-evidence: $label is not a readable archive: gzip said ${gz_said:-nothing}; zstd said ${zstd_said:-nothing}" >&2
@@ -246,7 +273,23 @@ read_desc() {
   return 1
 }
 
+# unreadable_members FILE PARSED -> each desc member that produced no record
+#
+# PARSED holds one "name<TAB>version" line per record read out of FILE. A
+# member's directory is named <name>-<version>, so the two sets compare
+# directly. ⚠ What comes out is a damaged entry in the database itself: it
+# exists, it has a name, and nothing readable is inside it.
+unreadable_members() {
+  local file="$1" parsed="$2"
+  tar "$desc_compression" -tf "$file" \
+    | awk -F/ '$2 == "desc" && NF == 2 { print $1 }' \
+    | LC_ALL=C sort -u > "$work/members.txt"
+  awk -F'\t' '{ print $1 "-" $2 }' "$parsed" | LC_ALL=C sort -u > "$work/parsed-members.txt"
+  LC_ALL=C comm -23 "$work/members.txt" "$work/parsed-members.txt"
+}
+
 : > "$work/repo.tsv"
+: > "$work/damaged.txt"
 for repo in $repos; do
   got=0
   from=""
@@ -261,6 +304,7 @@ for repo in $repos; do
           "the reason tar gave is printed above" \
           "reproduce: tar -tzf $source"
       from="$source"
+      db="$source"
     else
       url="${source//\$repo/$repo}"
       url="${url//\$arch/$arch}"
@@ -278,7 +322,6 @@ for repo in $repos; do
         rm -f "$db"
         continue
       fi
-      rm -f "$db"
       from="$url/$repo.db"
     fi
 
@@ -301,14 +344,26 @@ for repo in $repos; do
       /^%SHA256SUM%$/ { getline; sha = $0; next }
       /^%BUILDDATE%$/ { getline; built = $0; next }
       END { flush() }
-    ' "$work/desc.txt" >> "$work/repo.tsv"
+    ' "$work/desc.txt" > "$work/repo-one.tsv"
     rm -f "$work/desc.txt"
+
+    # ⛔ Every desc member has to come out as one record. A member that yields
+    # none is named here, so a damaged entry upstream is a line in the log
+    # rather than a package that falls silently out of the join below.
+    unreadable_members "$db" "$work/repo-one.tsv" > "$work/damaged-one.txt"
+    if [ -s "$work/damaged-one.txt" ]; then
+      echo "gen-evidence: ⚠ $from carries desc members with nothing readable in them:" >&2
+      sed 's/^/  /' "$work/damaged-one.txt" >&2
+      cat "$work/damaged-one.txt" >> "$work/damaged.txt"
+    fi
+    cat "$work/repo-one.tsv" >> "$work/repo.tsv"
+    [ -n "$snapshot" ] || rm -f "$db"
     got=1
     break
   done < <(db_sources "$repo")
 
   [ "$got" -eq 1 ] || die "could not fetch the $repo database for $dir from any server in rootfs/$dir/etc/pacman.d/mirrorlist"
-  echo "    $repo database read from $from" >&2
+  echo "    $repo database read from $from, $(awk 'END { print NR + 0 }' "$work/repo-one.tsv") records" >&2
 done
 
 #---------------------------------------------------------------------------#
@@ -421,14 +476,26 @@ jq -e . "$output" > /dev/null || die "the generated evidence file is not valid J
 echo "==> wrote $output" >&2
 echo "    $(jq -r '.package_count' "$output") packages, anchor $ANCHOR_PACKAGE $anchor_version, digest ${digest:--}" >&2
 
-# ⛔ Two different faults reach here and they need different words. Without a
-# snapshot it is the race: upstream moved while the build ran. With one the
-# databases cannot have moved, so the snapshot is not the one this image was
-# installed from, which is what a build cache miss looks like. A diagnostic that
-# names the wrong cause sends the reader to the wrong place.
+# ⛔ Three different faults reach here and they need different words. A package
+# whose own database entry is damaged is named as that, first, because no
+# amount of re-exporting changes it. Otherwise, without a snapshot it is the
+# race: upstream moved while the build ran. With one the databases cannot have
+# moved, so the snapshot is not the one this image was installed from, which is
+# what a build cache miss looks like. A diagnostic that names the wrong cause
+# sends the reader to the wrong place.
 if [ -n "$unresolved" ]; then
   echo "gen-evidence: these installed packages are in no repository database:" >&2
   echo "  ${unresolved%, }" >&2
+  damaged_installed="$(awk -F'\t' 'NR == FNR { bad[$1] = 1; next }
+                                    $5 == "-" && (($1 "-" $2) in bad) { printf "%s %s, ", $1, $2 }' \
+    "$work/damaged.txt" "$work/joined.tsv")"
+  if [ -n "$damaged_installed" ]; then
+    die "the repository database entry of an installed package is damaged upstream" \
+      "damaged: ${damaged_installed%, }" \
+      "the entry exists and carries nothing readable, so its size, checksum and date cannot be recorded" \
+      "a later database that rewrites the entry clears this with no change here" \
+      "reproduce: tar -tvf <the database> | grep <the package>, then extract that desc member"
+  fi
   if [ -n "$snapshot" ]; then
     die "$snapshot is not the snapshot this image was installed from" \
       "the packages are named above: installed in the image, absent from the exported databases" \

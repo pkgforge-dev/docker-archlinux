@@ -57,6 +57,20 @@ three name one architecture each.
 | `x86_64-v2026.08.26` | one platform, that day's build | never |
 | `x86_64-7.1.0.r9.g54d9411-2` | one platform, that `pacman` version | never |
 
+⚠ An architecture that cannot be built on a given day does not hold the others
+back. Its own tags stay where they are, and `latest` and that day's `v<date>`
+index carry the last image published for it, so they always list every
+platform. Its `<alias>-v<date>` tag for that day does not exist. Every image
+records when it was built, in the `org.opencontainers.image.created` label and
+in `/etc/os-release`. An architecture that is not publishing has an open issue
+labelled `automation` in this repository.
+
+```bash
+# when this platform's image was built
+docker pull --platform linux/riscv64 ghcr.io/pkgforge-dev/archlinux:riscv64
+docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.created" }}' ghcr.io/pkgforge-dev/archlinux:riscv64
+```
+
 Each architecture answers to more than one spelling. The names share one
 manifest, so `x86_64` and `amd64` are two names for one digest.
 

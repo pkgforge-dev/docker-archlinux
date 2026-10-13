@@ -28,9 +28,10 @@ mirrorlist      text eol=lf
 .gitattributes  text eol=lf
 .gitignore      text eol=lf
 
-# Exact bytes are the content, so no translation may be applied. Nothing here
-# is tracked today. The entries exist before the files do, because a signature
-# or an archive normalised on the way in is corrupt and looks committed.
+# Exact bytes are the content, so no translation may be applied. The pinned
+# keyring packages in bootstrap/keyrings/ are tracked under these rules, and a
+# signature or an archive normalised on the way in is corrupt and looks
+# committed.
 *.sig           binary
 *.gpg           binary
 *.tar           binary

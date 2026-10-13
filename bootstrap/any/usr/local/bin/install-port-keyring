@@ -3,24 +3,29 @@
 # Install a port's package signing keyring into the build host's pacman keyring,
 # against a pin in bootstrap/keyrings/.
 #
-# Arch Linux ARM and the loong64 port both sign with keys archlinux-keyring does
-# not carry, so a build host that trusts only archlinux-keyring rejects every one
-# of their packages. Each port has a pin file naming the keyring package, its
-# checksum and its trusted key set. That is what lets SigLevel = Required stay on
-# with no signature weakening.
+# Arch Linux ARM, the loong64 port and ArchPOWER sign with keys
+# archlinux-keyring does not carry, so a build host that trusts only
+# archlinux-keyring rejects every one of their packages. Each port has a pin file
+# naming the keyring package, its checksum and its trusted key set, and the
+# package itself is carried in the tree beside the pin. That is what lets
+# SigLevel = Required stay on with no signature weakening.
 #
-# ⛔ Adding a port means adding a .pin file, never editing this script. Two
-# installers differing only in a name is the shape that rots.
+# ⛔ Adding a port means adding a .pin file and its package, never editing this
+# script. Two installers differing only in a name is the shape that rots.
 #
 # The build host is told which architecture it is installing for by the
 # Architecture line of the pacman.conf it was given. An architecture no pin
 # serves exits 0 without touching the keyring, which is amd64 and riscv64.
 #
-# ⛔ The trusted set is asserted whole, and by validity rather than by presence.
-# A fingerprint added, removed or re-dated stops the build, and so does a key the
-# pin dates in the future that the keyring reports as anything but fully valid. A
-# trusted key at marginal validity is what refused i686: the keyring installed,
-# and then nothing did.
+# ⛔ The pinned trusted set is asserted whole, and by validity rather than by
+# presence. A fingerprint added, removed or re-dated in the pinned package stops
+# the build, and so does a key the pin dates in the future that the keyring
+# reports as anything but fully valid. A trusted key at marginal validity is what
+# refused i686: the keyring installed, and then nothing did.
+#
+# ⭐ Then the port's own newest keyring is followed forward, through pacman's
+# signature check against the pinned keys. A port that re-signs no longer breaks
+# the build until the pin moves. Step 7 below.
 set -euo pipefail
 
 KEYRING_DIR="${PORT_KEYRING_DIR:-/usr/local/share/docker-archlinux/keyrings}"
@@ -49,6 +54,8 @@ need awk
 need gpg
 need sha256sum
 need bsdtar
+need pacman
+need vercmp
 
 # field FILE KEY -> the value of the first KEY = line, comments ignored
 field() {
@@ -150,38 +157,46 @@ pinned_count="$(awk 'NF { n++ } END { print n + 0 }' "$work/pin-trusted.txt")"
 echo "    pin carries $pinned_count trusted fingerprint(s)"
 
 #---------------------------------------------------------------------------#
-# 3. Fetch, and check the checksum before anything is read out of the package
+# 3. The pinned package, from the tree first and the network second, and the
+#    checksum before anything is read out of it
 #---------------------------------------------------------------------------#
-# ⛔ Every mirror the pin names, in order, and each failure is reported.
+# ⛔ The pinned bytes are carried in the tree, beside the pin. A port deletes a
+# superseded keyring package from its mirror, so a build that could only fetch
+# the pin by name failed for every day the pin was behind: loong64, from
+# 2026-09-06 until the pin moved. A copy in the tree cannot be deleted from
+# under the build. tests/static/88-keyring-pins-vendored.sh asserts that every
+# pin has its copy and that the copy hashes to the pin.
 #
-# A pin used to carry one mirror, and one host refusing this build was the end
-# of it. ArchPOWER's origin sits behind a bot challenge that answers 403 to
-# datacentre address ranges, so the keyring is fetchable from a workstation and
-# not from a GitHub runner, and the build failed at the first step that touches
-# the network. A second entry is the same fall through pacman itself does.
+# The mirrors stay as the second source, for a tree whose copy is missing.
+# Every mirror the pin names is tried in order and each failure is reported.
 #
-# ⚠ The checksum below is what makes this safe. Whichever mirror answers, the
-# package has to be the pinned one byte for byte, so a second source is a
+# ⚠ The checksum below is what makes either source safe. Whichever answers,
+# the package has to be the pinned one byte for byte, so a second source is a
 # transfer path and not a second trust root.
-echo "==> fetching $pkg"
-got_pkg=0
-while IFS= read -r m; do
-  [ -n "$m" ] || continue
-  if curl -sSfL --connect-timeout 15 --max-time 180 --retry 3 --retry-delay 3 \
-       -o "$work/keyring.pkg" "$m/$pkg"; then
-    echo "    fetched from $m"
-    got_pkg=1
-    break
-  fi
-  echo "install-port-keyring: cannot fetch $m/$pkg, trying the next mirror" >&2
-done < <(field_all "$pin" mirror)
+if [ -f "$KEYRING_DIR/$pkg" ]; then
+  cp "$KEYRING_DIR/$pkg" "$work/keyring.pkg"
+  echo "==> $pkg is carried in the tree, nothing fetched"
+else
+  echo "==> $pkg is not carried in the tree, fetching it"
+  got_pkg=0
+  while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    if curl -sSfL --connect-timeout 15 --max-time 180 --retry 3 --retry-delay 3 \
+         -o "$work/keyring.pkg" "$m/$pkg"; then
+      echo "    fetched from $m"
+      got_pkg=1
+      break
+    fi
+    echo "install-port-keyring: cannot fetch $m/$pkg, trying the next mirror" >&2
+  done < <(field_all "$pin" mirror)
 
-if [ "$got_pkg" -ne 1 ]; then
-  die "cannot fetch the pinned keyring package from any mirror in $pin" \
-    "wanted: $pkg" \
-    "every mirror the pin names was tried and each failure is printed above" \
-    "a port removes a superseded keyring package from its mirror, so this usually means the pin is behind" \
-    "re-derive the values with scripts/check-keyring-pin --apply, or by hand from the steps in $pin"
+  if [ "$got_pkg" -ne 1 ]; then
+    die "cannot fetch the pinned keyring package from any mirror in $pin, and the tree carries no copy" \
+      "wanted: $pkg, at $KEYRING_DIR/$pkg or from a mirror" \
+      "every mirror the pin names was tried and each failure is printed above" \
+      "a port removes a superseded keyring package from its mirror, so the copy in the tree is the source that lasts" \
+      "re-derive the pin and the copy with scripts/check-keyring-pin --apply"
+  fi
 fi
 
 got_sha="$(sha256sum "$work/keyring.pkg" | cut -d' ' -f1)"
@@ -329,3 +344,104 @@ if [ -n "$lapsed" ]; then
   echo "==> ⚠ pinned keys already past their expiry, skipped:$lapsed"
 fi
 echo "==> $usable of $pinned_count pinned keys are fully valid, SigLevel stays Required"
+
+#---------------------------------------------------------------------------#
+# 7. Follow the port's own keyring forward, through the pinned trust root
+#
+# ⭐ The pin is the trust root. The port's newest keyring package is what its
+# packages are signed against, and the two drift apart every time the port
+# re-signs or adds a packager. When they differ, the newer package is
+# downloaded by pacman itself, which verifies its signature against the keyring
+# populated above and deletes it on anything short of a fully trusted signer.
+# Only a keyring signed by a key the pin trusts gets through. That is the same
+# rotation pacman performs on a running system, and it keeps a build working on
+# the day a port re-signs, before scripts/check-keyring-pin moves the pin.
+# Measured: with only archlinux-keyring populated, pacman -Sw refuses
+# archlinux-lcpu-keyring as "unknown trust" and exits 1.
+#
+# ⚠ Best effort by design. A port that cannot be reached here cannot be
+# installed from either, and pacstrap reports that next in pacman's own words.
+# The pinned keyring populated above stays in place whatever happens here.
+#---------------------------------------------------------------------------#
+follow_forward() {
+  local fdb="$work/forward-db" fcache="$work/forward-cache" newest newer_rc
+  local -a pac
+  mkdir -p "$fdb/local" "$fcache"
+  pac=(pacman --config "$PACMAN_CONF" --dbpath "$fdb" --cachedir "$fcache"
+       --gpgdir "$GPG_HOMEDIR" --logfile "$work/forward.log" --noconfirm)
+
+  if ! "${pac[@]}" -Sy > "$work/forward.out" 2>&1; then
+    echo "==> ⚠ the port's databases cannot be read from here, so the pinned keyring is the one used"
+    sed 's/^/    /' "$work/forward.out"
+    return 0
+  fi
+  if ! "${pac[@]}" -Sp -dd --print-format '%f' "$keyring-keyring" > "$work/forward.out" 2>&1; then
+    echo "==> ⚠ the port's databases carry no $keyring-keyring, so the pinned keyring is the one used"
+    sed 's/^/    /' "$work/forward.out"
+    return 0
+  fi
+  newest="$(awk -v k="$keyring-keyring-" 'index($0, k) == 1 { print; exit }' "$work/forward.out")"
+  if [ -z "$newest" ]; then
+    echo "==> ⚠ pacman named no $keyring-keyring package, so the pinned keyring is the one used"
+    sed 's/^/    /' "$work/forward.out"
+    return 0
+  fi
+  if [ "$newest" = "$pkg" ]; then
+    echo "==> the port's newest keyring is the pinned one, $pkg"
+    return 0
+  fi
+  # pkgver-pkgrel, with the name in front and the architecture and the
+  # extension behind taken off, which is the only shape vercmp compares right.
+  local v_new v_pin
+  v_new="${newest#"$keyring-keyring-"}"
+  v_new="${v_new%-*.pkg.tar.*}"
+  v_pin="${pkg#"$keyring-keyring-"}"
+  v_pin="${v_pin%-*.pkg.tar.*}"
+  newer_rc="$(vercmp "$v_new" "$v_pin")"
+  if [ "$newer_rc" -le 0 ]; then
+    echo "==> ⚠ the port serves $newest, which is not newer than the pin $pkg, so the pin stands"
+    return 0
+  fi
+
+  echo "==> the port serves $newest, newer than the pin $pkg"
+  if ! "${pac[@]}" -Sw -dd "$keyring-keyring" > "$work/forward.out" 2>&1; then
+    echo "==> ⚠ pacman refused $newest, so the pinned keyring is the one used"
+    sed 's/^/    /' "$work/forward.out"
+    return 0
+  fi
+  [ -f "$fcache/$newest" ] || die "pacman reported $newest downloaded and it is not in $fcache" \
+    "reproduce: ls $fcache"
+
+  mkdir -p "$work/forward-x"
+  bsdtar -xf "$fcache/$newest" -C "$work/forward-x"
+  local fsrc="$work/forward-x/usr/share/pacman/keyrings" f
+  for f in "$keyring.gpg" "$keyring-trusted" "$keyring-revoked"; do
+    if [ ! -f "$fsrc/$f" ]; then
+      echo "==> ⚠ $newest carries no $f, so the pinned keyring is the one used"
+      return 0
+    fi
+  done
+
+  cut -d: -f1 < "$fsrc/$keyring-trusted" | awk 'NF' | LC_ALL=C sort > "$work/forward-fprs.txt"
+  echo "    signed by a key the pin trusts, verified by pacman"
+  echo "    trusted keys added  : $(LC_ALL=C comm -13 "$work/pin-fprs.txt" "$work/forward-fprs.txt" | tr '\n' ' ')"
+  echo "    trusted keys removed: $(LC_ALL=C comm -23 "$work/pin-fprs.txt" "$work/forward-fprs.txt" | tr '\n' ' ')"
+
+  for f in "$keyring.gpg" "$keyring-trusted" "$keyring-revoked"; do
+    install -Dm644 "$fsrc/$f" "/usr/share/pacman/keyrings/$f"
+  done
+  pacman-key --populate "$keyring"
+
+  gpg --homedir "$GPG_HOMEDIR" --no-permission-warning --batch \
+    --with-colons --fixed-list-mode --list-keys > "$work/forward.colons"
+  local fresh
+  fresh="$(awk -F: 'NR == FNR { want[$1] = 1; next }
+                    $1 == "pub" { validity = $2; seen = 1; next }
+                    $1 == "fpr" && seen { if (($10 in want) && (validity == "f" || validity == "u")) n++; seen = 0 }
+                    END { print n + 0 }' "$work/forward-fprs.txt" "$work/forward.colons")"
+  [ "$fresh" -gt 0 ] || die "the keyring $newest leaves no fully valid trusted key after populate" \
+    "it verified against the pin and then trusts nothing pacman can use" \
+    "reproduce: gpg --homedir $GPG_HOMEDIR --with-colons --list-keys"
+  echo "==> followed forward to $newest, $fresh of its trusted keys fully valid"
+}
+follow_forward

@@ -37,8 +37,8 @@ jobs:
     name: Compare the source pin against upstream
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -55,8 +55,19 @@ jobs:
           echo "pinned describe: $describe"
 
           drift=""
+          unreachable=""
           for arch in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
-            anchor="$(scripts/resolve-anchor "$arch")"
+            # ⛔ A port nothing answers for from this runner is named and
+            # skipped. It says nothing about the pin, and stopping on it hid
+            # the other seven every Tuesday from 2026-09-22.
+            rc=0
+            anchor="$(scripts/resolve-anchor "$arch" 2> "/tmp/resolve-$arch.err")" || rc=$?
+            if [ "$rc" -ne 0 ] || [ -z "$anchor" ]; then
+              unreachable="$unreachable $arch"
+              echo "::warning::$arch: no mirror served its database to this runner, so its anchor was not compared"
+              sed 's/^/  /' "/tmp/resolve-$arch.err"
+              continue
+            fi
             echo "$arch anchor: $anchor"
             # The anchor is <describe>-<pkgrel>. Only the describe half names a
             # commit; pkgrel moves for a rebuild against the same source and is
@@ -67,11 +78,12 @@ jobs:
             fi
           done
 
+          echo "unreachable=${unreachable# }" >> "$GITHUB_OUTPUT"
           if [ -n "$drift" ]; then
             echo "::warning::the pinned pacman commit is not what these ports publish:$drift"
             echo "anchor_drift=$drift" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::every port publishes pacman $describe, which is the pinned commit"
+            echo "::notice::every port that answered publishes pacman $describe, which is the pinned commit"
             echo "anchor_drift=" >> "$GITHUB_OUTPUT"
           fi
 
@@ -175,9 +187,12 @@ jobs:
       # the measurement and the command to re-derive each line.
       - name: Report
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANCHOR_DRIFT: ${{ steps.anchor.outputs.anchor_drift }}
+          UNREACHABLE: ${{ steps.anchor.outputs.unreachable }}
           BEHIND: ${{ steps.sources.outputs.behind }}
           REPORT: ${{ steps.sources.outputs.report }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           {
@@ -207,9 +222,19 @@ jobs:
             echo
             echo "⚠ What this did not verify: that a bump builds. It built the pin as it"
             echo "stands, on amd64 only, and did not build any newer version of anything."
-          } >> "$GITHUB_STEP_SUMMARY"
+            if [ -n "$UNREACHABLE" ]; then
+              echo
+              echo "⚠ Not compared, because no mirror answered this runner: \`$UNREACHABLE\`"
+            fi
+          } > /tmp/report.md
+          cat /tmp/report.md >> "$GITHUB_STEP_SUMMARY"
 
+          # ⭐ The drift is a claim gone false, so it stays a red run, and it
+          # also opens one issue that stays open until the pin is re-measured.
           if [ -n "$ANCHOR_DRIFT" ]; then
+            printf '\nRun: %s\n' "$RUN_URL" >> /tmp/report.md
+            scripts/track-issue raise pacman-static-pin "pacman-static: the source pin no longer matches the published pacman" /tmp/report.md
             echo "the pinned commit no longer matches the published anchor" >&2
             exit 1
           fi
+          scripts/track-issue clear pacman-static-pin "The pinned commit matches the published anchor again, $RUN_URL."

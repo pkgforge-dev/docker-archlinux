@@ -27,7 +27,9 @@ What the rebuild was for:
   holds on every architecture.
 - **A publish that cannot half-succeed.** One job per architecture pushes by
   digest and creates no tag. A merge job needing the whole matrix creates every
-  tag. A run that loses one architecture publishes nothing.
+  tag. A run that loses one architecture publishes nothing. ⚠ Superseded
+  2026-10-13: an architecture that does not build is now held back alone and
+  its last image carried. [`outage-2026-09.md`](outage-2026-09.md).
 - **Evidence per build.** Every package, its version, its size, its sha256 and
   its release date, per platform, beside a provenance attestation and an SBOM.
 - **Pins that cannot go stale quietly.** Every pinned thing has a scheduled job
@@ -56,3 +58,24 @@ git log --oneline origin/history-archive
 ```
 
 ⛔ It is kept, not merged. Nothing on `main` derives from it by ancestry.
+
+## The second rewrite, 2026-10-13
+
+`main` was reset to `1a2b1da` and given one commit on top, by the maintainer's
+decision. The commits made between the two on 2026-10-05 and 2026-10-13 are
+not in this history, and everything they changed that is kept is in that one
+commit: the action and image pin bumps, and the outage work in
+[`outage-2026-09.md`](outage-2026-09.md). The pull requests they came from are
+still on GitHub, which does not delete a merged pull request.
+
+```bash
+git log --oneline -3 origin/main
+```
+
+⚠ **One day's images name a commit this history does not have.** The
+`v2026.10.13` images were built in the hour before the rewrite, from `e058b85`,
+and record it in `org.opencontainers.image.revision` and in each evidence
+file's `source_commit`. Measured before the rewrite: the image inputs,
+`Dockerfile`, `bootstrap/` and `rootfs/`, are byte for byte the same in
+`e058b85` and in the commit that replaced it. Every later image records a
+commit on `main`.

@@ -1,11 +1,11 @@
 name: Freshness, pinned container images
 
-# Dependabot's docker ecosystem reads Dockerfiles. It does not read a
+# Renovate's docker manager reads Dockerfiles. It does not read a
 # `docker run image@sha256:...` inside a workflow step, so the two linter pins
 # in ci.yml would have no watcher at all.
 #
 # This checks every digest pinned anywhere in the repository, including the
-# Dockerfile, so the Dockerfile is covered whether or not Dependabot got there
+# Dockerfile, so the Dockerfile is covered whether or not Renovate got there
 # first. A duplicate pull request is a smaller problem than an unwatched pin.
 on:
   workflow_dispatch:
@@ -30,6 +30,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,10 +38,16 @@ jobs:
       - name: Compare every pin against its tag
         id: check
         run: |
-          set -uo pipefail
+          set -euo pipefail
           # 0 every pin current, 3 at least one behind, 1 the check could not run.
-          scripts/check-image-pins | tee /tmp/pins.txt
-          rc="${PIPESTATUS[0]}"
+          #
+          # ⛔ Captured with || rc=$?, never read from PIPESTATUS afterwards.
+          # Actions runs this with -e, so a check that exits 3 kills the step
+          # before any later line runs, and the bump this job exists to propose
+          # is never applied.
+          rc=0
+          scripts/check-image-pins > /tmp/pins.txt || rc=$?
+          cat /tmp/pins.txt
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           case "$rc" in
             0) echo "::notice::every pinned image is current" ;;
@@ -48,25 +55,37 @@ jobs:
             *) echo "the pin check could not run" >&2; exit 1 ;;
           esac
 
+      # ⭐ Every pin current means no pull request is needed. One left open from
+      # an earlier run, whose bump has since landed some other way, Renovate
+      # being the usual one, is closed, so every open freshness pull request is
+      # one worth merging.
+      - name: Withdraw a proposal the pins no longer need
+        if: steps.check.outputs.rc == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          scripts/propose-change --withdraw freshness/image-pins \
+            "Withdrawn: every pinned image on main is current, $RUN_URL."
+
       - name: Apply the bumps on a branch
         if: steps.check.outputs.rc == '3'
         id: apply
         run: |
-          set -uo pipefail
-          branch="freshness/image-pins-$(date -u +%Y%m%d)"
-          git switch -c "$branch"
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          scripts/check-image-pins --apply | tee /tmp/applied.txt
-          rc="${PIPESTATUS[0]}"
+          set -euo pipefail
+          rc=0
+          scripts/check-image-pins --apply > /tmp/applied.txt || rc=$?
+          cat /tmp/applied.txt
           if [ "$rc" != "3" ]; then
-            echo "applying the bumps did not report a bump, refusing to open a pull request" >&2
+            echo "applying the bumps reported $rc rather than a bump, refusing to propose it" >&2
             exit 1
           fi
           git diff --stat
 
       - name: Set up QEMU
         if: steps.check.outputs.rc == '3'
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: Test the bumps with the tests that guard a normal build
         if: steps.check.outputs.rc == '3'
@@ -101,21 +120,14 @@ jobs:
           echo "packages=$(jq -r '.package_count' /tmp/evidence-amd64.json)" >> "$GITHUB_OUTPUT"
           echo "anchor=$(jq -r '.anchor.version' /tmp/evidence-amd64.json)" >> "$GITHUB_OUTPUT"
 
-      - name: Open a pull request carrying the measurement
+      - name: Propose the bumps, carrying the measurement
         if: steps.check.outputs.rc == '3'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: ${{ steps.apply.outputs.branch }}
           PACKAGES: ${{ steps.test.outputs.packages }}
           ANCHOR: ${{ steps.test.outputs.anchor }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "pins: bump the stale container image digests"
-          git push --set-upstream origin "$BRANCH"
-
           # The printf formats are markdown. Backticks inside them are literal
           # text for the pull request body, not shell expansions.
           # shellcheck disable=SC2016
@@ -132,7 +144,8 @@ jobs:
             printf -- '- `tests/run.sh static`, the same suite the build job runs first.\n'
             printf -- '- A full `linux/amd64` build from this branch.\n'
             printf -- '- `scripts/gen-evidence` then `tests/run.sh image` against it, which\n'
-            printf '  installed `%s` packages at anchor `%s`.\n\n' "$PACKAGES" "$ANCHOR"
+            printf '  installed `%s` packages at anchor `%s`.\n' "$PACKAGES" "$ANCHOR"
+            printf -- '- CI is dispatched on this branch, so the required check reports here.\n\n'
             printf '## ⚠ What this job did NOT verify\n\n'
             printf -- '- **Only amd64 was built.** arm64, armv7 and riscv64 share the base\n'
             printf '  image, so a fault specific to one of them would not show here.\n'
@@ -142,11 +155,7 @@ jobs:
             printf '  actionlint accepting less than before shows up as a red CI run on this\n'
             printf '  pull request, not as anything this job measured.\n'
             printf -- '- **No image was published.** The build stayed on the runner.\n'
-            printf -- '- **This pull request carries no status check.** A pull request opened\n'
-            printf '  with the built-in token has its run held at `action_required` until a\n'
-            printf '  human approves it. The tree was tested inside run `%s`, linked above.\n' "$GITHUB_RUN_ID"
-            printf '  See `HISTORY/maintainer-actions.md` section 4.\n'
           } > /tmp/body.md
 
-          gh pr create --base main --head "$BRANCH" \
-            --title "pins: bump the stale container image digests" --body-file /tmp/body.md
+          scripts/propose-change freshness/image-pins "pins: bump the stale container image digests" \
+            /tmp/body.md Dockerfile .github/workflows

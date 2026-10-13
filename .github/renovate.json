@@ -1,0 +1,31 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Renovate is the one dependency bot here. Every pull request it opens that only moves pins is approved and merged by .github/workflows/bot-merge.yml once CI passes, so pins do not wait for a person.",
+    "Pins stay pins: actions by commit hash with the version in a comment, images by digest. tests/static/50-supply-chain.sh and tests/static/10-bootstrap-not-circular.sh fail a pull request that turns one back into a tag."
+  ],
+  "extends": ["config:recommended", ":disableDependencyDashboard"],
+  "labels": ["dependencies"],
+  "automerge": true,
+  "platformAutomerge": false,
+  "packageRules": [
+    {
+      "description": "Actions move weekly in one pull request, and only to a release at least three days old, so a release that is pulled or hijacked upstream has time to be noticed before it lands here.",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions",
+      "schedule": ["before 6am on monday"],
+      "minimumReleaseAge": "3 days"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "An image run from a workflow step, pinned by digest under a '# tag: <tag>' marker. scripts/check-image-pins reads the same marker.",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "#\\s*tag:\\s*(?<currentValue>[A-Za-z0-9._-]+)\\s*\\n(?:[^\\n]*\\n){0,3}?[^\\n]*?(?<depName>docker\\.io/[a-z0-9._/-]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ]
+}

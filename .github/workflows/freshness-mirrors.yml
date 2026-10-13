@@ -32,6 +32,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -73,14 +74,26 @@ jobs:
           echo "pool_dead=$dead" >> "$GITHUB_OUTPUT"
           echo "::notice::the hand maintained pools have $dead entries that do not answer"
 
+      # ⛔ A port nothing answers for from this runner is left as it is and
+      # named, and the rest are still regenerated. gen-mirrorlist exits 3 for
+      # that. The run on 2026-10-01 refreshed no port at all, because the first
+      # PowerPC port stopped it.
       - name: Regenerate
         id: gen
         run: |
           set -euo pipefail
-          branch="freshness/mirrors-$(date -u +%Y%m%d)"
-          git switch -c "$branch"
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          scripts/gen-mirrorlist all
+          rc=0
+          scripts/gen-mirrorlist all 2> /tmp/gen.err || rc=$?
+          cat /tmp/gen.err >&2
+          case "$rc" in
+            0) echo "unchanged=" >> "$GITHUB_OUTPUT" ;;
+            3)
+              unchanged="$(awk -F: '/left unchanged/ { print $NF }' /tmp/gen.err)"
+              echo "unchanged=${unchanged# }" >> "$GITHUB_OUTPUT"
+              echo "::warning::left unchanged, nothing answered for them from this runner:${unchanged}"
+              ;;
+            *) echo "the generator could not run" >&2; exit 1 ;;
+          esac
 
           total=0
           for a in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
@@ -90,12 +103,27 @@ jobs:
           done
           echo "servers_after=$total" >> "$GITHUB_OUTPUT"
 
-          if git diff --quiet -- rootfs; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::the regenerated lists are identical, nothing to open"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+          # ⭐ A change is a change to which servers a list carries. A
+          # regeneration rewrites the date line every time and ranks by
+          # connection time from one runner, so a list holding the same set in
+          # another order is not worth a pull request the maintainer merges by
+          # hand. Such a run puts the lists back as they were.
+          changed=false
+          for f in rootfs/*/etc/pacman.d/mirrorlist rootfs/*/etc/pacman.d/mirrorlist-any; do
+            [ -e "$f" ] || continue
+            before="$(git show "HEAD:$f" | awk '/^Server/' | LC_ALL=C sort)"
+            after="$(awk '/^Server/' "$f" | LC_ALL=C sort)"
+            if [ "$before" != "$after" ]; then
+              changed=true
+              echo "servers changed: $f"
+            fi
+          done
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          if [ "$changed" = "true" ]; then
             git diff --stat -- rootfs
+          else
+            git checkout -- rootfs
+            echo "::notice::every regenerated list carries the servers it carried before, nothing to propose"
           fi
 
       - name: Test the regenerated lists
@@ -106,21 +134,29 @@ jobs:
           # static suite guards against a regeneration corrupting a config.
           tests/run.sh static
 
-      - name: Open a pull request carrying the measurement
+      # ⭐ Lists that still carry the same servers need no pull request, and one
+      # left open from an earlier run is closed, so every open freshness pull
+      # request is one worth merging.
+      - name: Withdraw a proposal the lists no longer need
+        if: steps.gen.outputs.changed == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          scripts/propose-change --withdraw freshness/mirrors \
+            "Withdrawn: the lists on main carry the servers a regeneration finds, $RUN_URL."
+
+      - name: Propose the lists, carrying the measurement
         if: steps.gen.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: ${{ steps.gen.outputs.branch }}
           BEFORE: ${{ steps.before.outputs.servers_before }}
           AFTER: ${{ steps.gen.outputs.servers_after }}
           POOL_DEAD: ${{ steps.before.outputs.pool_dead }}
+          UNCHANGED: ${{ steps.gen.outputs.unchanged }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add rootfs
-          git commit -m "mirrors: regenerate the mirror lists"
-          git push --set-upstream origin "$BRANCH"
 
           # The printf formats are markdown. Backticks inside them are literal
           # text for the pull request body, not shell expansions.
@@ -138,10 +174,15 @@ jobs:
             done
             printf '\nThe hand maintained pools under `mirrors/` had **%s** entries between\n' "$POOL_DEAD"
             printf 'them that did not answer when this ran. Nothing else watches those files.\n\n'
+            if [ -n "$UNCHANGED" ]; then
+              printf '⚠ Left as they were, because nothing answered for them from the runner:\n'
+              printf '`%s`. Their lists still carry every server they did before.\n\n' "$UNCHANGED"
+            fi
             printf '## What the tests did\n\n'
             printf '`tests/run.sh static`, the whole suite, including\n'
             printf '`40-mirrors-reachable.sh` which probes every written entry again from\n'
-            printf 'the runner rather than trusting the generator.\n\n'
+            printf 'the runner rather than trusting the generator. CI is dispatched on this\n'
+            printf 'branch, so the required check reports here.\n\n'
             printf '## ⚠ What this job did NOT verify\n\n'
             printf -- '- **No image was built.** A mirror can serve `core.db` and still fail\n'
             printf '  mid transfer on a package.\n'
@@ -153,11 +194,7 @@ jobs:
             printf '  `mirrors/*.pool` file until someone edits it.\n'
             printf -- '- **https availability was tested per host, once.** A host that answers\n'
             printf '  https intermittently may be written as either.\n'
-            printf -- '- **This pull request carries no status check.** A pull request opened\n'
-            printf '  with the built-in token has its run held at `action_required` until a\n'
-            printf '  human approves it. The tree was tested inside run `%s`, linked above.\n' "$GITHUB_RUN_ID"
-            printf '  See `HISTORY/maintainer-actions.md` section 4.\n'
           } > /tmp/body.md
 
-          gh pr create --base main --head "$BRANCH" \
-            --title "mirrors: regenerate the mirror lists" --body-file /tmp/body.md
+          scripts/propose-change freshness/mirrors "mirrors: regenerate the mirror lists" \
+            /tmp/body.md rootfs
