@@ -11,7 +11,7 @@
 # against what that tag resolves to now. A Dockerfile instruction takes no
 # trailing comment, so the marker sits on its own line directly above.
 # tag: latest
-FROM --platform=$BUILDPLATFORM docker.io/library/archlinux@sha256:b860afd5823683f7ea389ba5f00d812f4fe55f6f286dea329d2abeefa535e309 AS bootstrap
+FROM --platform=$BUILDPLATFORM docker.io/library/archlinux@sha256:4e77cf2ea5f410e6f8be5abf93ccf17ce2436e87a138c167208356711a405dbd AS bootstrap
 
 ARG TARGETARCH
 ARG TARGETVARIANT
