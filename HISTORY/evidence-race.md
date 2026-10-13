@@ -181,6 +181,11 @@ with `target: dbsnapshot` and `outputs: type=local,dest=/tmp/dbsnapshot`. The
 bootstrap stage is already in the builder from the step above, so it exports
 files rather than installing anything again.
 
+⛔ **That last sentence was only true once the two steps were handed the same
+build args.** A stage's build args are part of its cache key, and `BUILD_DATE`
+changes every run, so the export was not reading the layer the build step had
+just written. The measurement and the fix are below.
+
 ## Measurements
 
 Built 2026-08-28 on `linux/amd64`, from the tree this document ships in.
@@ -265,15 +270,59 @@ Its log shows `CACHED` on every layer of the bootstrap stage and one
 15 seconds on the run that failed. Reading `extra.db` locally replaces fetching
 8.9 MB, and the export adds a second back. The point is correctness, not speed.
 
+## The arg mismatch, 2026-10-13
+
+⚠ **The export was not hitting this build's cache.** On the riscv64 job the
+bootstrap stage ran on every image build and reported `CACHED` on every export:
+
+```bash
+for r in 38255111643 38135773513 38047830800; do
+  jid="$(gh api repos/pkgforge-dev/docker-archlinux/actions/runs/"$r"/jobs \
+    --jq '.jobs[] | select(.name=="Build riscv64") | .id')"
+  gh run view --job "$jid" --log | grep -A1 '\[bootstrap  9/11\]'
+done
+```
+
+| step, every day | line |
+| --- | --- |
+| image build | `#18 [bootstrap 9/11] RUN <<EOS ... ==> Setting up target directory...` |
+| export | `#11 [bootstrap 9/11] CACHED` |
+
+⛔ **The cause is the build args.** The image build was handed `IMAGE_VERSION`,
+`SOURCE_COMMIT` and `BUILD_DATE`; the export was handed `IMAGE_VERSION` alone.
+A different arg set is a different cache key, so the export found an entry from
+an earlier day and exported those databases. The image held today's packages,
+the join had a hole, and the run failed on it:
+
+```
+gen-evidence: these installed packages are in no repository database:
+  libsysprof-capture 50.0-6
+  lmdb 0.9.35-1
+  nftables 1:1.1.7-3
+gen-evidence: /tmp/dbsnapshot is not the snapshot this image was installed from
+```
+
+⭐ **The fix is to hand both steps the same args.** `Build and push by digest`
+and `Export the databases the build resolved against` now pass the same three.
+`freshness-keyring.yml` builds an image and an export in one step and had the
+same mismatch; it now reads `BUILD_DATE` once so the two builds cannot straddle
+a second either. `tests/static/68-evidence-snapshot.sh` assertion 5 fails if the
+two arg sets drift apart, which is the one input the tree can check.
+
+⚠ **A matching key is necessary, not sufficient.** The export still reports
+`CACHED`; what changed is that it is now this run's entry. When the build step
+misses, the export misses with it, and gen-evidence still names anything it
+cannot account for.
+
 ## What this does not fix
 
-⚠ **A cache miss on the export.** The exported databases are the ones the image
-was installed from only when the export hits the layer cache the build filled.
-Nothing in the tree can check that. What happens on a miss is the old behaviour:
-gen-evidence still names every package it cannot account for, and the run fails
-rather than passing quietly. The diagnostic distinguishes the two causes, because
-a snapshot that has a hole did not come from this build, and telling the reader
-that upstream moved would send them to the wrong place.
+⚠ **A cache miss with matching args.** The exported databases are the ones the
+image was installed from because both steps are handed the same key. If that
+key misses, both miss and both resolve at the same moment against the same
+mirrors, which is the pre-snapshot behaviour with a much smaller window. What
+is not measurable from the tree is whether the build step and the export step
+landed on the same second; `tests/static/68-evidence-snapshot.sh` checks the
+inputs, not the outcome.
 
 ⚠ **The four architectures still resolve at four different times.** Each build
 job runs its own `pacman -Sy`, so one run is four package sets rather than one.
@@ -290,9 +339,10 @@ shorter is not recorded anywhere.
 | --- | --- |
 | the Dockerfile has a `dbsnapshot` stage, taking content from the bootstrap stage | `tests/static/68-evidence-snapshot.sh` 1, 2 |
 | the databases are copied out before the directory is emptied | `68` 3 |
-| the build job exports the target, and reads it back from the same path | `68` 4, 5 |
-| a `DB_SNAPSHOT` that cannot be used is refused, and named | `68` 6, 7 |
-| a usable one is accepted | `68` 8 |
+| the build job exports the target, and reads it back from the same path | `68` 4, 6 |
+| the export step is handed the same build args as the build step | `68` 5 |
+| a `DB_SNAPSHOT` that cannot be used is refused, and named | `68` 7, 8 |
+| a usable one is accepted | `68` 9 |
 | the evidence is refused when a package cannot be accounted for | `scripts/gen-evidence`, and `tests/image/40-evidence.sh` on the file it writes |
 
 Every one of those was seen to fail. `HISTORY/tests-seen-to-fail.md`.

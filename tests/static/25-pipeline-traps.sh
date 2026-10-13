@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
 # No script that sets pipefail may use a pipeline shape that fails on a normal
-# result.
+# result, and no run block may read a status the shell never reached.
 #
-# Two shapes, both measured rather than reasoned about:
+# Three shapes, all measured rather than reasoned about:
 #
 #   seq 1 2000000 | head -n 40 | tail -1   rc 141. head closes the pipe, the
 #                                          producer takes SIGPIPE, and pipefail
@@ -11,17 +11,25 @@
 #   grep -c '^x' /dev/null                 rc 1. A count of zero is a failure
 #                                          exit, so under set -e an assignment
 #                                          from it stops the script.
+#   cmd; rc=$?                             the assignment is never reached.
+#                                          GitHub Actions runs a run block under
+#                                          -e, so cmd exiting 3 ends the block
+#                                          on that line. The capture, the case
+#                                          that explains the status, and the
+#                                          output an if: reads are all skipped.
 #
-# Both kill a script with no message at all, and both do it on an input that is
+# All kill a script with no message at all, and all do it on an input that is
 # perfectly normal. The second is worse: it stops the script before it can reach
 # the error path written to handle exactly that case. That is what
 # scripts/gen-mirrorlist did, where a count of zero servers stopped the function
-# three lines above the die that would have explained it.
+# three lines above the die that would have explained it. The third is what
+# limited every freshness workflow to exit 0 or a bare failure, so a stale pin
+# was reported as a check that could not run and the remediation never fired.
 #
 # ⚠ This is a text scan, so it reads what a line looks like rather than what the
 # shell would do with it. Comments are stripped first. A pattern inside a
 # diagnostic string is indistinguishable from a command here, so no diagnostic
-# in this repository is written using either shape.
+# in this repository is written using any of the three shapes.
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR/..
 # shellcheck source=lib/harness.sh
@@ -38,6 +46,15 @@ early_close="[|][[:space:]]*head([[:space:]]|$)"
 # that happens to contain the letter c.
 zero_is_failure="grep[[:space:]]+(-[a-zA-Z]*[[:space:]]+)*-[a-zA-Z]*c[a-zA-Z]*([[:space:]]|$)"
 
+# The status read that under -e cannot run.
+#
+# ⛔ A non-zero exit is a result here, not a failure: 3 is behind, 4 is gone, 5
+# is changed bytes. The command has to go in an `||` list, where a non-zero
+# status is what the list was written for, so `cmd || rc=$?` is the supported
+# shape and is excluded. The variable is spelled `rc` exactly, so an unrelated
+# `unset_rc=$?` is not read as one.
+status_capture="(^|[^A-Za-z0-9_])rc=[^|]*[$][?]|PIPESTATUS"
+
 # strip_comments FILE -> the file with # comments removed, line numbers kept
 strip_comments() {
   awk '{ sub(/(^|[[:space:]])#.*$/, ""); print }' "$1"
@@ -46,8 +63,8 @@ strip_comments() {
 # scan FILE LABEL -> prints "path:line: text" for each trapped line
 scan() {
   local file="$1" rel="$2"
-  strip_comments "$file" | awk -v rel="$rel" -v a="$early_close" -v b="$zero_is_failure" '
-    $0 ~ a || $0 ~ b {
+  strip_comments "$file" | awk -v rel="$rel" -v a="$early_close" -v b="$zero_is_failure" -v c="$status_capture" '
+    $0 ~ a || $0 ~ b || ($0 ~ c && $0 !~ /\|\|/) {
       line = $0
       sub(/^[[:space:]]+/, "", line)
       printf "%s:%d: %s\n", rel, NR, line
@@ -65,6 +82,12 @@ for d in scripts tests bootstrap examples; do
     # Only files that actually turn pipefail on. A `set` command enabling it,
     # not the word appearing in prose.
     grep -qE '^[[:space:]]*set[[:space:]][^#]*pipefail' "$f" || continue
+    # ⛔ This file is skipped. The status shape is defined here as a regular
+    # expression, so the definition line carries the very text the scan looks
+    # for and a file cannot police its own source. Every other file is read.
+    if [ "$f" = "$REPO_ROOT/tests/static/25-pipeline-traps.sh" ]; then
+      continue
+    fi
     shell_files="$shell_files$f
 "
   done <<< "$(find "$REPO_ROOT/$d" -type f \( -name '*.sh' -o -perm -u+x \) | sort)"
@@ -85,13 +108,15 @@ if [ "$scanned" -eq 0 ]; then
     "none found, so this test asserted nothing" \
     "reproduce: grep -rlE '^[[:space:]]*set[[:space:]][^#]*pipefail' scripts tests"
 elif [ -z "$trapped" ]; then
-  ok "none of the $scanned pipefail scripts uses a pipeline that fails on a normal result"
+  ok "none of the $scanned pipefail scripts uses a shape that fails on a normal result"
 else
-  fail "none of the $scanned pipefail scripts uses a pipeline that fails on a normal result" \
+  fail "none of the $scanned pipefail scripts uses a shape that fails on a normal result" \
     "head closing the pipe makes the producer take SIGPIPE, which pipefail reports as 141" \
     "counting with a grep flag exits 1 on zero, which under set -e stops the script silently" \
+    "reading \$? after a bare command is a line the shell never reaches, because that command's exit already stopped it" \
     "count lines with: awk '/pattern/ { n++ } END { print n + 0 }' FILE" \
     "limit output with: awk -v n=N 'NR <= n' instead of head -n N" \
+    "read a status with: cmd || rc=\$? , which is why that shape is not reported" \
     "reproduce: bash tests/run.sh static, which names each file and line"
   while IFS= read -r t; do
     [ -n "$t" ] && diag "$t"
@@ -122,11 +147,13 @@ if [ "$wf_scanned" -eq 0 ]; then
     "no .yml found under .github/workflows" \
     "reproduce: ls .github/workflows"
 elif [ -z "$wf_trapped" ]; then
-  ok "none of the $wf_scanned workflows uses a pipeline that fails on a normal result"
+  ok "none of the $wf_scanned workflows uses a shape that fails on a normal result"
 else
-  fail "none of the $wf_scanned workflows uses a pipeline that fails on a normal result" \
+  fail "none of the $wf_scanned workflows uses a shape that fails on a normal result" \
     "run blocks execute under -eo pipefail even when the block does not set it" \
+    "a status read after a bare command is a line the shell never reaches, so the annotation and the outputs an if: reads are skipped" \
     "count lines with: awk '/pattern/ { n++ } END { print n + 0 }' FILE" \
+    "read a status with: cmd || rc=\$? , which is why that shape is not reported" \
     "reproduce: bash tests/run.sh static, which names each file and line"
   while IFS= read -r t; do
     [ -n "$t" ] && diag "$t"

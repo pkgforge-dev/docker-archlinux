@@ -693,6 +693,9 @@ manual cross reference remap.
 | 50 | The dangling `.tmp/` citations, and a test that stops them coming back | `tests/static/97-scratch-citations.sh` |
 | 51 | This file moved into the repository, so it is no longer one wiped directory away from being lost | `HISTORY/CONTINUE.md` |
 | 52 | The first release, `v0.1.0`: 50 assets, eight architectures, six families, verified by downloading three of them and checking them against the published `SHA256SUMS`. It took three runs and the two that failed published nothing | run `33213236059`, `HISTORY/releases.md` |
+| 53 | The freshness checks could never act on a result. A run block executes under `-e`, so a check exiting 3, 4 or 5 ended the step before the status was read, the annotation was never printed and the remediation never fired. Seven sites now capture with `cmd \|\| rc=$?`, and a third shape in the pipeline-trap test reports the old one | `HISTORY/freshness-status-capture.md`, `tests/static/25-pipeline-traps.sh` |
+| 54 | The dbsnapshot export was never reading this run's bootstrap layer. A stage's build args are its cache key and `BUILD_DATE` changes every run, so the export reused an older day's databases and riscv64 failed `Record the evidence` from 2026-10-05. Both steps are now handed the same args, and the test fails if the two sets drift | `HISTORY/evidence-race.md`, `tests/static/68-evidence-snapshot.sh` |
+| 55 | `gen-mirrorlist all` no longer regenerates an architecture the build matrix has disabled, which is what the monthly mirror freshness run failed on for the three PowerPC ports: ArchPOWER's anchor refuses a GitHub runner with 403 | `tests/static/75-architecture-set.sh` |
 
 ---
 

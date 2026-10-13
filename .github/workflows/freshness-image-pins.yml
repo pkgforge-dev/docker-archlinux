@@ -38,9 +38,12 @@ jobs:
         id: check
         run: |
           set -uo pipefail
-          # 0 every pin current, 3 at least one behind, 1 the check could not run.
-          scripts/check-image-pins | tee /tmp/pins.txt
-          rc="${PIPESTATUS[0]}"
+          # 0 every pin current, 3 at least one behind, 1 the check could not
+          # run. An exit of 3 is a result, so the pipeline is put in an ||
+          # list: under the runner's -e and pipefail a bare 3 would end the
+          # block before PIPESTATUS could be read.
+          rc=0
+          scripts/check-image-pins | tee /tmp/pins.txt || rc=$?
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           case "$rc" in
             0) echo "::notice::every pinned image is current" ;;
@@ -56,8 +59,9 @@ jobs:
           branch="freshness/image-pins-$(date -u +%Y%m%d)"
           git switch -c "$branch"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          scripts/check-image-pins --apply | tee /tmp/applied.txt
-          rc="${PIPESTATUS[0]}"
+          # The apply exits 3 on a bump as well, so it is guarded the same way.
+          rc=0
+          scripts/check-image-pins --apply | tee /tmp/applied.txt || rc=$?
           if [ "$rc" != "3" ]; then
             echo "applying the bumps did not report a bump, refusing to open a pull request" >&2
             exit 1

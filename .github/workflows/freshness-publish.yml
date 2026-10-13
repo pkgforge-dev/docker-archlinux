@@ -65,8 +65,13 @@ jobs:
         id: recency
         run: |
           set -uo pipefail
-          scripts/check-publish-recency
-          rc=$?
+          # A non-zero exit is the answer this check is asked for, so the
+          # command is put in an || list. Under the runner's -e a bare command
+          # that exits 3 would end the block before the status could be read,
+          # the annotation below would never print, and the step outcome would
+          # be red for the wrong reason.
+          rc=0
+          scripts/check-publish-recency || rc=$?
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           case "$rc" in
             0) echo "::notice::the publish is current" ;;
@@ -80,8 +85,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
-          scripts/check-schedules-fired
-          rc=$?
+          # Same shape as the recency check above, and for the same reason.
+          rc=0
+          scripts/check-schedules-fired || rc=$?
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           case "$rc" in
             0) echo "::notice::every schedule has fired within its own tolerance" ;;

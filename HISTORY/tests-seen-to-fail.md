@@ -14,8 +14,10 @@ two look identical in a green run.
 Each row below records a fault that was injected into a scratch copy of the
 tree, and the assertion that caught it. Measured 2026-08-26, the `45` and `60`
 rows on 2026-08-27, the `68`, `gen-evidence`, `90` and port keyring rows on
-2026-08-28, and the publish watchdog, release asset and signed tag rows on
-2026-08-29. Nothing here was injected into the repository itself.
+2026-08-28, the publish watchdog, release asset and signed tag rows on
+2026-08-29, and the status-capture, dbsnapshot build-arg and gen-mirrorlist
+disabled-set rows on 2026-10-13. Nothing here was injected into the repository
+itself.
 
 ⚠ A quoted failure message is what that run printed. Counts inside one, such as
 the number of `fail` calls, are the value at the time and are not kept current.
@@ -41,6 +43,7 @@ fault, and pointing `REPO_ROOT` at that directory.
 | `25-pipeline-traps.sh` | `\| head -n "$LIMIT"` in a script that sets pipefail | `not ok 1 - none of the N pipefail scripts uses a pipeline that fails on a normal result`, naming `scripts/faulty:3` |
 | `25` | the `grep -c` form restored at `scripts/gen-mirrorlist:278` | `not ok 1`, naming the file and line |
 | `25` | the `grep -c` form restored at `.github/workflows/freshness-mirrors.yml:47` | `not ok 2 - none of the 5 workflows uses a pipeline that fails on a normal result` |
+| `25` | a scratch workflow running `scripts/check-publish-recency` and then reading `rc=$?` on the next line, the shape GitHub's `-e` ends before the capture | `not ok 2 - none of the 10 workflows uses a shape that fails on a normal result`, naming `.github/workflows/zz-tmp-trap-test.yml:12: rc=$?` |
 | `30-signature-checking-on.sh` | `SigLevel = Never` in `rootfs/riscv64/etc/pacman.conf` | `not ok 7 - does not disable signature checking`, `not ok 8 - sets SigLevel = Required` |
 | `35-publish-targets.sh` | a tag-creating step changed back to `images+=("$HUB_IMAGE")` | `not ok 4 - no tag-creating step names GHCR_IMAGE or HUB_IMAGE directly`, naming both lines |
 | `35` | `HUB_SCRATCH_IMAGE` set to `pkgforge/archlinux`, the real repository | `not ok 3 - HUB_SCRATCH_IMAGE names a different repository from HUB_IMAGE` |
@@ -70,6 +73,7 @@ fault, and pointing `REPO_ROOT` at that directory.
 | `68` | the copy into `/dbsnapshot` moved below the line that empties the sync directory | `not ok 3 - the databases are copied out before the directory is emptied`, `the copy is at line 76, the delete at line 75` |
 | `68` | `target: dbsnapshot` deleted from the build workflow | `not ok 4 - the build job builds the dbsnapshot target` |
 | `68` | `DB_SNAPSHOT` deleted from the evidence step | `not ok 5 - the evidence step is given DB_SNAPSHOT` |
+| `68` | `SOURCE_COMMIT` and `BUILD_DATE` deleted from the dbsnapshot export step's `build-args`, leaving only `IMAGE_VERSION` | `not ok 5 - the dbsnapshot export is handed the same build args as the build`, `the build is handed: IMAGE_VERSION SOURCE_COMMIT BUILD_DATE`, `the export is handed: IMAGE_VERSION` |
 | `68` | the whole `DB_SNAPSHOT` validation block removed from `scripts/gen-evidence` | `not ok 6` and `not ok 7`, both reporting the runtime error instead of a refusal. ⭐ Assertion 8, the control, stays green, because without the validation the run reaches the image and dies there, so nothing names DB_SNAPSHOT at all. A control that flipped here would be measuring the wrong thing |
 | `90-package-lists.sh` | `archlinux-lcpu-keyring` deleted from `bootstrap/loong64/etc/bootstrap-packages.txt` | `not ok 11 - bootstrap/loong64 names archlinux-lcpu-keyring`, naming the pin that serves that architecture |
 | `90` | every pin's `arch` line changed to `sparc64`, so no pin matches any shipped `pacman.conf` | `not ok 11 - every pinned keyring was matched to an architecture that ships it`, `no pacman.conf Architecture matched any pin's arch list, so nothing above was checked`. ⭐ The floor is the whole point: the pairing is derived, and a derivation that matches nothing would otherwise report no failure and assert nothing |
@@ -91,6 +95,7 @@ fault, and pointing `REPO_ROOT` at that directory.
 | `75` | the usage string cut to `gen-mirrorlist ARCH` | `not ok 17 - the gen-mirrorlist usage string names the architectures it takes` |
 | `75` | every `expect_alias_count` call commented out in `60-tag-families.sh` | `not ok 23 - 60-tag-families.sh checks an alias count per architecture` |
 | `75` | `chmod -x scripts/tag-names` | `not ok 16 - scripts/tag-names is executable`. ⚠ Injected in the container. MSYS reports every file executable, so this fault cannot be made on Windows at all |
+| `75` | the `build_matrix_disabled` call deleted from the `all` branch of `gen-mirrorlist` | `not ok 18 - gen-mirrorlist all reads the disabled set from the build matrix` |
 | `80-docs-claims.sh` | the usage block the README shipped before, where `!#` is not a comment | `not ok 2 - README.md bash block 9 parses` |
 | `80` | the badge pointed back at `github.com/pkgforge/docker-archlinux` | `not ok 3 - README does not link to github.com/pkgforge/docker-archlinux` |
 | `80` | every mention of GHCR removed from the README | `not ok 4 - README names the publish target ghcr.io/pkgforge-dev/archlinux` |

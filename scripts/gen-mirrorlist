@@ -415,12 +415,37 @@ generate() {
   echo "    wrote $(awk '/^Server/ { n++ } END { print n + 0 }' "$any_dest") servers to rootfs/$dir/etc/pacman.d/mirrorlist-any"
 }
 
+# build_matrix_disabled -> the docker_arch of every entry the build matrix
+# carries commented out
+#
+# ⛔ A port whose build is disabled is not regenerated either. ArchPOWER's
+# origin refuses a GitHub runner with 403, so `all` cannot generate the three
+# PowerPC lists from CI at all, and the files on disk are the last ones written
+# from a network that could reach it. Regenerating a subset is deliberate: the
+# explicit `scripts/gen-mirrorlist ppc` still works, it just is not part of
+# `all`. The static suite skips a disabled architecture for the same reason.
+build_matrix_disabled() {
+  awk '
+    /^[[:space:]]*#[[:space:]]*-[[:space:]]+docker_arch:/ {
+      s = $0
+      sub(/^[^:]*:[[:space:]]*/, "", s)
+      sub(/[[:space:]]*$/, "", s)
+      print s
+    }
+  ' "$REPO_ROOT/.github/workflows/build-deploy.yml"
+}
+
 case "${1:-}" in
   "")
     die "usage: scripts/gen-mirrorlist <amd64|arm64|armv7|loong64|riscv64|ppc|ppc64|ppc64le|all>"
     ;;
   all)
+    disabled="$(build_matrix_disabled | tr -d '\r')"
     for d in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
+      if printf '%s\n' "$disabled" | grep -qxF "$d"; then
+        echo "gen-mirrorlist: skipping $d, its build is disabled in the matrix" >&2
+        continue
+      fi
       generate "$d"
     done
     ;;

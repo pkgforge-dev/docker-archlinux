@@ -316,10 +316,20 @@ jobs:
       # ca-certificates-mozilla moved from 3.127-1 to 3.128-1 inside it.
       #
       # The bootstrap stage is already in the builder from the step above, so
-      # this exports files rather than installing anything again. A cache miss
-      # would resolve against newer databases, and gen-evidence still names any
-      # package it cannot account for, so the check is unchanged either way.
-      # HISTORY/evidence-race.md.
+      # this exports files rather than installing anything again.
+      #
+      # ⛔ The build args are part of that stage's cache key, so this step is
+      # handed the same three the step above was. BUILD_DATE in particular
+      # changes every run, and a step that omits it computes a key the build
+      # step never wrote, reuses a previous run's bootstrap layer, and exports
+      # the databases that layer was installed from. The image then holds
+      # today's packages and the evidence is joined against an older set, which
+      # gen-evidence reports as installed packages in no database. Handed the
+      # same args, the key matches and the layer is the one this run built.
+      #
+      # A cache miss would resolve against newer databases, and gen-evidence
+      # still names any package it cannot account for, so the check is
+      # unchanged either way. HISTORY/evidence-race.md.
       - name: Export the databases the build resolved against
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -328,6 +338,8 @@ jobs:
           target: dbsnapshot
           build-args: |
             IMAGE_VERSION=${{ needs.resolve.outputs.version }}
+            SOURCE_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ needs.resolve.outputs.build_date }}
           outputs: type=local,dest=/tmp/dbsnapshot
           cache-from: type=gha,scope=${{ matrix.docker_arch }}
 
@@ -585,8 +597,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
-          scripts/check-schedules-fired
-          rc=$?
+          # An exit of 3 is a normal result, not a failure. Under the runner's
+          # -e it would end this block before the capture below, so the command
+          # goes in an || list and the status is read from there.
+          rc=0
+          scripts/check-schedules-fired || rc=$?
           case "$rc" in
             0) echo "::notice::every schedule has fired within its own tolerance" ;;
             3)

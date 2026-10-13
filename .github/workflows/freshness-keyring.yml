@@ -68,9 +68,12 @@ jobs:
         run: |
           set -uo pipefail
           # 0 current, 3 behind, 4 gone, 5 the pinned bytes changed, 1 the check
-          # could not run.
-          scripts/check-keyring-pin "$PIN" | tee /tmp/check.txt
-          rc="${PIPESTATUS[0]}"
+          # could not run. Every one of those is a result, so the pipeline is
+          # put in an || list: under the runner's -e and pipefail a bare 3, 4
+          # or 5 would end the block before PIPESTATUS could be read, and the
+          # annotation below would never print.
+          rc=0
+          scripts/check-keyring-pin "$PIN" | tee /tmp/check.txt || rc=$?
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           case "$rc" in
             0) echo "::notice::${PIN} is current" ;;
@@ -108,8 +111,10 @@ jobs:
           set -uo pipefail
           branch="freshness/${KEYRING}-$(date -u +%Y%m%d)"
           git switch -c "$branch"
-          scripts/check-keyring-pin --apply "$PIN" | tee /tmp/apply.txt
-          rc="${PIPESTATUS[0]}"
+          # The apply is a result too, and it exits 3, 4 or 5 rather than 0.
+          # Same || list as the check step, for the same reason.
+          rc=0
+          scripts/check-keyring-pin --apply "$PIN" | tee /tmp/apply.txt || rc=$?
           case "$rc" in
             3 | 4 | 5) ;;
             *)
@@ -143,16 +148,22 @@ jobs:
           # installs but does not verify produces an empty root rather than a
           # build error.
           ver="$(date -u +%Y.%m.%d)"
+          # Read once. The dbsnapshot build below has to be handed the same
+          # value or its cache key is not the one the image build wrote, and it
+          # exports a previous run's databases instead of this build's.
+          build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           docker build --platform "$PLATFORM" \
             --build-arg "IMAGE_VERSION=$ver" \
             --build-arg "SOURCE_COMMIT=${{ github.sha }}" \
-            --build-arg "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --build-arg "BUILD_DATE=$build_date" \
             -t "freshness-check:$DOCKER_ARCH" .
 
           # The databases the build resolved against, so the evidence is not
           # joined against a set that moved. HISTORY/evidence-race.md.
           docker build --platform "$PLATFORM" --target dbsnapshot \
             --build-arg "IMAGE_VERSION=$ver" \
+            --build-arg "SOURCE_COMMIT=${{ github.sha }}" \
+            --build-arg "BUILD_DATE=$build_date" \
             --output "type=local,dest=/tmp/dbsnapshot" .
 
           echo "::group::image suite"
@@ -160,7 +171,7 @@ jobs:
           # docker and podman, and gen-evidence prefers podman when it finds
           # one. The image was built with docker and lives in docker's store, so
           # podman tries to pull it from Docker Hub and quay.io and fails.
-          SOURCE_COMMIT="${{ github.sha }}" BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          SOURCE_COMMIT="${{ github.sha }}" BUILD_DATE="$build_date" \
             DB_SNAPSHOT=/tmp/dbsnapshot CONTAINER_RUNTIME=docker \
             scripts/gen-evidence "$DOCKER_ARCH" "freshness-check:$DOCKER_ARCH" "$PLATFORM" \
               "/tmp/evidence-$DOCKER_ARCH.json"

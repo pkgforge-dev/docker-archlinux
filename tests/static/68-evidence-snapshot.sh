@@ -21,6 +21,12 @@
 # the exported databases are the ones the image was installed from. Nothing in
 # the tree can. gen-evidence still names any package it cannot account for, so
 # a miss that mattered fails the run rather than passing quietly.
+#
+# ⭐ The one thing that can be checked is the input both builds share: whether
+# they are handed the same cache key, because a differing set of build args is
+# what produced a stale export in the first place. Section 2 asserts the export
+# step gets the same build args as the build step, so a drift there fails here
+# rather than as an unexplained evidence error on one architecture.
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR/..
 # shellcheck source=lib/harness.sh
@@ -103,6 +109,40 @@ else
     "no step names 'target: dbsnapshot'" \
     "the stage exists but nothing exports it, so the evidence run falls back to fetching" \
     "reproduce: grep -n dbsnapshot .github/workflows/build-deploy.yml"
+fi
+
+#---------------------------------------------------------------------------#
+# ⛔ The two steps have to be handed the same build args. They are the cache
+# key of the bootstrap stage, and BUILD_DATE changes every run, so the export
+# step omitting it computes a key the build step never wrote, reuses a previous
+# run's layer, and exports the databases that layer was installed from. The
+# image holds today's packages, the evidence is joined against an older set,
+# and gen-evidence reports installed packages that are in no database.
+#---------------------------------------------------------------------------#
+step_args() { # <step name> -> the build-arg names under it, one per line
+  awk -v step="$1" '
+    index($0, step) { f = 1 }
+    f && index($0, "build-args: |") { g = 1; next }
+    f && g && /^[[:space:]]+[A-Z_]+=/ { sub(/=.*/, ""); gsub(/[[:space:]]/, ""); print; next }
+    f && g { exit }
+  ' "$WF"
+}
+
+build_args="$(step_args "name: Build and push by digest")"
+snap_args="$(step_args "name: Export the databases the build resolved against")"
+
+if [ -z "$build_args" ]; then
+  fail "the dbsnapshot export is handed the same build args as the build" \
+    "no build-args block found under 'name: Build and push by digest'" \
+    "reproduce: grep -n -A5 'build-args' .github/workflows/build-deploy.yml"
+elif [ "$build_args" = "$snap_args" ]; then
+  ok "the dbsnapshot export is handed the same build args as the build: $(printf '%s' "$build_args" | tr '\n' ' ')"
+else
+  fail "the dbsnapshot export is handed the same build args as the build" \
+    "the build is handed: $(printf '%s' "$build_args" | tr '\n' ' ')" \
+    "the export is handed: $(printf '%s' "$snap_args" | tr '\n' ' ')" \
+    "a different set is a different cache key, so the export reads a previous run's databases" \
+    "reproduce: grep -n -A5 'build-args' .github/workflows/build-deploy.yml"
 fi
 
 dest="$(awk 'index($0, "outputs: type=local,dest=") {

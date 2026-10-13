@@ -376,6 +376,23 @@ else
         "reproduce: grep -n 'usage: scripts/gen-mirrorlist' scripts/gen-mirrorlist"
     fi
   fi
+
+  # `all` must skip an architecture the matrix has disabled. The PowerPC
+  # anchors refuse a GitHub runner, so regenerating them from CI fails before
+  # anything is written.
+  #
+  # ⚠ Checked as the call in the all branch rather than by running it. A run
+  # would probe every mirror and rewrite the lists, which this suite must not
+  # do. Naming the disabled set is the part that goes missing when the skip is
+  # removed, so that is the part asserted.
+  all_branch="$(awk '/^[[:space:]]*all\)[[:space:]]*$/ { f = 1 } f && /^[[:space:]]*;;/ { exit } f { print }' "$GM")"
+  if printf '%s\n' "$all_branch" | grep -q 'build_matrix_disabled'; then
+    ok "gen-mirrorlist all reads the disabled set from the build matrix"
+  else
+    fail "gen-mirrorlist all reads the disabled set from the build matrix" \
+      "the all branch does not call build_matrix_disabled, so it regenerates a port whose build is disabled" \
+      "reproduce: sed -n '/^  all)/,/;;/p' scripts/gen-mirrorlist"
+  fi
 fi
 
 #---------------------------------------------------------------------------#
