@@ -327,7 +327,11 @@ generate() {
     printf '## Arch mirror list for %s, Architecture = %s\n' "$dir" "$arch"
     printf '## Generated on %s by scripts/gen-mirrorlist\n' "$(date -u +%Y-%m-%d)"
     printf '## Every server below answered 200 for %s when it was written.\n' "$PROBE_DB"
-    printf '## The first %s is an anchor and is not ranked.\n' "$anchor_count"
+    if [ "$anchor_count" -eq 1 ]; then
+      printf '## The first server is an anchor and is not ranked.\n'
+    else
+      printf '## The first %s servers are anchors and are not ranked.\n' "$anchor_count"
+    fi
     printf '##\n'
     printf '\n'
     printf '%s\n' "$anchors"

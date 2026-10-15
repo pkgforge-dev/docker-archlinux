@@ -152,6 +152,27 @@ while IFS= read -r list; do
       "reproduce: grep '^Server' $rel"
   fi
 
+  # ⛔ The anchors come first, in the order of mirrors/<arch>.anchors. The
+  # order is load-bearing: pacman reads a list from the top, and
+  # scripts/check-mirror-lag judges the first server against the ones after
+  # it. scripts/gen-mirrorlist writes it that way, and a list edited by hand
+  # or generated from an old anchors file does not.
+  anchors_file="$REPO_ROOT/mirrors/$archdir.anchors"
+  if [ -f "$anchors_file" ]; then
+    want="$(awk '/^[[:space:]]*Server[[:space:]]*=/ {sub(/^[^=]*=[[:space:]]*/,""); print}' "$anchors_file")"
+    n_want="$(awk 'NF' <<< "$want" | wc -l | tr -d '[:space:]')"
+    got="$(awk -v n="$n_want" 'NF && ++c <= n' <<< "$servers")"
+    if [ "$n_want" -gt 0 ] && [ "$got" = "$want" ]; then
+      ok "$rel starts with the $n_want anchor(s) of mirrors/$archdir.anchors, in order"
+    else
+      fail "$rel starts with the anchors of mirrors/$archdir.anchors, in order" \
+        "anchors: $(printf '%s' "$want" | tr '\n' ' ')" \
+        "first $n_want of the list: $(printf '%s' "$got" | tr '\n' ' ')" \
+        "regenerate with: scripts/gen-mirrorlist $archdir" \
+        "reproduce: diff <(grep '^Server' mirrors/$archdir.anchors) <(grep '^Server' $rel | awk 'NR <= $n_want')"
+    fi
+  fi
+
   # ⛔ The repository name comes from the config, not from the word core.
   # ArchPOWER's primary repository is base and its database is base.db, so a
   # probe that assumes core asks three of the eight ports for a path that

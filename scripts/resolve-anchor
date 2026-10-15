@@ -22,6 +22,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANCHOR_PACKAGE="${ANCHOR_PACKAGE:-pacman}"
 UA="${MIRROR_PROBE_UA:-docker-archlinux-mirrorlist/1 (+https://github.com/pkgforge-dev/docker-archlinux)}"
 
+# ⛔ SKIP_SERVER is a server the build does not read: the one
+# scripts/check-mirror-lag found behind upstream. The anchor comes from the
+# list the build reads, so it is passed over here too.
+SKIP_SERVER="${SKIP_SERVER:-}"
+
 # die MESSAGE [ACTION ...]
 #
 # The first argument says what is wrong. Every argument after it is printed
@@ -72,6 +77,10 @@ repo="$(awk '
 # decide the version for a whole release.
 while IFS= read -r server; do
   [ -n "$server" ] || continue
+  if [ -n "$SKIP_SERVER" ] && [ "$server" = "$SKIP_SERVER" ]; then
+    echo "resolve-anchor: passing over $server, which the build does not read" >&2
+    continue
+  fi
   url="${server//\$repo/$repo}"
   url="${url//\$arch/$arch}"
 
@@ -136,7 +145,7 @@ while IFS= read -r server; do
     exit 0
   fi
   echo "resolve-anchor: $ANCHOR_PACKAGE not found in $url/$repo.db, trying the next server" >&2
-done < <(awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); print }' "$list")
+done < <(awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print }' "$list")
 
 die "could not resolve the $ANCHOR_PACKAGE version for $dir from any server in rootfs/$dir/etc/pacman.d/mirrorlist" \
   "every server in that list was tried and none served a readable $repo database" \

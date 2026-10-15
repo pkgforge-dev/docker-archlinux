@@ -88,6 +88,7 @@ jobs:
       version: ${{ steps.inputs.outputs.version }}
       build_date: ${{ steps.inputs.outputs.build_date }}
       anchors: ${{ steps.inputs.outputs.anchors }}
+      skip_servers: ${{ steps.inputs.outputs.skip_servers }}
       unreachable: ${{ steps.inputs.outputs.unreachable }}
       refused: ${{ steps.floor.outputs.refused }}
       cleared: ${{ steps.clear.outputs.cleared }}
@@ -166,8 +167,11 @@ jobs:
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
           if [ "$skip" = "true" ]; then
-            echo "anchors={}" >> "$GITHUB_OUTPUT"
-            echo "unreachable=" >> "$GITHUB_OUTPUT"
+            {
+              echo "anchors={}"
+              echo "skip_servers={}"
+              echo "unreachable="
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -177,12 +181,33 @@ jobs:
           # ⛔ A port no mirror answers for is named and held back, and the loop
           # goes on. resolve-anchor has already tried every server in that
           # port's list and printed each refusal.
+          #
+          # ⛔ The first server of a list is checked first. On five ports it is
+          # the GHCR mirror, which follows upstream on its own schedule. When
+          # it is behind, the port builds without it, and the anchor comes
+          # from the same shorter list. The image still ships the full list.
           anchors='{'
+          skips='{}'
           sep=''
           unreachable=''
           for arch in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
+            skip_server=''
             rc=0
-            anchor="$(scripts/resolve-anchor "$arch" 2> "/tmp/resolve-$arch.err")" || rc=$?
+            verdict="$(scripts/check-mirror-lag "$arch" 2> "/tmp/lag-$arch.err")" || rc=$?
+            sed 's/^/  /' "/tmp/lag-$arch.err"
+            case "$rc:$verdict" in
+              0:keep) ;;
+              "0:drop "*)
+                skip_server="${verdict#drop }"
+                skips="$(jq -c --arg a "$arch" --arg s "$skip_server" '. + { ($a): $s }' <<< "$skips")"
+                echo "::warning::$arch builds without $skip_server: it is behind upstream, measured above. The image still ships it."
+                ;;
+              *)
+                echo "::warning::the mirror lag check for $arch did not decide (exit $rc), so the build reads the list as it is"
+                ;;
+            esac
+            rc=0
+            anchor="$(SKIP_SERVER="$skip_server" scripts/resolve-anchor "$arch" 2> "/tmp/resolve-$arch.err")" || rc=$?
             if [ "$rc" -eq 0 ] && [ -n "$anchor" ]; then
               anchors="${anchors}${sep}\"${arch}\":\"${anchor}\""
               sep=','
@@ -195,8 +220,11 @@ jobs:
           done
           anchors="${anchors}}"
           jq -e . <<< "$anchors" > /dev/null
-          echo "anchors=$anchors" >> "$GITHUB_OUTPUT"
-          echo "unreachable=${unreachable# }" >> "$GITHUB_OUTPUT"
+          {
+            echo "anchors=$anchors"
+            echo "skip_servers=$skips"
+            echo "unreachable=${unreachable# }"
+          } >> "$GITHUB_OUTPUT"
 
       # ⛔ A build whose anchor went backwards is refused here, before anything
       # is built or pushed. 20 of the 46 shipped mirrors are plain http, all on
@@ -445,10 +473,14 @@ jobs:
         with:
           context: ${{ github.workspace }}
           platforms: ${{ matrix.platform }}
+          # SKIP_SERVER is empty unless the resolve job found this port's
+          # first server behind upstream. The step below passes the same
+          # value, so the bootstrap stage it exports is the one built here.
           build-args: |
             IMAGE_VERSION=${{ needs.resolve.outputs.version }}
             SOURCE_COMMIT=${{ github.sha }}
             BUILD_DATE=${{ needs.resolve.outputs.build_date }}
+            SKIP_SERVER=${{ fromJSON(needs.resolve.outputs.skip_servers || '{}')[matrix.docker_arch] }}
           outputs: type=image,name=${{ needs.resolve.outputs.target_image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.docker_arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.docker_arch }}
@@ -477,6 +509,7 @@ jobs:
           target: dbsnapshot
           build-args: |
             IMAGE_VERSION=${{ needs.resolve.outputs.version }}
+            SKIP_SERVER=${{ fromJSON(needs.resolve.outputs.skip_servers || '{}')[matrix.docker_arch] }}
           outputs: type=local,dest=/tmp/dbsnapshot
           cache-from: type=gha,scope=${{ matrix.docker_arch }}
 

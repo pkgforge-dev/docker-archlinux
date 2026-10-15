@@ -44,6 +44,32 @@ docker run --rm -it --platform=linux/arm64 docker.io/pkgforge/archlinux:aarch64
 
 More in [`examples/`](examples/).
 
+- #### Mirrors
+
+The first `Server` in `/etc/pacman.d/mirrorlist` is the
+[GHCR mirror](https://github.com/pkgforge-dev/mirror-archlinux) of that
+port's repositories. It serves upstream's own databases and package files from
+GitHub's package storage. The upstream mirrors follow it in the same list.
+
+```ini
+Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo
+```
+
+| case | what happens |
+| --- | --- |
+| a transfer from it fails | pacman tries the next `Server`, as for any mirror |
+| it is behind upstream | the build compares it with the next server first, and builds without it when it is more than 12 hours behind. The image still ships it |
+| signatures | unchanged. `SigLevel = Required`, and every package carries upstream's own signature |
+
+It covers x86_64, aarch64, armv7h, loong64 and riscv64. ⚠ The three PowerPC
+ports are not on it, and their lists are unchanged.
+
+To use only the upstream mirrors, delete the line:
+
+```bash
+sed -i '/ghcr\.mirror\.archlinux\.pkgforge\.dev/d' /etc/pacman.d/mirrorlist
+```
+
 - #### Tags
 
 Five families. `latest` and `v<date>` are multi-architecture indexes. The other

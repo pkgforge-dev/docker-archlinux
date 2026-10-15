@@ -1,0 +1,60 @@
+#!/bin/bash
+#
+# Remove one server from a mirrorlist, for one build.
+#
+#   drop-server <mirrorlist> <server>
+#
+# scripts/check-mirror-lag names a first server that is behind upstream, and
+# the build reads its list without that server. The Dockerfile runs this on the
+# build stage's own /etc/pacman.d/mirrorlist only. The list the image ships is
+# the copy under /rootfs, and it keeps every server: a mirror that is behind
+# today is current again after its next sync, and pacman falls through on its
+# own when a transfer fails.
+#
+# ⛔ The match is exact, on the value after "Server =". A server that matches no
+# line is an error, because then the check and the build read two different
+# lists. A list left with no server is an error too.
+set -euo pipefail
+
+die() {
+  echo "drop-server: $*" >&2
+  exit 1
+}
+
+[ "$#" -eq 2 ] || die "usage: drop-server <mirrorlist> <server>"
+list="$1"
+server="$2"
+[ -n "$server" ] || die "the server to drop is empty"
+[ -f "$list" ] || die "$list is not a file"
+
+tmp="$(mktemp)" || die "cannot create a temporary file"
+
+# ENVIRON rather than -v: awk -v reads backslash escapes in the value.
+counts="$(DROP="$server" awk -v out="$tmp" '
+  /^[[:space:]]*Server[[:space:]]*=/ {
+    v = $0
+    sub(/^[^=]*=[[:space:]]*/, "", v)
+    sub(/[[:space:]]+$/, "", v)
+    if (v == ENVIRON["DROP"]) { dropped++; next }
+    kept++
+  }
+  { print > out }
+  END { printf "%d %d\n", dropped, kept }' "$list")" || {
+  rm -f "$tmp"
+  die "cannot read $list"
+}
+
+dropped="${counts% *}"
+kept="${counts#* }"
+if [ "$dropped" -eq 0 ]; then
+  rm -f "$tmp"
+  die "$server is not a Server line in $list, so the check and the build read two different lists"
+fi
+if [ "$kept" -eq 0 ]; then
+  rm -f "$tmp"
+  die "dropping $server leaves no server in $list"
+fi
+
+cat "$tmp" > "$list" || die "cannot write $list"
+rm -f "$tmp"
+echo "drop-server: the build reads $list without $server, $kept server(s) left" >&2

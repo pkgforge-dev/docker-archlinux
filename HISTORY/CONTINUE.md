@@ -262,8 +262,8 @@ name anyway, the spelling ArchPOWER itself uses: `powerpc`, `powerpc64`,
 It is a fork of `fwcd/docker-archlinux` in GitHub's data model only. ⛔ Treat it
 as independent. Do not sync from upstream. Do not describe it as a fork.
 
-193 tracked files, 20 scripts, 10 workflows, 33 test files, 7 examples,
-53 documents under `HISTORY/`. Measured 2026-10-13 at this session's last
+198 tracked files, 21 scripts, 10 workflows, 35 test files, 7 examples,
+54 documents under `HISTORY/`. Measured 2026-10-15 at this session's last
 commit, with `git ls-files | wc -l`,
 `ls scripts`, `ls .github/workflows`, `ls tests/static/*.sh tests/image/*.sh`,
 `ls examples | grep -v README` and `find HISTORY -name '*.md'`.
@@ -315,7 +315,7 @@ asserted by `tests/image/50-consumer-contract.sh`.
 | `.github/workflows/bot-merge.yml` | after CI passes on a Renovate branch, approves and merges the pull request when every changed line only moves a pin. ⛔ Never a freshness pull request, decision 10 |
 | `.github/renovate.json` | the one dependency bot's configuration: actions weekly and three days old, image digests, and the `# tag:` pinned images in the workflows |
 | `.github/workflows/freshness-pacman-static.yml` | weekly, the source pin against upstream and the pinned commit against the live anchor on all eight ports |
-| `bootstrap/any/` | `pacstrap-docker`, `install-port-keyring`, `write-os-release` |
+| `bootstrap/any/` | `pacstrap-docker`, `install-port-keyring`, `write-os-release`, and `drop-server`, which takes one server out of the build stage's own list |
 | `bootstrap/<arch>/etc/bootstrap-packages.txt` | ⛔ package names only, no comments. xargs has no comment syntax |
 | `bootstrap/keyrings/*.pin` | one trust root per port: keyring name, the architectures it serves, mirror, package, sha256, and every trusted fingerprint with its expiry. ⛔ Adding a port is a file here, not a script. Three pins, and `archpower.pin` serves all three PowerPC ports |
 | `bootstrap/keyrings/*.pkg.tar.*` | ⛔ the pinned keyring packages themselves, byte for byte. The build reads them from here, because a port deletes a superseded one from its mirror |
@@ -334,7 +334,8 @@ asserted by `tests/image/50-consumer-contract.sh`.
 | `scripts/gen-manifest` | every published tag with its digest, platforms and anchor, read from the registry |
 | `scripts/gen-bootstrap-set` | an evidence file turned into `name version sha256`, for a consumer with no jq |
 | `scripts/gen-mirrorlist` | regenerates the mirror lists. ⛔ not part of any image build |
-| `scripts/resolve-anchor` | prints the anchor package version for one architecture. Reads the repository name from that architecture's own `pacman.conf`, and reads a database in gzip or Zstandard |
+| `scripts/resolve-anchor` | prints the anchor package version for one architecture. Reads the repository name from that architecture's own `pacman.conf`, and reads a database in gzip or Zstandard. Passes over `SKIP_SERVER` |
+| `scripts/check-mirror-lag` | `keep`, or `drop <server>` when the first server of one port's list is more than `MIRROR_LAG_MAX` seconds behind the next one, on any section that reads that list. The resolve job runs it for every port before the anchor. `HISTORY/ghcr-mirror.md` |
 | `scripts/build-pacman-static` | links a static pacman for one architecture, from source, against the pin |
 | `scripts/release-notes` | writes a release body and `SHA256SUMS` from the evidence files beside the assets |
 | `scripts/tag-names` | prints the tags for one architecture, or for the index |
@@ -347,9 +348,9 @@ asserted by `tests/image/50-consumer-contract.sh`.
 | `scripts/propose-change` | one branch and one pull request per kind of freshness change, with CI dispatched on it. `--withdraw` closes it once nothing is left to change |
 | `scripts/merge-bot-pr` | what `bot-merge.yml` runs. `--check-diff` is the pin guard on its own |
 | `scripts/keep-schedules-enabled` | enables every workflow in the tree, so 60 quiet days cannot switch the schedules off |
-| `tests/static/` | 27 files, no container needed |
+| `tests/static/` | 29 files, no container needed |
 | `tests/image/` | 6 files, against a built image |
-| `HISTORY/` | 53 documents, 28 of them reviews. ⛔ never the manual. `CONTINUE.md` is the exception: it is this file |
+| `HISTORY/` | 54 documents, 28 of them reviews. ⛔ never the manual. `CONTINUE.md` is the exception: it is this file |
 | `README.md`, `docs/` | the manual |
 
 ### Running the tests
@@ -718,6 +719,7 @@ manual cross reference remap.
 | 57 | Every freshness job acts on its own result. Status captured with `\|\| rc=$?` where `bash -e` had killed the step on it, one branch and one pull request per kind of change, CI dispatched on the branch, and one issue for what needs a person | `scripts/propose-change`, `scripts/track-issue` |
 | 58 | Renovate configured in the tree, and its pin bumps approved and merged once CI passes, behind a guard that refuses anything but a hash, a digest or a version comment. Six Renovate pull requests merged by hand first, each hash checked against its tag | `.github/workflows/bot-merge.yml`, `tests/static/89-bot-merge-guard.sh` |
 | 59 | Tag lists read page by page, every schedule re-enabled daily from two workflows, the watchdog reading the plain run list it had been misreading, and mirror age and reachability reported rather than gating every build | `scripts/registry-tags`, `scripts/keep-schedules-enabled`, `tests/static/40-mirrors-reachable.sh` |
+| 60 | The five ports the GHCR mirror carries read it first, in the build and in the shipped list, with the upstream servers after it. A build compares it with the next server first and builds without it when it is more than 12 hours behind. Three PowerPC anchor files carried markers encoded twice, now repaired, with a test | `HISTORY/ghcr-mirror.md`, `tests/static/66-mirror-lag.sh`, `tests/static/98-text-encoding.sh` |
 
 ---
 
@@ -869,8 +871,10 @@ loud part is one issue per port, opened once and closed by the first publish.
 | the anchor package | `pacman` only |
 | the riscv64 pool | six hand maintained servers in `mirrors/riscv64.pool` |
 | GHCR as the digest staging area | the whole publish depends on it |
-| `archlinux.org/mirrors/status/json/` | `scripts/gen-mirrorlist:22`, the only amd64 pool source |
-| `raw.githubusercontent.com` ARM mirrorlist | `scripts/gen-mirrorlist:23`, the only ARM pool source |
+| `archlinux.org/mirrors/status/json/` | `scripts/gen-mirrorlist:28`, the only amd64 pool source |
+| `raw.githubusercontent.com` ARM mirrorlist | `scripts/gen-mirrorlist:29`, the only ARM pool source |
+| ⭐ the upstream mirrors of five ports | the GHCR mirror is first since 2026-10-15, and the upstream servers follow it in the same list. A build that finds it behind reads the list without it. `HISTORY/ghcr-mirror.md` |
+| the GHCR mirror itself | one Worker and one registry. ⚠ Not a single point for the build or a consumer: pacman falls through to the upstream servers, and `scripts/check-mirror-lag` drops it from a build when it is behind |
 
 For each: is a second source possible, and is the failure loud?
 
@@ -1062,6 +1066,23 @@ unexplained; what is new is that a recurrence now turns something red.
 `HISTORY/publish-watchdog.md`.
 
 ## Where things stand
+
+⭐ **2026-10-15: the five ports the GHCR mirror carries build from it first.**
+`HISTORY/ghcr-mirror.md`. The shipped lists of amd64, arm64, armv7, loong64 and
+riscv64 name `ghcr.mirror.archlinux.pkgforge.dev` first and the upstream
+servers after it, and the PowerPC lists are unchanged. The resolve job runs
+`scripts/check-mirror-lag` for every port and builds a port without the mirror
+when it is more than 12 hours behind; the image still ships it. In short:
+
+- Dry run `38670811239` built, tested and tagged the five in the scratch
+  repository in 441 s, against 544 s for scheduled run `38549236313`. Every
+  build step was shorter, riscv64 by a third. One sample each.
+- ⚠ No real tag moved in this session. The first scheduled run after this
+  commit is the first real publish from the mirror. ⛔ A dispatch on the same
+  day as the primary cron moves that day's dated tags, because only the backup
+  cron stands down when `v<date>` exists. Not fixed here.
+- The arm64 and armv7 `extra` sections measured 21147 s behind, real lag of the
+  mirror's own upstream reads, not of this repository. 43200 is the bound.
 
 ⭐ **2026-10-13: the publish is self-healing, and the outage that proved it was
 needed is written down.** No tag moved for 37 days to 2026-10-13, because

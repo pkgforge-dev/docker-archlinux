@@ -353,3 +353,35 @@ Injected into a copy of the tree inside the project's own image,
 ⚠ **A fault that did not fail, and why.** Four of ten riscv64 servers dead
 left six answering against a floor of five, so `40` passed in both modes. That
 is the floor working, not missing. The row above takes the list below it.
+
+## The GHCR mirror, measured 2026-10-15
+
+Injected into a copy of the tree inside the pinned `FROM` image of the
+`Dockerfile`, run through podman. `HISTORY/ghcr-mirror.md` carries what these
+guard.
+
+| test | fault injected | caught by |
+| --- | --- | --- |
+| `66-mirror-lag.sh` | the bound comparison in `scripts/check-mirror-lag` replaced with `if false` | `not ok 2 - a first server two days behind the next one is dropped`, `not ok 9`, `not ok 10`, `# failed 3 of 24` |
+| `66` | only the first repository section of `pacman.conf` judged | `not ok 10 - a first server current for core and behind for extra is dropped: the build reads both` |
+| `66` | a first server that serves no database kept rather than dropped | `not ok 7 - a first server that serves no database, where the next one does, is dropped` |
+| `66` | the first server dropped when nothing after it answers | `not ok 8 - with no readable database after the first, the first stays: it is the only path` |
+| `66` | `drop-server` matching a prefix of the line rather than the whole value | `not ok 18 - drop-server refuses https://first.invalid, which is no whole Server value, and leaves the list as it was` |
+| `66` | `drop-server` allowed to empty the list | `not ok 19 - drop-server refuses to leave a list with no server` |
+| `66` | `scripts/resolve-anchor` reading every server, `SKIP_SERVER` ignored | `not ok 21 - resolve-anchor passes over SKIP_SERVER and names it` |
+| `66` | the `drop-server` line removed from the `Dockerfile` | `not ok 22 - the Dockerfile takes SKIP_SERVER and drops it from the build stage's list before pacstrap` |
+| `66` | `SKIP_SERVER` removed from the dbsnapshot build step only | `not ok 23 - every build step in build-deploy.yml passes SKIP_SERVER`, `2 build steps, 1 pass it` |
+| `66` | the resolve job calling `scripts/resolve-anchor` without `SKIP_SERVER` | `not ok 24 - the resolve job checks the first server, then resolves the anchor without the server it drops` |
+| `40-mirrors-reachable.sh` | the first two servers of the amd64 list swapped | `not ok 4 - rootfs/amd64/etc/pacman.d/mirrorlist starts with the anchors of mirrors/amd64.anchors, in order` |
+| `98-text-encoding.sh` | one twice encoded marker, bytes `c3 a2 c2 9b c2 94`, appended to `mirrors/riscv64.anchors` | `not ok 1 - no text file in the tree carries a character encoded twice` |
+
+⭐ **The scan found real defects before the test was written.** Run against
+the tree as it was, it named `mirrors/ppc.any-anchors`, `mirrors/ppc64.anchors`
+and `mirrors/ppc64le.anchors`, eight markers in all. Those are repaired in the
+same change.
+
+⚠ **One injection did not run the first time, and the row above is the second
+run.** The fault for the dbsnapshot step was written as two commands joined by
+`;` on one line of the fault script, so the copy ran outside the scratch tree
+and the test ran against the unchanged file. Re-run as its own script, it
+failed as the row shows.

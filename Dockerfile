@@ -34,6 +34,19 @@ COPY rootfs/${TARGETARCH}${TARGETVARIANT}/etc /etc
 COPY rootfs/any /rootfs
 COPY rootfs/${TARGETARCH}${TARGETVARIANT} /rootfs
 
+# ⛔ The build stage's own list, never the one the image ships. SKIP_SERVER is
+# empty unless scripts/check-mirror-lag found the first server of this list
+# behind upstream. Then the build reads the list without it, and the image
+# still ships it: a mirror that is behind today is current after its next sync,
+# and pacman falls through on its own when a transfer fails.
+ARG SKIP_SERVER=""
+RUN <<EOS
+  set -eu
+  if [ -n "${SKIP_SERVER}" ]; then
+    drop-server /etc/pacman.d/mirrorlist "${SKIP_SERVER}"
+  fi
+EOS
+
 # Arch Linux ARM and the loong64 port sign with keys archlinux-keyring does not
 # carry. This trusts them from a pinned set of fingerprints and expiry dates,
 # which is what lets SigLevel stay Required. An architecture no pin serves,

@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+#
+# Decide whether the build reads the first server of one port's mirrorlist.
+#
+#   scripts/check-mirror-lag <amd64|arm64|armv7|loong64|riscv64|ppc|ppc64|ppc64le>
+#
+# The first server of a list is the first line of mirrors/<arch>.anchors. On
+# five ports it is the GHCR mirror, which follows upstream on a schedule of its
+# own. pacman reads a list from the top and takes the first database that
+# arrives, so a first server that stopped following upstream builds an image
+# from an old package set, and nothing fails.
+#
+# For each repository section that includes /etc/pacman.d/mirrorlist, this
+# reads the database from the first server and from the next server that
+# serves a readable one, and compares the newest member of each. A repository
+# database is a tar archive with one directory per package, and each member
+# keeps the time its package went into the repository. A mirror serves
+# upstream's database file byte for byte, so the two times compare directly.
+#
+# stdout, one line:
+#   keep           the build reads the list as it is
+#   drop SERVER    the build reads the list without SERVER
+# stderr: one line per repository with both times, and every reason.
+#
+# The first server is dropped when, for any repository:
+#   - its newest member is older than the reference's by more than
+#     MIRROR_LAG_MAX seconds, default 43200 (12 hours), or
+#   - it serves no readable database, and a later server does.
+#
+# ⚠ When no later server serves a readable database, there is nothing to
+# compare against, and the first server stays: it is the only path left.
+#
+# Exit status: 0 a verdict is on stdout, 1 the inputs cannot be read.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+UA="${MIRROR_PROBE_UA:-docker-archlinux-mirrorlist/1 (+https://github.com/pkgforge-dev/docker-archlinux)}"
+MAX_LAG="${MIRROR_LAG_MAX:-43200}"
+
+# die MESSAGE [ACTION ...]
+#
+# The first argument says what is wrong. Every argument after it is printed
+# indented below it, and is what the reader does next.
+die() {
+  echo "check-mirror-lag: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+say() {
+  echo "check-mirror-lag: $*" >&2
+}
+
+dir="${1:-}"
+[ -n "$dir" ] || die "usage: check-mirror-lag <amd64|arm64|armv7|loong64|riscv64|ppc|ppc64|ppc64le>"
+case "$MAX_LAG" in
+  '' | *[!0-9]*) die "MIRROR_LAG_MAX is '$MAX_LAG', and it has to be a whole number of seconds" ;;
+esac
+
+conf="$REPO_ROOT/rootfs/$dir/etc/pacman.conf"
+list="$REPO_ROOT/rootfs/$dir/etc/pacman.d/mirrorlist"
+[ -f "$conf" ] || die "no pacman.conf for $dir" "reproduce: ls rootfs/$dir/etc/pacman.conf"
+[ -f "$list" ] || die "no mirrorlist for $dir" "reproduce: ls rootfs/$dir/etc/pacman.d/mirrorlist"
+
+arch="$(awk -F= '/^[[:space:]]*Architecture[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$conf")"
+[ -n "$arch" ] || die "$conf has no Architecture line" "reproduce: grep -n Architecture $conf"
+
+# ⛔ Every section that reads this list, not only the first. A mirror can be
+# current for core and behind for extra, and the build reads both. A section
+# that includes another list, such as ArchPOWER's base-any, is not judged here:
+# that list is not this list.
+repos="$(awk '
+  /^[[:space:]]*#/ { next }
+  /^[[:space:]]*\[/ {
+    name = $0
+    sub(/^[[:space:]]*\[/, "", name)
+    sub(/\].*$/, "", name)
+    next
+  }
+  /^[[:space:]]*Include[[:space:]]*=[[:space:]]*\/etc\/pacman\.d\/mirrorlist[[:space:]]*$/ {
+    if (name != "" && name != "options") print name
+  }' "$conf")"
+[ -n "$repos" ] || die "$conf has no repository section that includes /etc/pacman.d/mirrorlist" \
+  "the check compares the databases of those sections, so there has to be one" \
+  "reproduce: grep -n -A1 '^\[' $conf"
+
+servers=()
+while IFS= read -r s; do
+  [ -n "$s" ] || continue
+  servers+=("$s")
+done < <(awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print }' "$list")
+
+if [ "${#servers[@]}" -lt 2 ]; then
+  say "$dir: ${#servers[@]} server(s) in the list, so there is nothing to compare the first one with"
+  echo keep
+  exit 0
+fi
+first="${servers[0]}"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+# url SERVER REPO -> the database URL pacman would ask that server for
+url() {
+  local u="${1//\$repo/$2}"
+  u="${u//\$arch/$arch}"
+  printf '%s/%s.db\n' "$u" "$2"
+}
+
+# newest URL FILE -> "YYYY-MM-DD HH:MM:SS", the newest member, in UTC
+#
+# A fetch that fails, and a body that is not a tar archive, are both a result:
+# the reason goes to stderr and the caller tries the next server.
+newest() {
+  local u="$1" db="$2" said listing stamp
+  # ⚠ -f is load-bearing. Without it a server answering 403 or 404 leaves an
+  # error page in the file and exits 0.
+  if ! said="$(curl -sSfL -A "$UA" --connect-timeout 10 --max-time 120 -o "$db" "$u" 2>&1)"; then
+    say "cannot fetch $u: ${said:-no error text}"
+    return 1
+  fi
+  # GNU tar reads the compression from the file itself, gzip or Zstandard.
+  if ! listing="$(tar --utc --full-time -tvf "$db" 2>&1)"; then
+    say "$u is not a readable archive: $(awk 'NF { print; exit }' <<< "$listing")"
+    return 1
+  fi
+  # mode, owner, size, date, time, name
+  stamp="$(awk 'NF >= 6 && $4 " " $5 > m { m = $4 " " $5 } END { print m }' <<< "$listing")"
+  if [ -z "$stamp" ]; then
+    say "$u is an archive with no member"
+    return 1
+  fi
+  printf '%s\n' "$stamp"
+}
+
+drop=""
+for repo in $repos; do
+  first_stamp=""
+  if ! first_stamp="$(newest "$(url "$first" "$repo")" "$work/first.db")"; then
+    first_stamp=""
+  fi
+
+  ref_stamp=""
+  ref_server=""
+  for s in "${servers[@]:1}"; do
+    if ref_stamp="$(newest "$(url "$s" "$repo")" "$work/ref.db")"; then
+      ref_server="$s"
+      break
+    fi
+  done
+
+  if [ -z "$ref_server" ]; then
+    say "$dir $repo: no server after $first served a readable database, so there is nothing to compare with, and it stays"
+    continue
+  fi
+  if [ -z "$first_stamp" ]; then
+    say "$dir $repo: $first served no readable database, and $ref_server did"
+    drop="$first"
+    continue
+  fi
+
+  first_epoch="$(date -u -d "$first_stamp" +%s)"
+  ref_epoch="$(date -u -d "$ref_stamp" +%s)"
+  lag=$((ref_epoch - first_epoch))
+  say "$dir $repo: newest $first_stamp on $first, $ref_stamp on $ref_server, behind by ${lag}s"
+  if [ "$lag" -gt "$MAX_LAG" ]; then
+    say "$dir $repo: $first is behind by more than ${MAX_LAG}s"
+    drop="$first"
+  fi
+done
+
+if [ -n "$drop" ]; then
+  printf 'drop %s\n' "$drop"
+else
+  echo keep
+fi
