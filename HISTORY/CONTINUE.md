@@ -262,8 +262,8 @@ name anyway, the spelling ArchPOWER itself uses: `powerpc`, `powerpc64`,
 It is a fork of `fwcd/docker-archlinux` in GitHub's data model only. ⛔ Treat it
 as independent. Do not sync from upstream. Do not describe it as a fork.
 
-198 tracked files, 21 scripts, 10 workflows, 35 test files, 7 examples,
-54 documents under `HISTORY/`. Measured 2026-10-15 at this session's last
+199 tracked files, 21 scripts, 10 workflows, 35 test files, 7 examples,
+55 documents under `HISTORY/`. Measured 2026-10-15 at this session's last
 commit, with `git ls-files | wc -l`,
 `ls scripts`, `ls .github/workflows`, `ls tests/static/*.sh tests/image/*.sh`,
 `ls examples | grep -v README` and `find HISTORY -name '*.md'`.
@@ -338,7 +338,7 @@ asserted by `tests/image/50-consumer-contract.sh`.
 | `scripts/check-mirror-lag` | `keep`, or `drop <server>` when the first server of one port's list is more than `MIRROR_LAG_MAX` seconds behind the next one, on any section that reads that list. The resolve job runs it for every port before the anchor. `HISTORY/ghcr-mirror.md` |
 | `scripts/build-pacman-static` | links a static pacman for one architecture, from source, against the pin |
 | `scripts/release-notes` | writes a release body and `SHA256SUMS` from the evidence files beside the assets |
-| `scripts/tag-names` | prints the tags for one architecture, or for the index |
+| `scripts/tag-names` | prints the tags for one architecture, or for the index. ⛔ With `--existing`, leaves out each pinned tag already in the repository, so a pinned tag is created once and never moves. `HISTORY/pinned-tags.md` |
 | `scripts/gen-evidence` | writes the per-platform evidence file |
 | `scripts/check-keyring-pin` | exit 0 current, 3 behind, 4 gone from the mirror, 5 bytes changed, 6 unreachable, 7 a newer package no pinned key signed. `--apply` moves the pin and the package in the tree together |
 | `scripts/check-image-pins` | every `@sha256:` against its `# tag:` marker. `--apply` rewrites |
@@ -350,7 +350,7 @@ asserted by `tests/image/50-consumer-contract.sh`.
 | `scripts/keep-schedules-enabled` | enables every workflow in the tree, so 60 quiet days cannot switch the schedules off |
 | `tests/static/` | 29 files, no container needed |
 | `tests/image/` | 6 files, against a built image |
-| `HISTORY/` | 54 documents, 28 of them reviews. ⛔ never the manual. `CONTINUE.md` is the exception: it is this file |
+| `HISTORY/` | 55 documents, 28 of them reviews. ⛔ never the manual. `CONTINUE.md` is the exception: it is this file |
 | `README.md`, `docs/` | the manual |
 
 ### Running the tests
@@ -720,6 +720,7 @@ manual cross reference remap.
 | 58 | Renovate configured in the tree, and its pin bumps approved and merged once CI passes, behind a guard that refuses anything but a hash, a digest or a version comment. Six Renovate pull requests merged by hand first, each hash checked against its tag | `.github/workflows/bot-merge.yml`, `tests/static/89-bot-merge-guard.sh` |
 | 59 | Tag lists read page by page, every schedule re-enabled daily from two workflows, the watchdog reading the plain run list it had been misreading, and mirror age and reachability reported rather than gating every build | `scripts/registry-tags`, `scripts/keep-schedules-enabled`, `tests/static/40-mirrors-reachable.sh` |
 | 60 | The five ports the GHCR mirror carries read it first, in the build and in the shipped list, with the upstream servers after it. A build compares it with the next server first and builds without it when it is more than 12 hours behind. Three PowerPC anchor files carried markers encoded twice, now repaired, with a test | `HISTORY/ghcr-mirror.md`, `tests/static/66-mirror-lag.sh`, `tests/static/98-text-encoding.sh` |
+| 61 | A pinned tag is created once and never moves: `v<date>`, `<alias>-v<date>` and `<alias>-<anchor>`. `v2026.08.26` had been created by five real builds and `v2026.08.28` by three, and every anchor tag moved each day. The publish reads the target's tags first and creates only the pinned ones that are absent; `latest` and `<alias>` move as before | `HISTORY/pinned-tags.md`, `tests/static/60-tag-families.sh`, `tests/static/35-publish-targets.sh` |
 
 ---
 
@@ -849,6 +850,12 @@ that builds is tagged and the rest are carried. Completed row 54. So a single
 architecture path is no longer a hole in anything. What remains to decide is
 whether a dispatch input naming one architecture is worth the saved runner
 time, given that the others would be rebuilt identically and tagged anyway.
+
+⚠ **A dispatch on a day that already published moves the rolling tags only**,
+since 2026-10-15. `latest` and `<alias>` get the rebuilt image; that day's
+`v<date>` and `<alias>-v<date>` keep the morning's. A consumer who pinned the
+dated tag keeps what they pinned, which is the point of the rule.
+`HISTORY/pinned-tags.md`.
 
 ### 5. Done. See Completed row 54.
 
@@ -1067,6 +1074,13 @@ unexplained; what is new is that a recurrence now turns something red.
 
 ## Where things stand
 
+⭐ **2026-10-15: a pinned tag is created once and never moves.**
+`HISTORY/pinned-tags.md`. `v<date>`, `<alias>-v<date>` and `<alias>-<anchor>`
+had all moved: the dated ones on 2026-08-26 and 2026-08-28, the anchor ones on
+every build. The publish now reads the target's tag list first and creates only
+the pinned tags that are absent. ⚠ The anchor tags that exist stay on the image
+the last build before this change gave them.
+
 ⭐ **2026-10-15: the five ports the GHCR mirror carries build from it first.**
 `HISTORY/ghcr-mirror.md`. The shipped lists of amd64, arm64, armv7, loong64 and
 riscv64 name `ghcr.mirror.archlinux.pkgforge.dev` first and the upstream
@@ -1078,9 +1092,9 @@ when it is more than 12 hours behind; the image still ships it. In short:
   repository in 441 s, against 544 s for scheduled run `38549236313`. Every
   build step was shorter, riscv64 by a third. One sample each.
 - ⚠ No real tag moved in this session. The first scheduled run after this
-  commit is the first real publish from the mirror. ⛔ A dispatch on the same
-  day as the primary cron moves that day's dated tags, because only the backup
-  cron stands down when `v<date>` exists. Not fixed here.
+  commit is the first real publish from the mirror. A dispatch on the same
+  day as the primary cron moved that day's dated tags; the entry above closes
+  that.
 - The arm64 and armv7 `extra` sections measured 21147 s behind, real lag of the
   mirror's own upstream reads, not of this repository. 43200 is the bound.
 

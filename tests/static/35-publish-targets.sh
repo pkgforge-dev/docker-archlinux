@@ -129,6 +129,58 @@ else
 fi
 
 #---------------------------------------------------------------------------#
+# 5. A pinned tag is never moved.
+#
+# ⛔ scripts/tag-names leaves out a pinned tag that exists only when it is given
+# the list. Three edits switch that off and keep every run green: reading no
+# list, a tag step that passes no list, and a verify step that inspects the
+# dated tag, which fails on the second build of a day and invites putting the
+# move back. tests/static/60-tag-families.sh runs the filter itself.
+# HISTORY/pinned-tags.md.
+#---------------------------------------------------------------------------#
+read_line="$(awk '/scripts\/registry-tags ghcr\.io "\$\{TARGET_IMAGE#ghcr\.io\/\}" > \/tmp\/existing-tags\.txt/ { print NR; exit }' "$WF")"
+first_create="$(awk '/^      - name: Create the per architecture tags$/ { print NR; exit }' "$WF")"
+if [ -n "$read_line" ] && [ -n "$first_create" ] && [ "$read_line" -lt "$first_create" ]; then
+  ok "the publish job reads the target's tags before it creates any"
+else
+  fail "the publish job reads the target's tags before it creates any" \
+    "registry-tags at line ${read_line:-none}, first tag step at line ${first_create:-none}" \
+    "without the list every pinned tag is created again, on another image" \
+    "reproduce: grep -n 'registry-tags\|Create the' .github/workflows/build-deploy.yml"
+fi
+
+unfiltered="$(awk '
+  /^      - name: Create the (per architecture|index) tags$/ { instep = 1; next }
+  /^      - name: / { instep = 0 }
+  instep && /[<$]\(scripts\/tag-names / && !/--existing \/tmp\/existing-tags\.txt/ { printf "%d: %s\n", NR, $0 }
+' "$WF")"
+filtered="$(awk '
+  /^      - name: Create the (per architecture|index) tags$/ { instep = 1; next }
+  /^      - name: / { instep = 0 }
+  instep && /scripts\/tag-names --existing \/tmp\/existing-tags\.txt (arch|index) / { n++ }
+  END { print n + 0 }
+' "$WF")"
+if [ -z "$unfiltered" ] && [ "$filtered" -eq 2 ]; then
+  ok "both tag steps pass the list to scripts/tag-names"
+else
+  fail "both tag steps pass the list to scripts/tag-names" \
+    "with the list: $filtered of 2; without it: $(printf '%s' "$unfiltered" | tr '\n' ' ')" \
+    "a tag step without the list moves the pinned tags it creates" \
+    "reproduce: grep -n 'tag-names' .github/workflows/build-deploy.yml"
+fi
+
+# shellcheck disable=SC2016
+# Literal dollar signs: these match the step's own script text.
+if printf '%s\n' "$verify_block" | grep -qF 'imagetools inspect "$latest" --raw' &&
+  printf '%s\n' "$verify_block" | grep -qF 'imagetools inspect "$dated" > /dev/null'; then
+  ok "the verify step reads the platforms of latest, and requires the dated tag to exist"
+else
+  fail "the verify step reads the platforms of latest, and requires the dated tag to exist" \
+    "the dated tag may come from an earlier build of the day, so its platforms are that build's" \
+    "reproduce: sed -n '/Verify what was published/,/^\$/p' .github/workflows/build-deploy.yml"
+fi
+
+#---------------------------------------------------------------------------#
 # The rollback guard.
 #
 # 20 of the 46 shipped mirrors are plain http, all on the two ARM ports. An

@@ -78,10 +78,15 @@ three name one architecture each.
 | tag | resolves to | moves |
 | --- | --- | --- |
 | `latest` | an index over every platform | every build |
-| `v2026.08.26` | an index over every platform, that day's build | never |
+| `v2026.08.26` | an index over every platform, that day's first build | never |
 | `x86_64` | one platform, newest | every build |
-| `x86_64-v2026.08.26` | one platform, that day's build | never |
-| `x86_64-7.1.0.r9.g54d9411-2` | one platform, that `pacman` version | never |
+| `x86_64-v2026.08.26` | one platform, that day's first build | never |
+| `x86_64-7.1.0.r9.g54d9411-2` | one platform, the first build with that `pacman` version | never |
+
+⛔ A tag that never moves is created by the first build that names it, and is
+not pointed at another image after that. A second build on the same day, or
+with the same `pacman` version, moves `latest` and the single-architecture
+rolling tags only.
 
 ⚠ An architecture that cannot be built on a given day does not hold the others
 back. Its own tags stay where they are, and `latest` and that day's `v<date>`
@@ -133,6 +138,8 @@ docker pull --platform=linux/arm64 ghcr.io/pkgforge-dev/archlinux:aarch64
 - #### What the pinned tag is pinned to
 
 `x86_64-7.1.0.r9.g54d9411-2` names the version of `pacman` that image contains.
+It is the first image built with that version, and a later build with the same
+version does not take the tag.
 
 Arch is rolling. No port publishes a `VERSION_ID`, so there is no distribution
 version to name a tag after. `pacman` is used because it exists on every port

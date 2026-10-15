@@ -699,6 +699,21 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # ⛔ A pinned tag is created once and never pointed anywhere else:
+      # v<date>, <alias>-v<date> and <alias>-<anchor>. The two steps below pass
+      # this list to scripts/tag-names, which leaves out each pinned tag already
+      # on it. So a second build on one day, or with one pacman version, moves
+      # latest and <alias> only. GHCR is read because every digest is staged
+      # there and both registries get their tags from one command. A list that
+      # cannot be read stops the job, because read as empty it would move every
+      # pinned tag. HISTORY/pinned-tags.md.
+      - name: Read the tags the repository already carries
+        env:
+          TARGET_IMAGE: ${{ needs.resolve.outputs.target_image }}
+        run: |
+          set -euo pipefail
+          scripts/registry-tags ghcr.io "${TARGET_IMAGE#ghcr.io/}" > /tmp/existing-tags.txt
+
       # Only for what built in this run. A carried architecture's tags already
       # point at the image it carries, so they are left exactly where they are.
       - name: Create the per architecture tags
@@ -721,7 +736,13 @@ jobs:
               continue
             fi
             anchor="$(jq -er --arg a "$arch" '.[$a]' <<< "$ANCHORS")"
-            mapfile -t tags < <(scripts/tag-names arch "$arch" "$VERSION" "$anchor" "${images[@]}")
+            mapfile -t tags < <(scripts/tag-names --existing /tmp/existing-tags.txt arch "$arch" "$VERSION" "$anchor" "${images[@]}")
+            # mapfile does not see the exit status of tag-names. The rolling
+            # tags are always printed, so an empty list means it failed.
+            if [ "${#tags[@]}" -eq 0 ]; then
+              echo "scripts/tag-names printed no tag for $arch, and its reason is above" >&2
+              exit 1
+            fi
             args=()
             for t in "${tags[@]}"; do
               args+=(-t "$t")
@@ -748,7 +769,11 @@ jobs:
             echo "the plan names no image, so there is no index to create" >&2
             exit 1
           fi
-          mapfile -t tags < <(scripts/tag-names index "$VERSION" "${images[@]}")
+          mapfile -t tags < <(scripts/tag-names --existing /tmp/existing-tags.txt index "$VERSION" "${images[@]}")
+          if [ "${#tags[@]}" -eq 0 ]; then
+            echo "scripts/tag-names printed no index tag, and its reason is above" >&2
+            exit 1
+          fi
           args=()
           for t in "${tags[@]}"; do
             args+=(-t "$t")
@@ -771,18 +796,27 @@ jobs:
           # fail on its own, and until this step covered it a Docker Hub tag that
           # never arrived, or arrived without every platform, ended a green run.
           verify_index() {
-            local image="$1" dated got expect arch
-            # The dated index tag carries a leading v. scripts/tag-names is the
-            # authority on the spelling, so it is asked rather than
-            # reconstructed: inspecting a tag the publish job never created
-            # would fail every run.
+            local image="$1" latest dated got expect arch
+            # scripts/tag-names is the authority on the spelling, so it is
+            # asked rather than reconstructed: inspecting a tag the publish job
+            # never created would fail every run.
+            latest="$(scripts/tag-names index "$VERSION" "$image" | grep ':latest$')"
             dated="$(scripts/tag-names index "$VERSION" "$image" | grep -v ':latest$')"
-            echo "verifying $dated"
+
+            # ⛔ latest is the index this run wrote. The dated index is pinned:
+            # the first build of the day creates it and a later one leaves it,
+            # so its platforms are that build's. It has to exist, whichever
+            # run created it.
+            if ! docker buildx imagetools inspect "$dated" > /dev/null; then
+              echo "$dated does not exist after the publish" >&2
+              exit 1
+            fi
+            echo "verifying $latest"
 
             # The index must carry every platform the plan put in it, built or
             # carried. An index with a hole in it is the failure this whole
             # topology exists to prevent.
-            got="$(docker buildx imagetools inspect "$dated" --raw \
+            got="$(docker buildx imagetools inspect "$latest" --raw \
               | jq -r '[ .manifests[].platform
                          | select(.os != "unknown")
                          | .architecture + (if .variant then "/" + .variant else "" end) ]
@@ -799,14 +833,14 @@ jobs:
                 continue
               fi
               if ! grep -qw -- "$expect" <<< "$got"; then
-                echo "the index for $dated is missing $expect" >&2
+                echo "the index for $latest is missing $expect" >&2
                 echo "it carries: $got" >&2
                 echo "the digests were staged on ${TARGET_IMAGE}. If that index is" >&2
                 echo "complete and this one is not, the cross-registry copy is what failed." >&2
                 exit 1
               fi
             done
-            echo "::notice::published $dated with platforms $got"
+            echo "::notice::published $latest with platforms $got, and $dated exists"
           }
 
           verify_index "$TARGET_IMAGE"

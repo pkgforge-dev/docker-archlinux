@@ -146,4 +146,101 @@ else
   ok "an empty version is refused"
 fi
 
+#---------------------------------------------------------------------------#
+# A pinned tag is created once and never pointed at another image.
+#
+# ⛔ v<date>, <alias>-v<date> and <alias>-<anchor> are pinned; latest and
+# <alias> are rolling. --existing names the tags the repository carries, and a
+# pinned one on that list is left out, so the publish cannot move it. Before
+# the flag v2026.08.26 and v2026.08.28 were each created by more than one
+# build, and every <alias>-<anchor> moved each day. HISTORY/pinned-tags.md.
+#---------------------------------------------------------------------------#
+work="$(work_dir)"
+trap 'rm -rf "$work"' EXIT
+# x86_64-$ANCHOR.1 is another anchor family, as riscv64's -2.1 is beside the
+# -2 of the others. It holds x86_64-$ANCHOR as a prefix and must not hide it.
+printf '%s\n' "x86_64-v$VERSION" "amd64-$ANCHOR" "v$VERSION" "latest" "x86_64" "x86_64-$ANCHOR.1" > "$work/existing"
+
+# Each call keeps its status, so a tag-names that exits non-zero fails an
+# assertion here rather than ending this file under set -e with no line.
+arch_rc=0
+kept="$("$TAGS" --existing "$work/existing" arch amd64 "$VERSION" "$ANCHOR" "$GHCR" "$HUB" 2> "$work/arch.err")" || arch_rc=$?
+moved=""
+for shape in "x86_64-v$VERSION" "amd64-$ANCHOR"; do
+  for image in "$GHCR" "$HUB"; do
+    if grep -qxF "$image:$shape" <<< "$kept"; then
+      moved="$moved $image:$shape"
+    fi
+  done
+done
+if [ "$arch_rc" -eq 0 ] && [ -z "$moved" ]; then
+  ok "a pinned architecture tag that exists is left out, on both registries"
+else
+  fail "a pinned architecture tag that exists is left out, on both registries" \
+    "exit $arch_rc, printed although on the list:$moved" \
+    "the publish would point a pinned tag at another image" \
+    "reproduce: printf 'x86_64-v$VERSION\n' > l; $TAGS --existing l arch amd64 $VERSION $ANCHOR $GHCR $HUB"
+fi
+
+# Tag names, not an architecture list: x86_64 and amd64 are the two rolling
+# tags here. Held in a variable so 75-architecture-set.sh does not read the
+# loop as one over architectures.
+want_printed="x86_64 amd64 x86_64-$ANCHOR amd64-v$VERSION"
+absent=""
+for shape in $want_printed; do
+  for image in "$GHCR" "$HUB"; do
+    if ! grep -qxF "$image:$shape" <<< "$kept"; then
+      absent="$absent $image:$shape"
+    fi
+  done
+done
+if [ -z "$absent" ]; then
+  ok "the rolling tags, listed or not, and the pinned tags not on the list are printed"
+else
+  fail "the rolling tags, listed or not, and the pinned tags not on the list are printed" \
+    "missing:$absent" \
+    "a rolling tag left out stops moving, and a pinned tag left out is never created" \
+    "reproduce: $TAGS --existing <list> arch amd64 $VERSION $ANCHOR $GHCR $HUB"
+fi
+
+if grep -qF "x86_64-v$VERSION is pinned and exists" "$work/arch.err" &&
+  grep -qF "amd64-$ANCHOR is pinned and exists" "$work/arch.err"; then
+  ok "each pinned tag that is left out is named on stderr"
+else
+  fail "each pinned tag that is left out is named on stderr" \
+    "stderr: $(tr '\n' '|' < "$work/arch.err")" \
+    "reproduce: $TAGS --existing <list> arch amd64 $VERSION $ANCHOR $GHCR"
+fi
+
+index_rc=0
+index_kept="$("$TAGS" --existing "$work/existing" index "$VERSION" "$GHCR" "$HUB" 2> /dev/null)" || index_rc=$?
+if [ "$index_rc" -eq 0 ] && ! grep -qF ":v$VERSION" <<< "$index_kept" && grep -qxF "$GHCR:latest" <<< "$index_kept" &&
+  grep -qxF "$HUB:latest" <<< "$index_kept"; then
+  ok "the dated index tag that exists is left out, and latest is printed on both registries"
+else
+  fail "the dated index tag that exists is left out, and latest is printed on both registries" \
+    "exit $index_rc, printed: $(tr '\n' ' ' <<< "$index_kept")" \
+    "reproduce: printf 'v$VERSION\n' > l; $TAGS --existing l index $VERSION $GHCR $HUB"
+fi
+
+: > "$work/empty"
+fresh_rc=0
+fresh="$("$TAGS" --existing "$work/empty" arch amd64 "$VERSION" "$ANCHOR" "$GHCR" "$HUB" 2> /dev/null)" || fresh_rc=$?
+if [ "$fresh_rc" -eq 0 ] && [ "$fresh" = "$(tags_for amd64)" ]; then
+  ok "an empty list, a new repository, prints every tag"
+else
+  fail "an empty list, a new repository, prints every tag" \
+    "exit $fresh_rc, printed $(awk 'NF' <<< "$fresh" | wc -l | tr -d '[:space:]') of $(tags_for amd64 | wc -l | tr -d '[:space:]')" \
+    "reproduce: : > l; $TAGS --existing l arch amd64 $VERSION $ANCHOR $GHCR $HUB"
+fi
+
+if "$TAGS" --existing "$work/absent" index "$VERSION" "$GHCR" > /dev/null 2>&1; then
+  fail "a list that cannot be read is refused" \
+    "tag-names printed tags for a list that does not exist" \
+    "read as empty, it would move every pinned tag" \
+    "reproduce: $TAGS --existing /nonexistent index $VERSION $GHCR, which must exit non-zero"
+else
+  ok "a list that cannot be read is refused"
+fi
+
 summary

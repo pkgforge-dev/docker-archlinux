@@ -2,8 +2,8 @@
 #
 # Print the tags for one architecture, or for the multi architecture index.
 #
-#   scripts/tag-names arch <docker-arch> <version> <anchor> <image> [<image>...]
-#   scripts/tag-names index <version> <image> [<image>...]
+#   scripts/tag-names [--existing FILE] arch <docker-arch> <version> <anchor> <image> [<image>...]
+#   scripts/tag-names [--existing FILE] index <version> <image> [<image>...]
 #
 # <version> is the build date, 2026.08.26 shape, written without the leading v.
 # <anchor> is the upstream version the pinned family is named after. It is the
@@ -23,6 +23,16 @@
 # The uname -m spellings follow the sibling images in the organisation. The
 # docker architecture spellings are this repository's extension. Aliases share
 # one manifest, so x86_64 and amd64 are two names for one digest.
+#
+# ⛔ A pinned tag is created once, by the first build that names it, and is
+# never pointed at another image. A rolling tag moves with every build.
+# --existing FILE leaves out each pinned tag whose name is a line of FILE, and
+# names it on stderr. FILE is the target repository's tag list, from
+# scripts/registry-tags. Without the flag every tag is printed. So a second
+# build on one day, or a second build with one pacman version, moves latest and
+# <alias> only. Before the flag the publish created every tag on every build:
+# v<version> moved on 2026-08-26 and 2026-08-28, and every <alias>-<anchor>
+# moved each day. HISTORY/pinned-tags.md.
 set -euo pipefail
 
 die() {
@@ -59,15 +69,33 @@ valid_tag() {
   printf '%s' "$1" | grep -qE '^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$'
 }
 
+existing=""
+
+# emit <rolling|pinned> TAG IMAGE...
 emit() {
-  local tag="$1"
-  shift
+  local kind="$1" tag="$2"
+  shift 2
   valid_tag "$tag" || die "not a valid tag: $tag"
+  if [ "$kind" = pinned ] && [ -n "$existing" ] && grep -qxF -- "$tag" "$existing"; then
+    echo "tag-names: $tag is pinned and exists, so it stays where it is" >&2
+    return 0
+  fi
   local image
   for image in "$@"; do
     printf '%s:%s\n' "$image" "$tag"
   done
 }
+
+if [ "${1:-}" = "--existing" ]; then
+  existing="${2:-}"
+  [ -n "$existing" ] || die "--existing needs the file of tags the repository already carries"
+  # ⛔ A list that cannot be read is not an empty list. Read as empty, it
+  # would move every pinned tag, which is what the flag exists to stop.
+  if [ ! -f "$existing" ] || [ ! -r "$existing" ]; then
+    die "--existing $existing is not a readable file"
+  fi
+  shift 2
+fi
 
 mode="${1:-}"
 case "$mode" in
@@ -85,9 +113,9 @@ case "$mode" in
     # script would exit 0 having printed nothing.
     alias_list="$(aliases_for "$docker_arch")"
     for alias in $alias_list; do
-      emit "$alias" "$@"
-      emit "$alias-v$version" "$@"
-      emit "$alias-$anchor" "$@"
+      emit rolling "$alias" "$@"
+      emit pinned "$alias-v$version" "$@"
+      emit pinned "$alias-$anchor" "$@"
     done
     ;;
   index)
@@ -96,8 +124,8 @@ case "$mode" in
     version="$1"
     shift
     [ -n "$version" ] || die "version is empty"
-    emit "latest" "$@"
-    emit "v$version" "$@"
+    emit rolling "latest" "$@"
+    emit pinned "v$version" "$@"
     ;;
   aliases)
     shift

@@ -385,3 +385,38 @@ run.** The fault for the dbsnapshot step was written as two commands joined by
 `;` on one line of the fault script, so the copy ran outside the scratch tree
 and the test ran against the unchanged file. Re-run as its own script, it
 failed as the row shows.
+
+## Pinned tags, measured 2026-10-15
+
+Injected into a copy of the tree inside the pinned `FROM` image of the
+`Dockerfile`, run through podman. `HISTORY/pinned-tags.md` carries what these
+guard.
+
+| test | fault injected | caught by |
+| --- | --- | --- |
+| `60-tag-families.sh` | the `--existing` check in `scripts/tag-names` replaced with `if false` | `not ok 41 - a pinned architecture tag that exists is left out, on both registries`, `not ok 43`, `not ok 44`, `# failed 3 of 46` |
+| `60` | the rolling `<alias>` emitted as pinned | `not ok 42 - the rolling tags, listed or not, and the pinned tags not on the list are printed` |
+| `60` | `grep -qF` for `grep -qxF`, so a listed `x86_64-<anchor>.1` hides `x86_64-<anchor>` | `not ok 42` |
+| `60` | a list that cannot be read taken as empty | `not ok 46 - a list that cannot be read is refused` |
+| `60` | the stderr line for a kept tag removed | `not ok 43 - each pinned tag that is left out is named on stderr` |
+| `60` | an empty list refused, `-s` for `-f` and `-r` | `not ok 45 - an empty list, a new repository, prints every tag` |
+| `35-publish-targets.sh` | the `scripts/registry-tags` line removed from the publish job | `not ok 7 - the publish job reads the target's tags before it creates any` |
+| `35` | `--existing` removed from the index step only | `not ok 8 - both tag steps pass the list to scripts/tag-names` |
+| `35` | the verify step reading the platforms of the dated tag again | `not ok 9 - the verify step reads the platforms of latest, and requires the dated tag to exist` |
+
+⚠ **The faults found a defect in the test first.** The three calls in `60` that
+feed these assertions were bare command substitutions, so a `scripts/tag-names`
+that exited non-zero ended the file under `set -e` with no `not ok` line and no
+plan. The file still counted as failed, and the reason was nowhere. Each call
+now keeps its status and the assertion names it.
+
+⚠ **One injection hit more than its target.** The first empty list fault
+rewrote every `shift 2` in `scripts/tag-names`, including the one inside
+`emit`, so every call failed and the run said nothing about the empty list.
+The row above is the second injection, which changes only the readable check.
+
+⚠ **A rule from another test caught the first version.** A loop over the tag
+names `x86_64 amd64 x86_64-<anchor> amd64-v<version>` read as an architecture
+loop to `75-architecture-set.sh`, which failed it in the build's preflight, run
+`38675124637`. The list is now held in a variable. The two faults on assertion
+42 were run again after that edit and still fail it.
