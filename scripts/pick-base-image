@@ -2,8 +2,8 @@
 #
 # Pick a registry that serves an image pinned by digest.
 #
-#   scripts/pick-base-image [--fixtures DIR] [DOCKERFILE]
-#   scripts/pick-base-image [--fixtures DIR] --image REF
+#   scripts/pick-base-image [--fixtures DIR] [--after VALUE] [DOCKERFILE]
+#   scripts/pick-base-image [--fixtures DIR] [--after VALUE] --image REF
 #
 # REF is docker.io/<repo>[:<tag>]@sha256:<digest>. Without --image, REF is the
 # one `ARG BASE_IMAGE=` value of DOCKERFILE (default: the Dockerfile of the
@@ -19,14 +19,18 @@
 # choice does not change what is trusted.
 # A registry whose answer has ratelimit-remaining 0 is skipped: its pull
 # limit is used up. Docker Hub sends this header and does not count a HEAD.
-# ⚠ The limit can run out between this probe and the pull. The build then
-# fails, and the next run probes again.
+#
+# --after VALUE asks only the registries after the one of VALUE. VALUE is a
+# value that this script printed for the same image. The limit can run out
+# between this probe and the pull. scripts/build-port then pulls once more,
+# from the registry that --after gives.
 #
 # --fixtures DIR reads the answers from DIR/heads.tsv
 # (REGISTRY<TAB>REPO<TAB>REF<TAB>CODE<TAB>DIGEST[<TAB>REMAINING]) and calls no
 # registry. A HEAD that is not in the file answers 404.
 #
-# Exit status: 0 printed, 1 no registry serves the digest, 2 usage.
+# Exit status: 0 printed, 1 no registry serves the digest (after VALUE), 2
+# usage or a VALUE that is not a value of this image.
 set -euo pipefail
 shopt -s inherit_errexit
 
@@ -44,6 +48,7 @@ usage() {
 FIXTURES=""
 dockerfile=""
 image=""
+after=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --fixtures)
@@ -54,6 +59,11 @@ while [ "$#" -gt 0 ]; do
     --image)
       [ "$#" -ge 2 ] || usage
       image="$2"
+      shift
+      ;;
+    --after)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || usage
+      after="$2"
       shift
       ;;
     -*) usage ;;
@@ -116,6 +126,20 @@ case "$repo" in
 public.ecr.aws docker/$repo public.ecr.aws/docker/$repo@$digest"
     ;;
 esac
+
+# --after: keep only the registries after the one of VALUE.
+if [ -n "$after" ]; then
+  again="$again --after $after"
+  n="$(awk -v v="$after" '$3 == v { n = NR } END { print n + 0 }' <<< "$candidates")"
+  if [ "$n" -eq 0 ]; then
+    echo "$PROG: --after $after is not a value of $repo@$digest" >&2
+    echo "  the values: $(awk '{ printf "%s%s", sep, $3; sep = " " }' <<< "$candidates")" >&2
+    exit 2
+  fi
+  after_reg="$(awk -v n="$n" 'NR == n { print $1 }' <<< "$candidates")"
+  candidates="$(awk -v n="$n" 'NR > n' <<< "$candidates")"
+  [ -n "$candidates" ] || die "no registry comes after $after_reg for $repo@$digest" "reproduce: $again"
+fi
 
 while read -r reg path value; do
   read -r code got left <<< "$(probe "$reg" "$path")"

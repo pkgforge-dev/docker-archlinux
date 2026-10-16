@@ -23,7 +23,7 @@ Each rule below keeps one of these true for one way it could fail.
 | rule | failure it prevents | where |
 | --- | --- | --- |
 | The bootstrap stage starts from the official Arch Linux image, pinned by digest. No `FROM` names an image that this repository publishes. | A build from its own last output keeps each defect of that output, and nobody can rebuild it without trust in this project first. | `Dockerfile`, `tests/static/10-bootstrap-not-circular.sh` |
-| The build asks for the digest of the base image and of the buildkit image from `docker.io`, then `mirror.gcr.io`. For the base image, a Docker official image, `public.ecr.aws` is third. The same digest is the same bytes. A registry that answers with `ratelimit-remaining: 0` is passed over: its pull limit is used up. ⚠ The limit can run out between the probe and the pull. | One registry outage or one used-up pull limit stops every build. | `scripts/pick-base-image` |
+| The build asks for the digest of the base image and of the buildkit image from `docker.io`, then `mirror.gcr.io`. For the base image, a Docker official image, `public.ecr.aws` is third. The same digest is the same bytes. A registry that answers with `ratelimit-remaining: 0` is passed over: its pull limit is used up. A pull that fails with HTTP 429 or `toomanyrequests` runs once more, from the next registry at the same digest. ⚠ A second failure stops the leg, and the next run picks again. | One registry outage or one used-up pull limit stops every build. Docker Hub does not count the HEAD of the pick, so its limit can run out before the pull. | `scripts/pick-base-image`, `scripts/build-port`, `tests/static/36-build-port.sh` |
 | Each shipped `pacman.conf` sets `SigLevel = Required DatabaseOptional`. No SigLevel is `Never`. | A forged or unsigned package installs. Most ports do not sign their databases, so `DatabaseOptional` is necessary. | `rootfs/*/etc/pacman.conf`, `tests/static/30-signature-checking-on.sh` |
 | A port whose keys are not in `archlinux-keyring` has a keyring pin: the package, its sha256, each trusted fingerprint with its expiry. The package is in the tree. | The port deletes a superseded keyring package from its mirrors, and the build cannot get the trust root. | `bootstrap/keyrings/*.pin`, `bootstrap/any/usr/local/bin/install-port-keyring`, `tests/static/88-keyring-pins-vendored.sh` |
 | After populate, each pinned key that is not expired must be fully valid. | A key at marginal validity signs nothing that pacman accepts. The keyring installs, and the transaction commits nothing. | `install-port-keyring` |
@@ -135,17 +135,21 @@ The steps of a build leg, in order:
 
 1. `scripts/binfmt-register ARCH`: the emulator, with the `F` flag.
 2. `scripts/pick-base-image`: the registry for the base image digest.
-3. `scripts/pick-base-image --image "$BUILDKIT_IMAGE"`: the registry for the buildkit image of the builder.
-4. `scripts/gen-mirrorlist ARCH`: exit 0 writes the lists in the checkout of the runner. Any other exit keeps the committed lists.
-5. `scripts/pick-transport ARCH`: `worker` or `oci`.
-6. `scripts/check-mirror-lag ARCH`: each `drop LIST SERVER` line becomes a `LIST=SERVER` pair of `SKIP_SERVERS`.
-7. `scripts/resolve-anchor ARCH`. ⛔ A port that no server answers for fails here: a red leg, never a green skip.
-8. `scripts/check-anchor-floor ARCH ANCHOR`. An anchor that no tag can carry fails here too.
-9. `docker buildx build`, pushed by digest to the target, with provenance (`mode=max`) and an SBOM. The cache is `type=gha` with `ignore-error=true`.
-10. The `dbsnapshot` target, exported to a directory.
+3. `scripts/gen-mirrorlist ARCH`: exit 0 writes the lists in the checkout of the runner. Any other exit keeps the committed lists.
+4. `scripts/pick-transport ARCH`: `worker` or `oci`.
+5. `scripts/check-mirror-lag ARCH`: each `drop LIST SERVER` line becomes a `LIST=SERVER` pair of `SKIP_SERVERS`.
+6. `scripts/resolve-anchor ARCH`. ⛔ A port that no server answers for fails here: a red leg, never a green skip.
+7. `scripts/check-anchor-floor ARCH ANCHOR`. An anchor that no tag can carry fails here too.
+8. `scripts/build-port builder`: the registry for the buildkit image (`pick-base-image --image "$BUILDKIT_IMAGE"`), its pull, and the builder that runs it.
+9. `scripts/build-port push`: `docker buildx build`, pushed by digest to the target, with provenance (`mode=max`) and an SBOM. The cache is `type=gha` with `ignore-error=true`.
+10. `scripts/build-port snapshot`: the `dbsnapshot` target, exported to a directory.
 11. `scripts/gen-evidence`, with `DB_SNAPSHOT` and `EXPECT_ANCHOR`.
 12. `tests/run.sh image` against the pushed digest.
 13. The artifacts `evidence-<arch>` (90 days) and `digest-<arch>` (7 days).
+
+⭐ Steps 8 to 10 run once more when a pull fails on a used-up pull limit. The second try takes the same digest from the next registry: `pick-base-image --after`. A failure counts when the output has a line with `toomanyrequests` or `429 Too Many Requests`. In a build, that line must also name the repository of the base image, because a server of a mirror list can answer 429 too. Any other failure stops the step at once. The push names the base image it used, and the export and the digest record take that value.
+
+Steps 9 and 10 start the script from `actions/github-script`. A `run:` step gets no `ACTIONS_RUNTIME_TOKEN`, and the `type=gha` cache needs it.
 
 The build args of the Dockerfile: `BASE_IMAGE`, `TRANSPORT` (default `worker`), `SKIP_SERVERS` (default empty), `IMAGE_VERSION`, `SOURCE_COMMIT` and `BUILD_DATE`. Its stages: `bootstrap`, `dbsnapshot` and the final unnamed stage.
 

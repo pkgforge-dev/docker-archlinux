@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+#
+# Make the builder of a build leg, and run the two builds of the leg.
+#
+#   scripts/build-port [--fixtures DIR] builder
+#   scripts/build-port [--fixtures DIR] push
+#   scripts/build-port [--fixtures DIR] snapshot
+#
+#   builder   picks a registry for BUILDKIT_IMAGE (scripts/pick-base-image
+#             --image), pulls the image, and makes the buildx builder BUILDER
+#             (docker-container driver) that runs it. Output: ref.
+#   push      builds the port from BASE_IMAGE and pushes it by digest to
+#             TARGET_IMAGE, with a provenance attestation (mode=max) and an
+#             SBOM. Output: digest and base_image.
+#   snapshot  exports the target dbsnapshot to the directory DB_SNAPSHOT.
+#             BASE_IMAGE is the base_image of push, so the bootstrap stage
+#             comes from the cache of the builder. Output: base_image.
+#
+# ⭐ Docker Hub does not count the HEAD of scripts/pick-base-image. So its
+# pull limit can run out between the pick and the pull. When a mode fails and
+# its output has a line with "toomanyrequests" or "429 Too Many Requests",
+# the mode runs once more with the value of scripts/pick-base-image --after:
+# the same digest from the next registry. Any other failure stops the mode.
+# A failure of the second try stops it too.
+#
+# In a build, the 429 line must also name the repository of the image: a
+# server of a mirror list can answer 429 too. The builder pulls the buildkit
+# image and nothing more, so each 429 line of that mode counts.
+#
+# Environment:
+#   BUILDKIT_IMAGE   builder: the pin, docker.io/<repo>:<tag>@sha256:<digest>
+#   BASE_IMAGE       push, snapshot: a value that scripts/pick-base-image
+#                    printed for the BASE_IMAGE pin of the Dockerfile
+#   ARCH, PLATFORM   push, snapshot: the port, and its OCI platform. ARCH is
+#                    the scope of the gha cache
+#   TARGET_IMAGE     push: the image to push to
+#   DB_SNAPSHOT      snapshot: the directory to export to
+#   IMAGE_VERSION, SOURCE_COMMIT, BUILD_DATE, TRANSPORT, SKIP_SERVERS
+#                    push, snapshot: the build args (SKIP_SERVERS can be empty)
+#   BUILDER          the name of the builder (default docker-archlinux)
+#   PULL_DEADLINE    seconds for a pull and for the start of the builder
+#                    (default 600)
+#   BUILD_DEADLINE   seconds for one build (default 3600)
+#   GITHUB_OUTPUT    when set, gets the output lines; else they go to stdout
+#   GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT
+#                    when GITHUB_RUN_ID is set, the builder-id of the
+#                    provenance names the run
+#
+# The gha cache reads ACTIONS_RUNTIME_TOKEN and ACTIONS_RESULTS_URL from the
+# environment. A run: step does not get them. So build-deploy.yml starts push
+# and snapshot from actions/github-script, which has the environment of an
+# action.
+#
+# --fixtures DIR goes to scripts/pick-base-image, which then reads the
+# registry answers from DIR/heads.tsv.
+#
+# Exit status: 0 done, 1 a failure, 2 usage.
+set -euo pipefail
+shopt -s inherit_errexit
+
+PROG=build-port
+# shellcheck source=scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PICK="$ROOT/scripts/pick-base-image"
+BUILDER="${BUILDER:-docker-archlinux}"
+PULL_DEADLINE="${PULL_DEADLINE:-600}"
+BUILD_DEADLINE="${BUILD_DEADLINE:-3600}"
+
+usage() {
+  sed -n '5,7p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  exit 2
+}
+
+pick_opts=()
+mode=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --fixtures)
+      [ "$#" -ge 2 ] || usage
+      pick_opts=(--fixtures "$2")
+      shift
+      ;;
+    builder | push | snapshot)
+      [ -z "$mode" ] || usage
+      mode="$1"
+      ;;
+    *) usage ;;
+  esac
+  shift
+done
+[ -n "$mode" ] || usage
+need docker timeout
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+# require NAME...: stop when a variable that the mode needs is unset or
+# empty. SKIP_SERVERS can be empty, and must be set.
+require() {
+  local v
+  for v in "$@"; do
+    case "$v" in
+      SKIP_SERVERS) [ -n "${SKIP_SERVERS+set}" ] && continue ;;
+      *) [ -z "${!v:-}" ] || continue ;;
+    esac
+    die "$mode needs the variable $v" "reproduce: sed -n '/^# Environment/,/^# The gha/p' scripts/build-port"
+  done
+}
+
+# output KEY VALUE: one output line of the step.
+output() {
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"
+  else
+    printf '%s=%s\n' "$1" "$2"
+  fi
+}
+
+# logged LOG COMMAND...: run COMMAND, show its output, and add the output to
+# LOG. Returns the status of COMMAND.
+logged() {
+  local log="$1" rc=0
+  shift
+  "$@" 2>&1 | tee -a "$log" || rc=$?
+  return "$rc"
+}
+
+# pull_limited LOG NEEDLE: 0 when LOG has a line of a used-up pull limit.
+# With NEEDLE, the line must have NEEDLE too.
+pull_limited() {
+  local n
+  n="$(awk -v needle="$2" '
+    {
+      l = tolower($0)
+      if ((index(l, "toomanyrequests") || index(l, "429 too many requests")) &&
+        (needle == "" || index($0, needle)))
+        n++
+    }
+    END { print n + 0 }' "$1")"
+  [ "$n" -gt 0 ]
+}
+
+# repo_of VALUE: the repository path of an image value, with no registry,
+# tag or digest. public.ecr.aws/docker/library/x@sha256:... gives
+# docker/library/x.
+repo_of() {
+  local v="${1%%@*}"
+  v="${v#*/}"
+  case "$v" in
+    *:*) v="${v%:*}" ;;
+  esac
+  printf '%s\n' "$v"
+}
+
+# with_next ATTEMPT NEEDLE VALUE PICK_ARG...: run ATTEMPT VALUE LOG. On a
+# pull limit, run it once more with the next registry of PICK_ARG... Sets
+# USED to the value that passed. Exits on a failure.
+USED=""
+with_next() {
+  local attempt="$1" needle="$2" value="$3" rc=0 next
+  shift 3
+  "$attempt" "$value" "$work/try-1.log" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    USED="$value"
+    return 0
+  fi
+  if ! pull_limited "$work/try-1.log" "$needle"; then
+    die "$mode failed with $value (exit $rc), and its output has no pull limit line" \
+      "reproduce: scripts/build-port $mode, with the environment of the step"
+  fi
+  warn "$mode: the pull of $value met a used-up pull limit (HTTP 429)"
+  rc=0
+  next="$("$PICK" "${pick_opts[@]}" "$@" --after "$value")" || rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$next" ]; then
+    die "$mode: no registry after the one of $value serves its digest (exit $rc)" \
+      "reproduce: scripts/pick-base-image $* --after $value"
+  fi
+  note "$mode: the same digest from the next registry: $next"
+  rc=0
+  "$attempt" "$next" "$work/try-2.log" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    die "$mode failed with $next too (exit $rc), after a pull limit with $value" \
+      "reproduce: scripts/build-port $mode, with the environment of the step and BASE_IMAGE or BUILDKIT_IMAGE at $next"
+  fi
+  USED="$next"
+}
+
+#---------------------------------------------------------------------------#
+# builder
+#---------------------------------------------------------------------------#
+made=0
+
+# try_builder VALUE LOG: pull VALUE, then make and start the builder.
+try_builder() {
+  local value="$1" log="$2"
+  : > "$log"
+  if [ "$made" -eq 1 ]; then
+    logged "$log" docker buildx rm "$BUILDER" || return 1
+    made=0
+  fi
+  logged "$log" timeout -k 5 "$PULL_DEADLINE" docker pull "$value" || return 1
+  logged "$log" docker buildx create --name "$BUILDER" --driver docker-container \
+    --driver-opt "image=$value" --use || return 1
+  made=1
+  logged "$log" timeout -k 5 "$PULL_DEADLINE" docker buildx inspect --bootstrap --builder "$BUILDER" || return 1
+}
+
+do_builder() {
+  local first
+  require BUILDKIT_IMAGE
+  first="$("$PICK" "${pick_opts[@]}" --image "$BUILDKIT_IMAGE")"
+  with_next try_builder "" "$first" --image "$BUILDKIT_IMAGE"
+  note "the builder $BUILDER runs $USED"
+  output ref "$USED"
+}
+
+#---------------------------------------------------------------------------#
+# push and snapshot
+#---------------------------------------------------------------------------#
+
+# build_args BASE: the build args of both builds, in BUILD_ARGS.
+BUILD_ARGS=()
+build_args() {
+  BUILD_ARGS=(
+    --build-arg "IMAGE_VERSION=$IMAGE_VERSION"
+    --build-arg "SOURCE_COMMIT=$SOURCE_COMMIT"
+    --build-arg "BUILD_DATE=$BUILD_DATE"
+    --build-arg "BASE_IMAGE=$1"
+    --build-arg "TRANSPORT=$TRANSPORT"
+    --build-arg "SKIP_SERVERS=$SKIP_SERVERS"
+  )
+}
+
+# The provenance attestation of both builds.
+attest="type=provenance,mode=max"
+if [ -n "${GITHUB_RUN_ID:-}" ]; then
+  attest="$attest,builder-id=${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/actions/runs/$GITHUB_RUN_ID/attempts/${GITHUB_RUN_ATTEMPT:-1}"
+fi
+
+# try_push VALUE LOG: build from VALUE and push by digest.
+try_push() {
+  local value="$1" log="$2"
+  : > "$log"
+  rm -f "$work/metadata.json"
+  build_args "$value"
+  logged "$log" timeout -k 30 "$BUILD_DEADLINE" docker buildx build --builder "$BUILDER" \
+    "${BUILD_ARGS[@]}" \
+    --cache-from "type=gha,scope=$ARCH" \
+    --cache-to "type=gha,mode=max,scope=$ARCH,ignore-error=true" \
+    --output "type=image,name=$TARGET_IMAGE,push-by-digest=true,name-canonical=true,push=true" \
+    --platform "$PLATFORM" \
+    --attest "$attest" \
+    --attest "type=sbom,disabled=false" \
+    --metadata-file "$work/metadata.json" \
+    "$ROOT"
+}
+
+# try_snapshot VALUE LOG: export the target dbsnapshot, built from VALUE.
+try_snapshot() {
+  local value="$1" log="$2"
+  : > "$log"
+  build_args "$value"
+  logged "$log" timeout -k 30 "$BUILD_DEADLINE" docker buildx build --builder "$BUILDER" \
+    "${BUILD_ARGS[@]}" \
+    --cache-from "type=gha,scope=$ARCH" \
+    --output "type=local,dest=$DB_SNAPSHOT" \
+    --platform "$PLATFORM" \
+    --attest "$attest" \
+    --target dbsnapshot \
+    "$ROOT"
+}
+
+BUILD_VARS=(ARCH PLATFORM BASE_IMAGE IMAGE_VERSION SOURCE_COMMIT BUILD_DATE TRANSPORT SKIP_SERVERS)
+
+do_push() {
+  local digest
+  require "${BUILD_VARS[@]}" TARGET_IMAGE
+  need jq
+  with_next try_push "$(repo_of "$BASE_IMAGE")" "$BASE_IMAGE"
+  digest="$(jq -r '."containerimage.digest" // empty' "$work/metadata.json")"
+  [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] ||
+    die "the build passed, and its metadata has no image digest: '$digest'" \
+      "reproduce: jq . the --metadata-file of docker buildx build"
+  note "pushed $TARGET_IMAGE@$digest, built from $USED"
+  output digest "$digest"
+  output base_image "$USED"
+}
+
+do_snapshot() {
+  require "${BUILD_VARS[@]}" DB_SNAPSHOT
+  with_next try_snapshot "$(repo_of "$BASE_IMAGE")" "$BASE_IMAGE"
+  note "exported the target dbsnapshot to $DB_SNAPSHOT, built from $USED"
+  output base_image "$USED"
+}
+
+case "$mode" in
+  builder) do_builder ;;
+  push) do_push ;;
+  snapshot) do_snapshot ;;
+esac

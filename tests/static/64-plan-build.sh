@@ -5,7 +5,8 @@
 #   2. scripts/binfmt-register has a fallback registration for each port that
 #      needs an emulator, with the magic and mask of qemu.
 #   3. scripts/pick-base-image picks the first registry that serves the base
-#      image digest, or the digest of --image.
+#      image digest, or the digest of --image. With --after VALUE, it asks
+#      only the registries after the one of VALUE.
 #
 # No registry is called: each script reads its registry facts from fixtures.
 # The ports come from scripts/ports.
@@ -449,6 +450,26 @@ if [ "$rc" -eq 1 ]; then
 else
   fail "--image: an image with no digest is refused" "exit $rc" "reproduce: scripts/pick-base-image --image docker.io/example/tool:stable"
 fi
+
+# --after VALUE: only the registries after the one of VALUE. scripts/build-port
+# asks for it when a pull meets a used-up pull limit.
+hub_v="$(awk -F= '/^ARG BASE_IMAGE=/ { print $2 }' "$DF")"
+gcr_v="mirror.gcr.io/library/archlinux@$d"
+ecr_v="public.ecr.aws/docker/library/archlinux@$d"
+printf 'docker.io\tlibrary/archlinux\t%s\t200\t%s\nmirror.gcr.io\tlibrary/archlinux\t%s\t200\t%s\npublic.ecr.aws\tdocker/library/archlinux\t%s\t200\t%s\n' \
+  "$d" "$d" "$d" "$d" "$d" "$d" > "$work/base/heads.tsv"
+# after VALUE -> "<exit code> <printed value>"
+after() {
+  local rc=0 v
+  v="$("$BASE" --fixtures "$work/base" --after "$1" "$DF" 2> "$work/base/after.err")" || rc=$?
+  printf '%s %s\n' "$rc" "$v"
+}
+check_eq "--after the docker.io value: the same digest on mirror.gcr.io, though docker.io serves it" \
+  "0 $gcr_v" "$(after "$hub_v")" "reproduce: $repro"
+check_eq "--after the mirror.gcr.io value: the same digest on ECR Public" "0 $ecr_v" "$(after "$gcr_v")" "reproduce: $repro"
+check_eq "--after the last registry: nothing is printed and the exit status is 1" "1 " "$(after "$ecr_v")" "reproduce: $repro"
+check_eq "--after a value that is not a value of the image is refused" \
+  "2 " "$(after "mirror.gcr.io/library/other@$d")" "reproduce: $repro"
 
 # The Dockerfile of the tree: pick-base-image reads its one BASE_IMAGE pin,
 # and the fallback names the same digest on the second registry.

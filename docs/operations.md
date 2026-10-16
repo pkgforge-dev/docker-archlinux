@@ -261,6 +261,7 @@ The workflows, the other scripts and the tests read the port table, and need no 
 | the GHCR mirror is behind | the build drops it for that run (`drop LIST SERVER` in the log). The image still ships it. Nothing to do |
 | the Worker does not answer | `pick-transport` gives `oci`, and the build stage reads GHCR through pacman-oci. Nothing to do |
 | the base image registry does not answer | `pick-base-image` takes the same digest from `mirror.gcr.io`, or for the base image from `public.ecr.aws`. The buildkit image falls back to `mirror.gcr.io` too. Nothing to do |
+| a pull meets a used-up pull limit (HTTP 429, `toomanyrequests`) | `build-port` runs the step once more with the same digest from the next registry. The log says `met a used-up pull limit`. When the second try fails too, the port waits for the next run. Nothing to do |
 | `publish-hub` is open | the next run copies each missing tag. A failure there never touches GHCR. Check the Docker Hub secrets |
 | `registry-drift` is open | the job `hub` of the next build copies the missing and moved tags. A build with nothing to build runs `hub` too |
 | `status-down` or `pages-stale` is open | read the run of `status.yml` that the issue names, and start it again: `gh workflow run status.yml --ref main` |

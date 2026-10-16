@@ -84,11 +84,12 @@ if need_tool yq jq; then
     fail "the build workflow reads as YAML" "yq exited $rc: $(tr '\n' ' ' < "$work/wf.err")" \
       "reproduce: yq . .github/workflows/build-deploy.yml"
   else
-    dest="$(jq -r '[.jobs.build.steps[] | select(.with.target == "dbsnapshot") | .with.outputs
-                   | capture("^type=local,dest=(?<d>.+)$").d] | join(" ")' "$work/wf.json")"
+    # scripts/build-port snapshot exports to DB_SNAPSHOT (36-build-port.sh).
+    dest="$(jq -r '[.jobs.build.steps[] | select((.with.script // "") | test("scripts/build-port[^a-z]*snapshot"))
+                   | .env.DB_SNAPSHOT // ""] | join(" ")' "$work/wf.json")"
     snap="$(jq -r '[.jobs.build.steps[] | select((.run // "") | test("scripts/gen-evidence")) | .env.DB_SNAPSHOT // ""] | join(" ")' "$work/wf.json")"
     if [ -z "$dest" ]; then
-      fail "the build leg exports the dbsnapshot target to a local directory" "no step with target dbsnapshot and type=local" \
+      fail "the build leg exports the dbsnapshot target to a local directory" "no step runs scripts/build-port snapshot with DB_SNAPSHOT" \
         "reproduce: yq '.jobs.build.steps' .github/workflows/build-deploy.yml"
     elif [ -z "$snap" ]; then
       fail "the evidence step has DB_SNAPSHOT" "the step that runs scripts/gen-evidence has none" \

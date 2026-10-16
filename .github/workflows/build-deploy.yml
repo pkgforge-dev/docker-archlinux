@@ -3,7 +3,8 @@
 #   plan     the version, the targets and the ports to build (scripts/plan-build)
 #   gate     tests/run.sh static; the publish waits for it
 #   build    one leg for each planned port, named "Build <arch>": inputs,
-#            docker build, push by digest, evidence, image suite, digest record
+#            builder, build and push by digest (scripts/build-port),
+#            evidence, image suite, digest record
 #   publish  tags on GHCR only (scripts/publish-ghcr)
 #   hub      copies GHCR tags to Docker Hub (scripts/sync-hub)
 #   report   raises or clears the issues build-<arch>, publish-ghcr, publish-hub
@@ -172,17 +173,6 @@ jobs:
           ref="$(scripts/pick-base-image)"
           echo "base_image=$ref" >> "$GITHUB_OUTPUT"
 
-      # The builder runs this image. A Docker Hub fault takes the same digest
-      # from a mirror.
-      - name: Pick the buildkit image registry
-        id: buildkit
-        env:
-          # tag: buildx-stable-1
-          BUILDKIT_IMAGE: docker.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
-        run: |
-          ref="$(scripts/pick-base-image --image "$BUILDKIT_IMAGE")"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-
       # The committed lists stay when generation fails. The digest record
       # says which lists the build used.
       - name: Generate the mirror lists
@@ -251,10 +241,14 @@ jobs:
           ALLOW_ANCHOR_DOWNGRADE: ${{ inputs.allow_anchor_downgrade || 'none' }}
         run: scripts/check-anchor-floor "$ARCH" "$ANCHOR"
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-        with:
-          driver-opts: image=${{ steps.buildkit.outputs.ref }}
+      # The builder runs this image. A Docker Hub fault takes the same digest
+      # from a mirror. So does a pull limit that runs out after the pick.
+      - name: Set up the builder
+        id: buildkit
+        env:
+          # tag: buildx-stable-1
+          BUILDKIT_IMAGE: docker.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+        run: scripts/build-port builder
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -264,43 +258,40 @@ jobs:
           password: ${{ github.token }}
 
       # No tag here. The digest goes to the publish job after every test below.
+      # A pull limit that runs out after the pick builds once more from the
+      # next registry, and base_image names the registry that the build used.
+      # ⚠ A run: step gets no ACTIONS_RUNTIME_TOKEN, and the gha cache needs
+      # it. github-script starts the script with the environment of an action.
       - name: Build and push by digest
         id: push
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          TARGET_IMAGE: ${{ needs.plan.outputs.target_image }}
+          BASE_IMAGE: ${{ steps.base.outputs.base_image }}
+          IMAGE_VERSION: ${{ needs.plan.outputs.version }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          BUILD_DATE: ${{ needs.plan.outputs.build_date }}
+          TRANSPORT: ${{ steps.transport.outputs.transport }}
+          SKIP_SERVERS: ${{ steps.lag.outputs.skip_servers }}
         with:
-          context: ${{ github.workspace }}
-          platforms: ${{ matrix.platform }}
-          build-args: |
-            IMAGE_VERSION=${{ needs.plan.outputs.version }}
-            SOURCE_COMMIT=${{ github.sha }}
-            BUILD_DATE=${{ needs.plan.outputs.build_date }}
-            BASE_IMAGE=${{ steps.base.outputs.base_image }}
-            TRANSPORT=${{ steps.transport.outputs.transport }}
-            SKIP_SERVERS=${{ steps.lag.outputs.skip_servers }}
-          outputs: type=image,name=${{ needs.plan.outputs.target_image }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.arch }},ignore-error=true
-          provenance: mode=max
-          sbom: true
+          script: await exec.exec('scripts/build-port', ['push'])
 
       # The databases that the build used, from the bootstrap stage in the
       # builder. The build args are those of the step above, so the stage is
       # the same one.
       - name: Export the databases that the build used
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        id: snapshot
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          DB_SNAPSHOT: ${{ runner.temp }}/dbsnapshot
+          BASE_IMAGE: ${{ steps.push.outputs.base_image }}
+          IMAGE_VERSION: ${{ needs.plan.outputs.version }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          BUILD_DATE: ${{ needs.plan.outputs.build_date }}
+          TRANSPORT: ${{ steps.transport.outputs.transport }}
+          SKIP_SERVERS: ${{ steps.lag.outputs.skip_servers }}
         with:
-          context: ${{ github.workspace }}
-          platforms: ${{ matrix.platform }}
-          target: dbsnapshot
-          build-args: |
-            IMAGE_VERSION=${{ needs.plan.outputs.version }}
-            SOURCE_COMMIT=${{ github.sha }}
-            BUILD_DATE=${{ needs.plan.outputs.build_date }}
-            BASE_IMAGE=${{ steps.base.outputs.base_image }}
-            TRANSPORT=${{ steps.transport.outputs.transport }}
-            SKIP_SERVERS=${{ steps.lag.outputs.skip_servers }}
-          outputs: type=local,dest=${{ runner.temp }}/dbsnapshot
-          cache-from: type=gha,scope=${{ matrix.arch }}
+          script: await exec.exec('scripts/build-port', ['snapshot'])
 
       # --platform: the pushed index has an attestation manifest next to the
       # image, so a pull with no platform picks the platform of the runner.
@@ -345,7 +336,7 @@ jobs:
           ANCHOR: ${{ steps.anchor.outputs.anchor }}
           TRANSPORT: ${{ steps.transport.outputs.transport }}
           SKIP_SERVERS: ${{ steps.lag.outputs.skip_servers }}
-          BASE_IMAGE: ${{ steps.base.outputs.base_image }}
+          BASE_IMAGE: ${{ steps.push.outputs.base_image }}
           MIRRORLIST: ${{ steps.mirrors.outputs.mirrorlist }}
           BUILT_AT: ${{ needs.plan.outputs.build_date }}
         run: |

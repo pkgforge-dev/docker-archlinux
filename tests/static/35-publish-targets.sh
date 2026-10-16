@@ -128,14 +128,29 @@ check "the anchor floor takes its allow list from the dispatch input" "true" \
   "$(q '[.jobs.build.steps[] | select((.run // "") | test("check-anchor-floor")) | .env.ALLOW_ANCHOR_DOWNGRADE | test("inputs\\.allow_anchor_downgrade")] | all')"
 check "⛔ the evidence must have the resolved anchor" "true" \
   "$(q '[.jobs.build.steps[] | select((.run // "") | test("gen-evidence")) | .env.EXPECT_ANCHOR == "${{ steps.anchor.outputs.anchor }}"] | all')"
+# The builder and the two builds run scripts/build-port. tests/static/
+# 36-build-port.sh checks its build args, its cache, its second try, and the
+# variables that each of these steps gives it. The builds start from
+# actions/github-script: the gha cache needs a token that a run: step does
+# not get.
+check "the step buildkit makes the builder, then the step push builds, then the step snapshot exports" \
+  "true builder push snapshot" \
+  "$(q '.jobs.build.steps as $s
+    | ([range(0; $s | length) | select($s[.].id == "buildkit")] | first) as $i
+    | ([range(0; $s | length) | select($s[.].id == "push")] | first) as $j
+    | ([range(0; $s | length) | select($s[.].id == "snapshot")] | first) as $k
+    | "\($i != null and $j != null and $k != null and $i < $j and $j < $k) \([$s[$i], $s[$j], $s[$k]]
+        | map((.run // .with.script // "") | capture("scripts/build-port[^a-z]*(?<m>[a-z]+)").m) | join(" "))"')"
+check "the builds start from actions/github-script, and no step of the leg pulls through a Docker action" \
+  "true 0" \
+  "$(q '"\([.jobs.build.steps[] | select(.id == "push" or .id == "snapshot") | .uses // "" | startswith("actions/github-script@")] | all) \([.jobs.build.steps[] | select((.uses // "") | test("^docker/(setup-buildx|build-push)-action@"))] | length)"')"
 check "both builds get the same build args" "1" \
-  "$(q '[.jobs.build.steps[] | select((.uses // "") | startswith("docker/build-push-action@")) | .with["build-args"]] | unique | length')"
-check "the build args are those of the Dockerfile contract" "BASE_IMAGE BUILD_DATE IMAGE_VERSION SKIP_SERVERS SOURCE_COMMIT TRANSPORT" \
-  "$(q '[.jobs.build.steps[] | select((.uses // "") | startswith("docker/build-push-action@")) | .with["build-args"] | split("\n")[] | select(length > 0) | split("=")[0]] | unique | join(" ")')"
-check "the build cache ignores a cache service error" "true" \
-  "$(q '[.jobs.build.steps[] | select(.with["cache-to"] != null) | .with["cache-to"] | test("type=gha") and test("ignore-error=true")] | all')"
-# The buildkit image: pinned in the step buildkit, picked there from the
-# registries that serve the digest, and given to Buildx from that step.
+  "$(q '[.jobs.build.steps[] | select(.id == "push" or .id == "snapshot") | .env | del(.BASE_IMAGE, .TARGET_IMAGE, .DB_SNAPSHOT)] | unique | length')"
+check "⭐ the export and the digest record name the base image that the push used" \
+  '${{ steps.push.outputs.base_image }} ${{ steps.push.outputs.base_image }}' \
+  "$(q '"\([.jobs.build.steps[] | select(.id == "snapshot") | .env.BASE_IMAGE] | first) \([.jobs.build.steps[] | select((.run // "") | test("digest-\\$ARCH")) | .env.BASE_IMAGE] | first)"')"
+# The buildkit image: pinned in the step buildkit, where scripts/build-port
+# picks a registry that serves the digest.
 bk_pin="$(q '[.jobs.build.steps[] | select(.id == "buildkit") | .env.BUILDKIT_IMAGE // ""] | first // ""')"
 if [[ "$bk_pin" =~ ^docker\.io/([a-z0-9._/-]+):[A-Za-z0-9._-]+@(sha256:[0-9a-f]{64})$ ]]; then
   ok "the buildkit image is pinned by digest"
@@ -147,12 +162,6 @@ else
   bk_repo=""
   bk_digest=""
 fi
-check "Buildx runs the buildkit image that the step buildkit picked, after that step" \
-  'true image=${{ steps.buildkit.outputs.ref }}' \
-  "$(q '.jobs.build.steps as $s
-    | ([range(0; $s | length) | select($s[.].id == "buildkit")] | first) as $i
-    | ([range(0; $s | length) | select(($s[.].uses // "") | startswith("docker/setup-buildx-action@"))] | first) as $j
-    | "\($i != null and $j != null and $i < $j and ($s[$i].run | test("scripts/pick-base-image --image"))) \($s[$j].with["driver-opts"])"')"
 if [ -n "$bk_repo" ]; then
   mkdir -p "$work/bk"
   printf 'docker.io\t%s\t%s\t503\t\nmirror.gcr.io\t%s\t%s\t200\t%s\n' \

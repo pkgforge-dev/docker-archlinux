@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+#
+# A stand-in for docker, for the test of scripts/build-port. It pulls and
+# builds nothing, and makes no network request.
+#
+#   PATH=<dir with this file as docker>:$PATH FAKE_DOCKER_LOG=FILE scripts/build-port ...
+#
+# Each call adds one line to FAKE_DOCKER_LOG: its arguments, split by one tab.
+#
+# The image of a call is the argument of "pull", or the BASE_IMAGE build arg
+# of "buildx build". Its registry is the part before the first "/".
+#   FAKE_DOCKER_LIMITED   registries, space separated, whose pull limit is
+#                         used up. A pull of their images fails as Docker Hub
+#                         answers it: the daemon says toomanyrequests, and a
+#                         build gives the 429 line of BuildKit.
+#   FAKE_DOCKER_FAIL      a line that each build prints before it fails, for
+#                         a failure that is not a used-up pull limit of its
+#                         base image.
+#   FAKE_DOCKER_DIGEST    the containerimage.digest that a build with
+#                         --metadata-file writes.
+# Every other call passes.
+set -euo pipefail
+
+log="${FAKE_DOCKER_LOG:?FAKE_DOCKER_LOG is not set}"
+(
+  IFS=$'\t'
+  printf '%s\n' "$*"
+) >> "$log"
+
+# limited IMAGE: 0 when the registry of IMAGE has no pulls left.
+limited() {
+  case " ${FAKE_DOCKER_LIMITED:-} " in
+    *" ${1%%/*} "*) return 0 ;;
+  esac
+  return 1
+}
+
+case "${1:-} ${2:-}" in
+  "pull "*)
+    if limited "$2"; then
+      echo "Error response from daemon: toomanyrequests: You have reached your unauthenticated pull rate limit. https://www.docker.com/increase-rate-limit" >&2
+      exit 1
+    fi
+    echo "Status: Downloaded newer image for $2"
+    ;;
+  "buildx build")
+    base=""
+    meta=""
+    prev=""
+    for a in "$@"; do
+      case "$prev" in
+        --build-arg)
+          case "$a" in
+            BASE_IMAGE=*) base="${a#BASE_IMAGE=}" ;;
+          esac
+          ;;
+        --metadata-file) meta="$a" ;;
+      esac
+      prev="$a"
+    done
+    echo "#1 [internal] load build definition from Dockerfile"
+    if [ -n "$base" ] && limited "$base"; then
+      host="${base%%/*}"
+      [ "$host" != docker.io ] || host=registry-1.docker.io
+      path="${base#*/}"
+      path="${path%%@*}"
+      path="${path%:*}"
+      echo "ERROR: failed to solve: failed to resolve source metadata for $base: unexpected status from HEAD request to https://$host/v2/$path/manifests/${base##*@}: 429 Too Many Requests" >&2
+      exit 1
+    fi
+    if [ -n "${FAKE_DOCKER_FAIL:-}" ]; then
+      echo "$FAKE_DOCKER_FAIL" >&2
+      exit 1
+    fi
+    if [ -n "$meta" ]; then
+      printf '{"containerimage.digest": "%s"}\n' "${FAKE_DOCKER_DIGEST:?FAKE_DOCKER_DIGEST is not set}" > "$meta"
+    fi
+    echo "#9 DONE 0.1s"
+    ;;
+  *) ;;
+esac

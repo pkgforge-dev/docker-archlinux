@@ -21,7 +21,8 @@ Output is TAP. Each file is one plan. A failed assertion prints what was measure
 | `tests/static/20-no-swallowed-errors.sh` | no `continue-on-error`, `\|\| true`, `set +e` or output sent to `/dev/null` in the workflows, the Dockerfile, `scripts/`, `bootstrap/any/usr/local/bin`, `rootfs/any/usr/local/lib/docker-archlinux` and `tests/`, except the lines of `tests/policy/swallowed-errors.allow`; a dead exception fails |
 | `tests/static/25-pipeline-traps.sh` | no pipefail script and no workflow `run:` block pipes into `head`, `grep -q`, `grep -m` or an `awk` that exits, or counts with `grep -c` |
 | `tests/static/30-signature-checking-on.sh` | each shipped `pacman.conf` has `SigLevel = Required ...`, and no SigLevel is `Never` |
-| `tests/static/35-publish-targets.sh` | `build-deploy.yml` read with yq: job ids, needs, permissions, concurrency, the leg name `Build <arch>`, no secret in a leg; the buildkit pin and its fallback to `mirror.gcr.io`; a publish on a stand-down, the hub gate, and the output `published` that the report reads; the watch step on each exit status of `watch-schedules`; a dry run end to end with fixtures writes only to the scratch images |
+| `tests/static/35-publish-targets.sh` | `build-deploy.yml` read with yq: job ids, needs, permissions, concurrency, the leg name `Build <arch>`, no secret in a leg; the buildkit pin and its fallback to `mirror.gcr.io`; the steps buildkit, push and snapshot run `scripts/build-port` in that order, the builds from `actions/github-script` with the same build args; the export and the digest record take the base image of the push; a publish on a stand-down, the hub gate, and the output `published` that the report reads; the watch step on each exit status of `watch-schedules`; a dry run end to end with fixtures writes only to the scratch images |
+| `tests/static/36-build-port.sh` | `scripts/build-port` against a stand-in docker: on a used-up pull limit, push, snapshot and builder run once more with the same digest from the next registry; no second try for another failure, for a 429 line of another repository, or after a second pull limit; the build args are the ARGs of the Dockerfile; the push by digest, the attestations and the gha cache; the export to `DB_SNAPSHOT`; each step of `build-deploy.yml` that runs the script gives it every variable of its mode |
 | `tests/static/41-mirrorlists-start-with-anchors.sh` | each mirror list starts with its anchors file in order. It has at least 2 servers and one over https, no `oci://` server, and a header date that parses. Each `mirrorlist*` file is included by a `pacman.conf`. Each pool line is valid |
 | `tests/static/42-pick-transport.sh` | `scripts/pick-transport` gives `worker` when the Worker answers, `oci` when only the registry answers, `worker` when neither does |
 | `tests/static/43-use-transport.sh` | `use-transport` changes the build stage only: `worker` changes nothing, `oci` adds one XferCommand and puts the `oci://` server first in each list, a second run changes nothing; no shipped file has an XferCommand or an `oci://` server |
@@ -38,7 +39,7 @@ Output is TAP. Each file is one plan. A failed assertion prints what was measure
 | `tests/static/61-vercmp.sh` | `scripts/vercmp` against the vectors of pacman's `vercmptest.sh` and more, both ways; `check-anchor-floor` with a tag list fixture: the floor, the allow list, the revert rule, and an anchor that no tag can carry |
 | `tests/static/62-publish-ghcr.sh` | `scripts/publish-ghcr --fixtures`: fresh, carried and absent sources; the platform check, the pinned tags, and the tag check before any write; the read back and the output `published`; a run with no fresh port; `scripts/report-build --dry-plan` |
 | `tests/static/63-sync-hub.sh` | `scripts/sync-hub --fixtures` copies each missing pinned tag and each moved rolling tag, and stops on a tag list that cannot be read |
-| `tests/static/64-plan-build.sh` | `scripts/plan-build` decides the ports and the targets; `scripts/binfmt-register` has the qemu magic and mask of each qemu emulator, and names the files to edit for an emulator it does not have; `scripts/pick-base-image` takes the first registry that serves the digest, with `--image` too, and passes over a registry with `ratelimit-remaining: 0`; `reg_head_limit` of `scripts/lib.sh` against a stand-in curl |
+| `tests/static/64-plan-build.sh` | `scripts/plan-build` decides the ports and the targets; `scripts/binfmt-register` has the qemu magic and mask of each qemu emulator, and names the files to edit for an emulator it does not have; `scripts/pick-base-image` takes the first registry that serves the digest, with `--image` too, and passes over a registry with `ratelimit-remaining: 0`; with `--after`, it asks only the registries after the one of a value; `reg_head_limit` of `scripts/lib.sh` against a stand-in curl |
 | `tests/static/65-fetch-policy.sh` | each curl call has `--connect-timeout`, and `--max-time` or `--speed-time`; each keyserver call has a timeout |
 | `tests/static/66-mirror-lag.sh` | `check-mirror-lag` drops a first server that is behind the next one, for each list of a port. A copy of the first server is not the reference. The Dockerfile applies the drops to the build stage only |
 | `tests/static/67-mangled-responses.sh` | `resolve-anchor` names a mirror that answers with the wrong thing, goes to the next one, and reads a Zstandard database of a repository named `base` |
@@ -408,7 +409,7 @@ The tree itself is never changed. Each row gives the fault, then the `not ok` li
 | network 40 | each archlinuxarm.pin mirror dead | ...a mirror line serves the pinned package |
 | network 40 | each ranked riscv64 server dead | rootfs/riscv64/etc/pacman.d/mirrorlist: at least half of the ranked servers answer 200 |
 
-### Build and publish (35, 60 to 64, 68, 69, 75)
+### Build and publish (35, 36, 60 to 64, 68, 69, 75)
 
 | test | fault | not ok |
 | --- | --- | --- |
@@ -433,9 +434,24 @@ The tree itself is never changed. Each row gives the fault, then the `not ok` li
 | 35 | `$GHCR_IMAGE` in a run | no job reads GHCR_IMAGE or HUB_IMAGE itself |
 | 35 | each of the 8 scripts renamed | a build leg runs scripts/X (8 lines) |
 | 35 | a fixed allow list | the anchor floor takes its allow list |
-| 35 | the export build arg dropped; an extra arg | both builds get the same build args; the build args are those of the Dockerfile contract |
-| 35 | ignore-error removed | the build cache ignores a cache service error |
-| 35 | the buildkit pin in `driver-opts`, and no step `buildkit` | the buildkit image is pinned by digest; Buildx runs the buildkit image that the step buildkit picked, after that step |
+| 35 | the export with `TRANSPORT: worker` | both builds get the same build args |
+| 35 | no `BUILDKIT_IMAGE` in the step buildkit | the buildkit image is pinned by digest |
+| 35 | the step buildkit runs the mode push | the step buildkit makes the builder, then the step push builds, then the step snapshot exports |
+| 35 | the export through `docker/build-push-action` | the builds start from actions/github-script, and no step of the leg pulls through a Docker action |
+| 35 | the export, or the digest record, with the base image of the pick | ⭐ the export and the digest record name the base image that the push used |
+| 35 | the leg before `scripts/build-port` | the step buildkit makes the builder...; the builds start from actions/github-script...; ⭐ the export and the digest record name the base image that the push used |
+| 36 | no `scripts/build-port` | scripts/build-port is executable |
+| 36 | no line counts as a pull limit | ⭐ push: when the docker.io pull limit runs out after the pick...; push: a second used-up pull limit stops the step...; ⭐ snapshot: when the docker.io pull limit runs out...; snapshot: the build exports the target dbsnapshot...; ⭐ builder: when the docker.io pull limit runs out after the pick... |
+| 36 | a 429 line counts with no name of the repository | push: a 429 line that does not name the base image is not its pull limit, so the build runs once |
+| 36 | a second try after any failure | push: a build that fails for another reason runs once, and the step fails with no digest; push: a 429 line that does not name the base image... |
+| 36 | `--after` dropped from the second pick | ⭐ push: ...; push: a second used-up pull limit...; push: with no registry after the one that met the pull limit...; ⭐ snapshot: ...; ⭐ builder: ...; builder: with no other registry that serves the digest... |
+| 36 | the output base_image is the first value | ⭐ push: when the docker.io pull limit runs out after the pick...; ⭐ snapshot: when the docker.io pull limit runs out... |
+| 36 | `ignore-error=true` removed | push: the gha cache of the port is read and written, and a cache service error does not stop the build |
+| 36 | `--builder default` | push: the build pushes by digest to TARGET_IMAGE, on the builder, for the platform of the port, from the tree |
+| 36 | the build arg SKIP_SERVERS dropped | push: the build args are the ARGs of the Dockerfile |
+| 36 | no variable check in push | push: a missing build variable stops the step before any docker call |
+| 36 | `--use` removed | builder: with pulls left, the builder runs the value of the pick, and is the current builder |
+| 36 | `TRANSPORT` or `BUILDKIT_IMAGE` removed from its step of `build-deploy.yml` | each step that runs scripts/build-port gives it every variable of its mode |
 | 35 | the matrix check back in the `if` of the publish | the publish runs on a stand-down too |
 | 35 | one run group for a dry run and a real run | a dry run has its own run group, so it never takes the place of a pending real run |
 | 35 | the hub `if` takes a skipped publish | the Docker Hub copy runs only when the plan says publish_hub, after a passed publish |
@@ -496,12 +512,15 @@ The tree itself is never changed. Each row gives the fault, then the `not ok` li
 | 64 | the port check off | ARCHES with a name that is not a port stops the plan |
 | 64 | `listed=1` | a tag list that cannot be read builds every port |
 | 64 | a version with no dots | the version is the UTC date of the plan |
+| 64 | `--after` keeps every registry, or no `--after` | --after the docker.io value: the same digest on mirror.gcr.io...; --after the mirror.gcr.io value: the same digest on ECR Public; --after the last registry: nothing is printed and the exit status is 1 |
+| 64 | `--after` takes any value | --after a value that is not a value of the image is refused |
 | 64 | pick-base-image does not read ratelimit-remaining | ⭐ when the Docker Hub pull limit is used up (ratelimit-remaining 0), BASE_IMAGE is the same digest on mirror.gcr.io |
 | 64 | reg_head_limit reads the header name in lower case only | reg_head_limit reads the headers in any case |
 | 64 | reg_head_limit keeps the window (`;w=`) of the count | reg_head_limit gives the digest and a remaining count of 0; reg_head_limit reads the headers in any case |
 | 64 | reg_head_limit prints an empty digest as nothing | reg_head_limit gives - for the digest of an answer that is not 200 |
 | 68 | `die_rc 1` | a DB_SNAPSHOT that is not a directory is refused with exit 3; the partial snapshot assertion |
 | 68 | another path | the export directory and DB_SNAPSHOT are the same path |
+| 68 | the leg before `scripts/build-port` | the build leg exports the dbsnapshot target to a local directory |
 | 68 | each snapshot refused | a snapshot with each enabled database passes |
 | 68 | the stage renamed | the Dockerfile has a dbsnapshot stage |
 | 68 | `--from=other` | the dbsnapshot stage takes its files from the bootstrap stage |
