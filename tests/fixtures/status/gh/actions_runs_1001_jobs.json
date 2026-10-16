@@ -1,0 +1,113 @@
+{
+ "total_count": 12,
+ "jobs": [
+  {
+   "id": 100101,
+   "name": "plan",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-15T05:30:10Z",
+   "completed_at": "2026-10-15T05:30:50Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1001/job/100101"
+  },
+  {
+   "id": 100110,
+   "name": "Build amd64",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-15T05:31:00Z",
+   "completed_at": "2026-10-15T05:46:00Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1001/job/100110"
+  },
+  {
+   "id": 100111,
+   "name": "Build arm64",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-15T05:31:05Z",
+   "completed_at": "2026-10-15T05:59:05Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1001/job/100111"
+  },
+  {
+   "id": 100112,
+   "name": "Build armv7",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-15T05:31:10Z",
+   "completed_at": "2026-10-15T06:07:10Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1001/job/100112"
+  },
+  {
+   "id": 100113,
+   "name": "Build loong64",
+   "status": "completed",
+   "conclusion": "skipped",
+   "started_at": "2026-10-15T05:31:15Z",
+   "completed_at": "2026-10-15T05:52:15Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1001/job/100113"
+  },
+  {
+   "id": 100114,
+   "name": "Build ppc",
+   "status": "completed",
+   "conclusion": "failure",
+   "started_at": "2026-10-15T05:31:20Z",
+   "completed_at": "2026-10-15T05:32:50Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1001/job/100114"
+  },
+  {
+   "id": 100115,
+   "name": "Build ppc64",
+   "status": "completed",
+   "conclusion": "cancelled",
+   "started_at": "2026-10-15T05:31:25Z",
+   "completed_at": "2026-10-15T06:18:25Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1001/job/100115"
+  },
+  {
+   "id": 100116,
+   "name": "Build ppc64le",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-15T05:31:30Z",
+   "completed_at": "2026-10-15T06:25:30Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1001/job/100116"
+  },
+  {
+   "id": 100117,
+   "name": "Build riscv64",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-15T05:31:35Z",
+   "completed_at": "2026-10-15T06:44:35Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1001/job/100117"
+  },
+  {
+   "id": 100190,
+   "name": "publish",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-15T06:41:00Z",
+   "completed_at": "2026-10-15T06:43:00Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1001/job/100190"
+  },
+  {
+   "id": 100191,
+   "name": "Build s390x",
+   "status": "completed",
+   "conclusion": "skipped",
+   "started_at": "2026-10-15T06:41:00Z",
+   "completed_at": "2026-10-15T06:41:00Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux"
+  },
+  {
+   "id": 100195,
+   "name": "Watch the schedules",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-15T05:30:10Z",
+   "completed_at": "2026-10-15T05:31:40Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1001/job/100195"
+  }
+ ]
+}

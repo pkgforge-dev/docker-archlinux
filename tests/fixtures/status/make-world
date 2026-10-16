@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+#
+# Write the fixture world of the status tests from world.json.
+#
+#   bash tests/fixtures/status/make-world OUT
+#
+# OUT/fx is the STATUS_FIXTURE_DIR of scripts/status-collect:
+#   registry/<registry>/<repo>/tags             the tag list
+#   registry/<registry>/<repo>/manifests/<ref>  a manifest; sha256-<hex> by digest
+#   registry/<registry>/<repo>/manifests/<ref>.code   the HTTP code instead
+#   registry/<registry>/<repo>/blobs/<hex>      a blob
+#   gh/*.json                                   the GitHub API answers
+#   artifacts/<run>/<name>/                     the files of an artifact
+#   mirror-status.json                          mirror-archlinux status.json
+# OUT/in is the OUT of the collect before it runs: history.jsonl and the
+# stored evidence.
+#
+# The ports come from the fixture ports (PORTS_DIR). Each manifest is written
+# with printf, so its bytes, and so its digest, do not depend on a jq version.
+#
+# Exit status: 0 written, 1 error.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../../.." && pwd)"
+out="${1:?usage: make-world OUT}"
+world="$here/world.json"
+export PORTS_DIR="$here/ports"
+
+fx="$out/fx"
+mkdir -p "$fx/gh" "$fx/artifacts" "$out/in/evidence"
+cp "$here"/gh/*.json "$fx/gh/"
+cp "$here/mirror-status.json" "$fx/mirror-status.json"
+cp "$here/history.jsonl" "$out/in/history.jsonl"
+
+w() { jq -r "$1" "$world" | tr -d '\r'; }
+hex() { printf '%s' "$1" | sha256sum | awk '{ print $1 }'; }
+hex_file() { sha256sum < "$1" | awk '{ print $1 }'; }
+
+read -r g_reg g_repo <<< "$(w '.ghcr | join(" ")')"
+read -r h_reg h_repo <<< "$(w '.hub | join(" ")')"
+g="$fx/registry/$g_reg/$g_repo"
+h="$fx/registry/$h_reg/$h_repo"
+mkdir -p "$g/manifests" "$g/blobs" "$h/manifests"
+: > "$g/tags"
+printf 'latest\n' >> "$g/tags"
+for d in $(w '.index_dates[]'); do
+  printf 'v%s\n' "$d" >> "$g/tags"
+done
+latest_entries=""
+declare -A artifacts
+
+# platform_json PLATFORM -> the platform object of an index entry
+platform_json() {
+  local os arch variant
+  IFS=/ read -r os arch variant <<< "$1"
+  if [ -n "$variant" ]; then
+    printf '{"architecture":"%s","os":"%s","variant":"%s"}' "$arch" "$os" "$variant"
+  else
+    printf '{"architecture":"%s","os":"%s"}' "$arch" "$os"
+  fi
+}
+
+# evidence ARCH PORT_INDEX DIGEST FILE
+evidence() {
+  local arch="$1" i="$2" digest="$3" f="$4"
+  jq -n --arg arch "$arch" --arg digest "$digest" --arg image "$g_reg/$g_repo@$digest" \
+    --arg platform "$("$root/scripts/ports" get "$arch" platform)" \
+    --arg pacman "$("$root/scripts/ports" get "$arch" pacman_arch)" \
+    --argjson p "$(jq -c --argjson i "$i" '.ports[$i]' "$world")" '
+    {image: $image, platform: $platform, digest: $digest, built: $p.created, source_commit: $p.revision,
+     version_id: $p.version, architecture: $pacman, docker_architecture: $arch,
+     anchor: {name: "pacman", version: ($p.packages[0][1])},
+     packages: [$p.packages[] | {name: .[0], version: .[1], size: .[2], installed_size: .[3],
+                                 sha256: ("0" * 64), released: "2026-10-01"}]}
+    | .package_count = (.packages | length)' > "$f"
+}
+
+n="$(w '.ports | length')"
+for ((i = 0; i < n; i++)); do
+  arch="$(w ".ports[$i].arch")"
+  p() { jq -r --argjson i "$i" ".ports[\$i]$1" "$world" | tr -d '\r'; }
+  platform="$("$root/scripts/ports" get "$arch" platform)"
+  mapfile -t aliases < <("$root/scripts/ports" aliases "$arch")
+  created="$(p .created)"
+
+  # The config blob and the image manifest
+  cfg="$g/blobs/cfg.tmp"
+  printf '{"architecture":"%s","os":"linux","created":"%s","config":{"Labels":{"org.opencontainers.image.created":"%s","org.opencontainers.image.version":"%s","org.opencontainers.image.revision":"%s"}}}' \
+    "${platform#linux/}" "$created" "$created" "$(p .version)" "$(p .revision)" > "$cfg"
+  cfg_hex="$(hex_file "$cfg")"
+  cfg_size="$(wc -c < "$cfg" | tr -d ' ')"
+  mv "$cfg" "$g/blobs/$cfg_hex"
+  layers=""
+  j=0
+  for size in $(p '.layers[]'); do
+    [ -z "$layers" ] || layers="$layers,"
+    layers="$layers$(printf '{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"sha256:%s","size":%s}' "$(hex "$arch-layer-$j")" "$size")"
+    j=$((j + 1))
+  done
+  img="$g/manifests/img.tmp"
+  printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:%s","size":%s},"layers":[%s]}' \
+    "$cfg_hex" "$cfg_size" "$layers" > "$img"
+  img_hex="$(hex_file "$img")"
+  img_size="$(wc -c < "$img" | tr -d ' ')"
+  mv "$img" "$g/manifests/sha256-$img_hex"
+  if [ "$(p '.image_code // empty')" != "" ]; then
+    mv "$g/manifests/sha256-$img_hex" "$g/manifests/sha256-$img_hex.bytes"
+    p '.image_code' > "$g/manifests/sha256-$img_hex.code"
+  fi
+
+  # The attestation manifest and the index the aliases name
+  att="$g/manifests/att.tmp"
+  printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:%s","size":2},"layers":[]}' \
+    "$(hex "$arch-attestation")" > "$att"
+  att_hex="$(hex_file "$att")"
+  att_size="$(wc -c < "$att" | tr -d ' ')"
+  mv "$att" "$g/manifests/sha256-$att_hex"
+  entry="$(printf '{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:%s","size":%s,"platform":%s}' \
+    "$img_hex" "$img_size" "$(platform_json "$platform")")"
+  att_entry="$(printf '{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:%s","size":%s,"annotations":{"vnd.docker.reference.digest":"sha256:%s","vnd.docker.reference.type":"attestation-manifest"},"platform":{"architecture":"unknown","os":"unknown"}}' \
+    "$att_hex" "$att_size" "$img_hex")"
+  top="$g/manifests/top.tmp"
+  if [ "$(p '.plain_manifest // false')" = true ]; then
+    cp "$g/manifests/sha256-$img_hex" "$top"
+  else
+    printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[%s,%s]}' "$entry" "$att_entry" > "$top"
+  fi
+  top_hex="$(hex_file "$top")"
+  published="sha256:$top_hex"
+  if [ "$(p '.not_in_latest // false')" != true ]; then
+    [ -z "$latest_entries" ] || latest_entries="$latest_entries,"
+    latest_entries="$latest_entries$entry,$att_entry"
+  fi
+
+  # Tags on GHCR, and on Docker Hub
+  differs=" $(p '.hub_differs // [] | join(" ")') "
+  matched=" $(p '.evidence.match // [] | map(tostring) | join(" ")') "
+  for a in "${aliases[@]}"; do
+    cp "$top" "$g/manifests/$a"
+    if [[ "$differs" == *" $a "* ]]; then
+      printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}' > "$h/manifests/$a"
+    else
+      cp "$top" "$h/manifests/$a"
+    fi
+    printf '%s\n' "$a" >> "$g/tags"
+    for d in $(p '.dates[]'); do
+      printf '%s-v%s\n' "$a" "$d" >> "$g/tags"
+    done
+    for an in $(p '.anchors[]'); do
+      printf '%s-%s\n' "$a" "$an" >> "$g/tags"
+    done
+  done
+  rm -f "$top"
+
+  # Evidence: stored on the branch, and in the artifacts of the runs
+  case "$(p '.evidence.stored // empty')" in
+    match)
+      evidence "$arch" "$i" "$published" "$out/in/evidence/$arch.json"
+      printf '%s\n' "$published" > "$out/in/evidence/$arch.digest"
+      ;;
+    old)
+      evidence "$arch" "$i" "sha256:$(hex "$arch-old")" "$out/in/evidence/$arch.json"
+      printf 'sha256:%s\n' "$(hex "$arch-old")" > "$out/in/evidence/$arch.digest"
+      ;;
+  esac
+  for run in $(p '.evidence.artifact // [] | .[]'); do
+    digest="sha256:$(hex "$arch-dry-$run")"
+    if [[ "$matched" == *" $run "* ]]; then
+      digest="$published"
+    fi
+    mkdir -p "$fx/artifacts/$run/evidence-$arch"
+    evidence "$arch" "$i" "$digest" "$fx/artifacts/$run/evidence-$arch/rootfs-$arch.json"
+    artifacts[$run]="${artifacts[$run]:-} $arch:false"
+  done
+  for run in $(p '.evidence.expired // [] | .[]'); do
+    artifacts[$run]="${artifacts[$run]:-} $arch:true"
+  done
+done
+
+# The index latest, the same on both registries
+printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[%s]}' "$latest_entries" > "$g/manifests/latest"
+cp "$g/manifests/latest" "$h/manifests/latest"
+
+# Docker Hub lacks the tags hub_missing names
+jq -r '[.ports[].hub_missing // [] | .[]] | .[]' "$world" | tr -d '\r' > "$out/hub-missing"
+awk 'FILENAME == ARGV[1] { gone[$0] = 1; next } !($0 in gone)' "$out/hub-missing" "$g/tags" > "$h/tags"
+rm -f "$out/hub-missing"
+
+# The artifact list of each run: evidence-<arch>, expired or not
+for run in "${!artifacts[@]}"; do
+  for e in ${artifacts[$run]}; do
+    printf '{"name":"evidence-%s","expired":%s}\n' "${e%%:*}" "${e#*:}"
+  done | jq -s '{total_count: length, artifacts: .}' > "$fx/gh/actions_runs_${run}_artifacts.json"
+done

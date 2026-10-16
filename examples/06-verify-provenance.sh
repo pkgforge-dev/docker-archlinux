@@ -1,35 +1,37 @@
 #!/usr/bin/env bash
 #
-# Verify what built an image.
+# Read what built an image.
 #
-# Every build attaches a provenance attestation and an SBOM to the pushed
-# manifest. They are stored as extra manifests in the index, which is why
-# `imagetools inspect --raw` on an index shows entries whose platform is
+# Each build attaches a provenance attestation and an SBOM to the pushed
+# image. They are more manifests in the index, with the platform
 # unknown/unknown.
+#
+# Run this on the host.
 set -euo pipefail
 
 IMAGE="${IMAGE:-ghcr.io/pkgforge-dev/archlinux:latest}"
 
-# The index, including the attestation manifests.
+# The index, with the attestation manifests.
 docker buildx imagetools inspect "$IMAGE" --raw
 
-# Just the platforms, with the attestation entries filtered out.
-docker buildx imagetools inspect "$IMAGE" --raw \
-  | jq -r '.manifests[].platform
-           | select(.os != "unknown")
-           | .os + "/" + .architecture + (if .variant then "/" + .variant else "" end)'
+# The platforms only, with the attestation entries left out.
+docker buildx imagetools inspect "$IMAGE" --raw |
+  jq -r '.manifests[].platform
+         | select(.os != "unknown")
+         | .os + "/" + .architecture + (if .variant then "/" + .variant else "" end)'
 
-# The provenance for one platform: which repository, which commit, which
-# workflow, and which builder.
+# The provenance of each platform: the repository, the commit, the workflow
+# and the builder.
 docker buildx imagetools inspect "$IMAGE" --format '{{ json .Provenance }}' | jq .
 
-# The source commit, cross-checked against the label the image carries.
-docker buildx imagetools inspect "$IMAGE" --format '{{ json .Provenance }}' \
-  | jq -r '.. | .["https://github.com/Attestations/GitHubHostedRunner@v1"]? // empty'
+# The SBOM: the number of packages that the build recorded. For an index of
+# more than one platform, such as latest, .SBOM is a map keyed by platform.
+# For one platform it is the SBOM itself.
+docker buildx imagetools inspect "$IMAGE" --format '{{ json .SBOM }}' |
+  jq -r 'if has("SPDX") then "\(.SPDX.packages | length)"
+         else to_entries[] | "\(.key) \(.value.SPDX.packages | length)" end'
+
+# The labels need no attestation support. The revision is the source commit.
+docker pull "$IMAGE"
 docker image inspect "$IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'
-
-# The SBOM, listing what the build recorded as present.
-docker buildx imagetools inspect "$IMAGE" --format '{{ json .SBOM }}' | jq -r '.SPDX.packages | length'
-
-# The labels are the quickest cross-check and need no attestation support.
 docker image inspect "$IMAGE" --format '{{ json .Config.Labels }}' | jq .

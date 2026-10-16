@@ -1,0 +1,2242 @@
+#!/bin/sh
+#
+# pacman-oci: let pacman read a repository that is stored on an OCI registry.
+#
+#   /etc/pacman.conf
+#     XferCommand = /usr/local/bin/pacman-oci %o %u
+#     [core]
+#     Server = oci://ghcr.io/pkgforge-dev/mirror-archlinux/$arch/$repo
+#     Include = /etc/pacman.d/mirrorlist
+#
+# pacman runs the XferCommand for every file it downloads, from every Server in
+# turn, and moves to the next Server when the command exits non-zero. An
+# oci:// Server is read from the registry; any other URL is handed to curl, so
+# the ordinary mirrors after it keep working as the fallback.
+#
+#   pacman-oci OUTPUT URL       the XferCommand form
+#   pacman-oci --tag FILENAME   the tag a package file is stored under
+#   pacman-oci --tags           the same for filenames on stdin, FILENAME<TAB>TAG out
+#   pacman-oci --json FILE      the JSON parser alone, POINTER<TAB>VALUE out
+#   pacman-oci --version
+#
+# URL forms:
+#   oci://HOST/REPOSITORY/FILE            the database from tag latest
+#   oci://HOST/REPOSITORY:TAG/FILE        the database from a tag, e.g. :2026.10.13
+#   oci://HOST/REPOSITORY@sha256:HEX/FILE the database from one manifest: the only pin
+#   oci+http://HOST/...                   plain http, for a local test registry only
+# A package file (*.pkg.tar, *.pkg.tar.*) and its .sig are always found by the
+# package's own tag, whichever database the URL names. A database signature is
+# found by the content of the database pacman took just before it.
+#
+# ⭐ Everything this reads is checked before pacman sees it: a manifest asked
+# for by digest must hash to that digest, a blob's size and sha256 must equal
+# its descriptor or the database's %SHA256SUM%, and pacman then checks the
+# database's sha256 and the package signature as it does for any mirror.
+#
+# Prefetch. With an XferCommand, pacman asks for one file at a time. So the
+# first package request of a sync run asks pacman itself for the whole list, in
+# print mode (pacman -S --print takes no lock and needs no root), and fetches it
+# in parallel. The first database request does the same for the database of
+# every repository whose first Server is oci://. Each file is checked, then kept
+# under a name of its own beside OUTPUT, and the requests that follow are one
+# rename each, with no network. A package signature comes from the database's
+# %PGPSIG% when it has one: pacman checks the package against that signature.
+# Anything the prefetch did not make ready is fetched alone, as before.
+#
+# Run store. The parent's pid and start time name the pacman run. Its files sit
+# flat in OUTPUT's directory as .pacman-oci.<pid>-<start>.<name>. pacman
+# removes them with its download-XXXXXX directory, a background process removes
+# them when pacman exits, and each call removes those of runs that are gone. A
+# run is gone when its pid is gone and its ,open has had no heartbeat for 2
+# minutes. A call whose parent is not pacman keeps no store.
+#
+# pacman runs this with fork and execvp, never through a shell. With
+# DownloadUser set (stock Arch) it runs as that user, from a download-XXXXXX
+# directory inside the sync or cache directory; without it, as root.
+#
+# Needs curl, awk, sed, grep, sha256sum, mktemp, base64, ls, and find with
+# -mmin (coreutils, findutils or busybox).
+# Uses pacman, pacman-conf and timeout when they are there.
+#
+# Environment:
+#   PACMAN_OCI_DEBUG=1       print every request and decision to stderr
+#   PACMAN_OCI_PREFETCH=0    no prefetch: every file is one request
+#   PACMAN_OCI_JOBS=N        transfers at the same time in a prefetch, default
+#                            32, at most 64; 1 means no prefetch
+#   PACMAN_OCI_SIG=registry  a prefetch reads each package signature from the
+#                            registry's layer, never from %PGPSIG% (default auto)
+#   PACMAN_OCI_NO_DUMMY=1    skip the dummy token GHCR accepts for public
+#                            packages and use the registry's token flow; it
+#                            exists so that flow runs on schedule
+#   PACMAN_OCI_EMPTY_SIG=0   no empty answer for an absent database signature
+#                            under the sandbox of pacman 7.0 and 7.1
+#   PACMAN_OCI_TEST_PROC=DIR for the test suite only: read the parent process
+#                            from DIR, not /proc. Used only when DIR holds a
+#                            file named pacman-oci-test-proc.
+#   TMPDIR                   where the private work directory goes
+#
+# Exit status: 0 the file is at OUTPUT, 1 not here (pacman tries the next
+# Server), 2 usage, 3 the --json input is not JSON.
+
+LC_ALL=C
+export LC_ALL
+
+PACMAN_OCI_VERSION=2
+
+# A tab and a newline, written out: a command substitution costs a fork.
+TAB='	'
+NL='
+'
+
+usage() {
+  printf 'pacman-oci: %s\n' "$1" >&2
+  printf 'usage: pacman-oci OUTPUT URL | --tag FILENAME | --tags | --json FILE | --version\n' >&2
+  exit 2
+}
+
+debug() {
+  if [ "${PACMAN_OCI_DEBUG:-0}" = 1 ]; then
+    printf 'pacman-oci: %s\n' "$1" >&2
+  fi
+}
+
+#---------------------------------------------------------------------------#
+# The run store
+#
+# The key is the parent's pid and its start time, field 22 of /proc/PID/stat
+# counted after the last ")", so a pid the kernel reuses is another run. An
+# entry is used only when it is a regular file this user owns, never through a
+# symbolic link, and each is made under a mktemp name, then renamed.
+#   FILE           a file ready for pacman, its size and sha256 checked
+#   ,open          the store of this run is open in this directory; the
+#                  background remover touches it once a second
+#   ,prefetch      the package prefetch of this run ran here
+#   ,dbprefetch    the database prefetch of this run ran here
+#   ,down.HOST     HOST failed once its retries were spent
+#   ,absent.FILE   the database manifest of this run has no layer FILE
+#   ,index         FILE<TAB>SHA256<TAB>SIZE of each package the prefetch planned
+#   ,token.HOST.HEX  the anonymous pull token of the repository whose name
+#                  has sha256 HEX, once HOST refused the dummy token (mode 0600)
+#   ,pacver        the version of the parent pacman, asked once per run
+#   ,reaper        the background remover's output
+#   tmp.*          files being written
+#---------------------------------------------------------------------------#
+PROC=/proc
+if [ -n "${PACMAN_OCI_TEST_PROC:-}" ] && [ -f "$PACMAN_OCI_TEST_PROC/pacman-oci-test-proc" ]; then
+  PROC=$PACMAN_OCI_TEST_PROC
+fi
+
+# start_of PID: the start time of PID into $_st, empty when PID is gone
+start_of() {
+  _st=''
+  [ -r "$PROC/$1/stat" ] || return 0
+  IFS= read -r _line < "$PROC/$1/stat" || return 0
+  case $_line in
+    *') '*) ;;
+    *) return 0 ;;
+  esac
+  set -f
+  # shellcheck disable=SC2086 # the fields after the last ")" are words
+  set -- ${_line##*) }
+  set +f
+  [ "$#" -ge 20 ] || return 0
+  shift 19
+  case $1 in
+    '' | *[!0-9]*) ;;
+    *) _st=$1 ;;
+  esac
+}
+
+# run_key: the key of the pacman run that called this, into $key; empty when
+# the parent is not pacman
+run_key() {
+  key=''
+  if [ -r "$PROC/$PPID/comm" ] && IFS= read -r _comm < "$PROC/$PPID/comm"; then
+    case $_comm in
+      pacman*)
+        start_of "$PPID"
+        if [ -n "$_st" ]; then
+          key=$PPID-$_st
+        fi
+        ;;
+    esac
+  fi
+}
+
+# owned FILE: a regular file of this user, not a symbolic link
+owned() {
+  # shellcheck disable=SC3067 # test -O is in bash, dash and busybox
+  [ -f "$1" ] && [ ! -L "$1" ] && [ -O "$1" ]
+}
+
+# serve_ready OUTPUT URL: the fast path, before the rest of this file is even
+# read. A package, its .sig, or an oci:// database the prefetch of this run
+# made ready is renamed to OUTPUT, and the call ends.
+serve_ready() {
+  _f=${2##*/}
+  case $_f in
+    '' | ,* | *[!!-~]*) return 0 ;;
+    *.pkg.tar | *.pkg.tar.*) ;;
+    *)
+      case $2 in
+        oci://* | oci+http://*) ;;
+        *) return 0 ;;
+      esac
+      ;;
+  esac
+  case $1 in
+    */*) _d=${1%/*} ;;
+    *) _d=. ;;
+  esac
+  run_key
+  [ -n "$key" ] || return 0
+  _e=${_d:-/}/.pacman-oci.$key.$_f
+  if owned "$_e" && mv -f -- "$_e" "$1"; then
+    debug "$_f from the prefetch"
+    exit 0
+  fi
+}
+
+if [ "$#" -eq 2 ]; then
+  case $1 in
+    -* | '') ;;
+    *) serve_ready "$1" "$2" ;;
+  esac
+fi
+
+#---------------------------------------------------------------------------#
+# Tags
+#
+# A package filename uses [a-z0-9@._+:-] and, rarely, upper case. A tag allows
+# [A-Za-z0-9._-], at most 128, not starting with . or -, and GHCR resolves tags
+# without regard to case (measured: latest, LATEST and Latest name one
+# manifest), so every tag here is lower case. The mapping escapes with _ and is
+# injective: + is _p, : is _c, @ is _a, and a literal _ becomes _u only when the
+# character after it is one of p c a u, so x86_64 stays x86_64. A name with
+# upper case, or one the mapping cannot carry, is stored under fn- and the hex
+# sha256 of the name: lower case, no dot, and clear of the sha256-<hex> tags the
+# OCI referrers scheme uses.
+#---------------------------------------------------------------------------#
+hash_tag() {
+  printf 'fn-%s\n' "$(printf '%s' "$1" | sha256sum | cut -d ' ' -f 1)"
+}
+
+# Filenames on stdin, one per line; "FILENAME<TAB>TAG" on stdout. This is the
+# only implementation of the mapping: --tag and --tags both come through here.
+tags_of() {
+  sed -e 'h' \
+    -e 's/_\([pcau]\)/_u\1/g' -e 's/+/_p/g' -e 's/:/_c/g' -e 's/@/_a/g' \
+    -e 'x' -e 'G' -e "s/\\n/$TAB/" |
+    awk -F '\t' '
+      $1 == "" || $1 ~ /[^a-z0-9@._+:-]/ || $2 !~ /^[a-z0-9_][a-z0-9._-]*$/ || length($2) > 128 {
+        print $1 "\t-"; next
+      }
+      { print }
+    ' |
+    while IFS="$TAB" read -r _name _tag; do
+      if [ "$_tag" = - ]; then
+        _tag=$(hash_tag "$_name")
+      fi
+      printf '%s\t%s\n' "$_name" "$_tag"
+    done
+}
+
+oci_tag() {
+  printf '%s\n' "$1" | tags_of | cut -f 2
+}
+
+#---------------------------------------------------------------------------#
+# JSON
+#
+# A small, strict parser in POSIX awk. Each scalar becomes one line:
+#   POINTER<TAB>VALUE
+# with an RFC 6901 pointer (/layers/0/digest). Key order and whitespace do not
+# matter. A string holding a control character, raw or escaped, is refused:
+# nothing this reads has one, and a value that could carry a tab or a newline
+# could forge a line of the output. \uXXXX above U+001F is kept as written.
+# Anything that is not JSON is refused, never guessed at.
+#---------------------------------------------------------------------------#
+# shellcheck disable=SC2016 # an awk program: awk expands it, the shell must not
+JSON_AWK='
+function fail(m) { printf "pacman-oci: not JSON: %s at byte %d\n", m, pos > "/dev/stderr"; bad = 1; exit 3 }
+function ws(  c) {
+  while (pos <= n) {
+    c = substr(s, pos, 1)
+    if (c == " " || c == "\t" || c == "\n" || c == "\r") pos++
+    else break
+  }
+}
+function key(k) { gsub(/~/, "~0", k); gsub(/\//, "~1", k); return k }
+function str(  out, c, h) {
+  pos++
+  out = ""
+  while (pos <= n) {
+    c = substr(s, pos, 1)
+    if (c == "\"") { pos++; return out }
+    if (c == "\\") {
+      c = substr(s, pos + 1, 1)
+      if (c == "\"" || c == "\\" || c == "/") { out = out c; pos += 2; continue }
+      if (c == "u") {
+        h = substr(s, pos + 2, 4)
+        if (h !~ /^[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]$/) fail("bad \\u escape")
+        if (h ~ /^00[01]/) fail("a control character in a string")
+        out = out "\\u" h
+        pos += 6
+        continue
+      }
+      if (c == "b" || c == "f" || c == "n" || c == "r" || c == "t") fail("a control character in a string")
+      fail("bad escape")
+    }
+    if (c < " ") fail("a control character in a string")
+    out = out c
+    pos++
+  }
+  fail("unterminated string")
+}
+function value(ptr, depth,  c, k, i) {
+  if (depth > 32) fail("nested too deep")
+  ws()
+  if (pos > n) fail("value expected")
+  c = substr(s, pos, 1)
+  if (c == "{") {
+    pos++
+    ws()
+    if (substr(s, pos, 1) == "}") { pos++; return }
+    for (;;) {
+      ws()
+      if (substr(s, pos, 1) != "\"") fail("key expected")
+      k = str()
+      ws()
+      if (substr(s, pos, 1) != ":") fail(": expected")
+      pos++
+      value(ptr "/" key(k), depth + 1)
+      ws()
+      c = substr(s, pos, 1)
+      if (c == ",") { pos++; continue }
+      if (c == "}") { pos++; return }
+      fail(", or } expected")
+    }
+  }
+  if (c == "[") {
+    pos++
+    ws()
+    if (substr(s, pos, 1) == "]") { pos++; return }
+    for (i = 0; ; i++) {
+      value(ptr "/" i, depth + 1)
+      ws()
+      c = substr(s, pos, 1)
+      if (c == ",") { pos++; continue }
+      if (c == "]") { pos++; return }
+      fail(", or ] expected")
+    }
+  }
+  if (c == "\"") { printf "%s\t%s\n", ptr, str(); return }
+  if (match(substr(s, pos), /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?/) || match(substr(s, pos), /^(true|false|null)/)) {
+    printf "%s\t%s\n", ptr, substr(s, pos, RLENGTH)
+    pos += RLENGTH
+    return
+  }
+  fail("value expected")
+}
+{ s = s $0 "\n" }
+END {
+  if (bad) exit 3
+  n = length(s)
+  pos = 1
+  value("", 0)
+  ws()
+  if (pos <= n) fail("trailing data")
+}
+'
+
+json_flat() {
+  awk "$JSON_AWK" "$1"
+}
+
+# The value at one pointer, from a flattened file. Empty when absent. Values
+# reach awk through the environment, which awk reads as they are; -v would
+# interpret backslashes in them.
+flat_get() {
+  P="$2" awk -F '\t' '$1 == ENVIRON["P"] { print $2; exit }' "$1"
+}
+
+# layers_of FLAT NAME: the layers titled NAME and NAME.sig, on one line:
+#   COUNT DIGEST SIZE SIGCOUNT SIGDIGEST SIGSIZE MEDIATYPE
+# A digest that is not sha256 hex, or a size that is not a number, is "-".
+# shellcheck disable=SC2016 # an awk program: awk expands it, the shell must not
+LAYERS_AWK='
+function d(x) { return (x ~ /^sha256:[0-9a-f]+$/ && length(x) == 71) ? x : "-" }
+function z(x) { return (x ~ /^(0|[1-9][0-9]*)$/ && length(x) <= 15) ? x : "-" }
+BEGIN { FS = "\t"; n = ENVIRON["N"]; sn = n ".sig" }
+$1 == "/mediaType" { media = $2 }
+$1 ~ /^\/layers\/[0-9]+\/annotations\/org\.opencontainers\.image\.title$/ {
+  split($1, p, "/")
+  if ($2 == n) { fc++; fi = p[3] }
+  if ($2 == sn) { sc++; si = p[3] }
+}
+$1 ~ /^\/layers\/[0-9]+\/(digest|size)$/ { split($1, p, "/"); v[p[3] "/" p[4]] = $2 }
+END {
+  printf "%d %s %s %d %s %s %s\n", fc, d(v[fi "/digest"]), z(v[fi "/size"]), sc, d(v[si "/digest"]), z(v[si "/size"]), (media == "" ? "-" : media)
+}
+'
+
+layers_of() {
+  N="$2" awk "$LAYERS_AWK" "$1"
+}
+
+#---------------------------------------------------------------------------#
+# Arguments
+#---------------------------------------------------------------------------#
+case ${1:-} in
+  --version)
+    printf 'pacman-oci %s\n' "$PACMAN_OCI_VERSION"
+    exit 0
+    ;;
+  --tag)
+    [ "$#" -eq 2 ] || usage '--tag takes one filename'
+    case $2 in
+      *'
+'*) usage '--tag takes one filename' ;;
+    esac
+    oci_tag "$2"
+    exit 0
+    ;;
+  --tags)
+    [ "$#" -eq 1 ] || usage '--tags reads filenames on stdin'
+    tags_of
+    exit 0
+    ;;
+  --json)
+    # The parser on its own, for the test suite.
+    [ "$#" -eq 2 ] || usage '--json takes one file'
+    json_flat "$2"
+    exit $?
+    ;;
+esac
+
+[ "$#" -eq 2 ] || usage 'two arguments expected'
+out=$1
+url=$2
+[ -n "$out" ] || usage 'OUTPUT is empty'
+file=${url##*/}
+
+# pacman writes OUTPUT in its sync or cache dir, or, with DownloadUser set, in
+# a download-XXXXXX dir inside it. Either way the files it finished earlier in
+# this run sit beside OUTPUT, and the ones it held before sit one level up.
+case $out in
+  */*) out_dir=${out%/*} ;;
+  *) out_dir=. ;;
+esac
+[ -n "$out_dir" ] || out_dir=/
+held_dir=$out_dir
+case ${out_dir##*/} in
+  download-*)
+    case $out_dir in
+      */*) held_dir=${out_dir%/*} ;;
+      *) held_dir=. ;;
+    esac
+    [ -n "$held_dir" ] || held_dir=/
+    ;;
+esac
+
+# What the file is.
+#   pkg     a package: its own tag, a layer named FILE
+#   pkgsig  its signature: the package's tag, a layer named FILE, never optional
+#   dbsig   a database signature: the manifest of the database pacman just took,
+#           found by that database's content (tag db-HEX or files-HEX)
+#   db      a database: the tag, digest or latest from the URL
+case $file in
+  *.pkg.tar.sig | *.pkg.tar.*.sig) kind=pkgsig ;;
+  *.pkg.tar | *.pkg.tar.*) kind=pkg ;;
+  *.db.sig | *.files.sig) kind=dbsig ;;
+  *) kind=db ;;
+esac
+case $url in
+  oci://* | oci+http://*) ours=1 ;;
+  *) ours=0 ;;
+esac
+
+# Every failure path removes OUTPUT as well as the working directory: pacman
+# never deletes a .part after a failed attempt.
+work=""
+# shellcheck disable=SC2329 # run by the EXIT trap
+cleanup() {
+  if [ -n "$work" ]; then
+    rm -rf -- "$work"
+  fi
+}
+trap cleanup EXIT
+trap 'cleanup; rm -f -- "$out"; exit 1' HUP INT TERM
+
+# A failure pacman recovers from by trying the next Server. Quiet unless asked,
+# because a database signature the upstream never published is ordinary.
+miss() {
+  debug "$1"
+  rm -f -- "$out"
+  exit 1
+}
+
+# A failure a person should see: the registry answered something it should not.
+broken() {
+  printf 'pacman-oci: %s\n' "$1" >&2
+  rm -f -- "$out"
+  exit 1
+}
+
+if [ -t 2 ]; then
+  PROGRESS=--progress-bar
+else
+  PROGRESS=--silent
+fi
+
+# A manifest or token request retries curl's transient set (timeouts, 408,
+# 429, 500, 502, 503, 504), honouring Retry-After, starting no new try after
+# 30 seconds: pacman downloads one file at a time, so a longer window would
+# stall a whole upgrade during an outage. A manifest or a token is a few KiB,
+# so each try of one gets 15 seconds and a 64 KiB cap: the parser below is
+# plain awk, and a body far larger than any real manifest must fail fast, not
+# keep pacman waiting. A file download retries in fetch_one.
+RETRY='--retry 2 --retry-max-time 30'
+
+# With DownloadUser set, this runs as that user with root's environment, so a
+# TMPDIR only root can write is possible; the directory pacman writes OUTPUT to
+# is always writable by whoever runs this.
+need_work() {
+  [ -z "$work" ] || return 0
+  _base=${TMPDIR:-/tmp}
+  if [ ! -d "$_base" ] || [ ! -w "$_base" ]; then
+    _base=$out_dir
+  fi
+  work=$(mktemp -d "$_base/pacman-oci.XXXXXX") || broken "could not make a temporary directory in $_base"
+}
+
+sha256_of() {
+  _sum=$(sha256sum < "$1") || return 1
+  printf '%s\n' "${_sum%% *}"
+}
+
+size_of() {
+  _n=$(wc -c < "$1") || return 1
+  printf '%s\n' $((_n))
+}
+
+# meta_size FILE: the size of FILE from its metadata into $_ms, as pacman's
+# own stat() reads it. Unlike size_of, it needs no read permission. Under
+# DownloadUser, a .part that root left with mode 0600 still has a size here.
+meta_size() {
+  _ms=''
+  _ls=$(ls -ln -- "$1") || return 1
+  set -f
+  # shellcheck disable=SC2086 # the fields of ls -l are words
+  set -- $_ls
+  set +f
+  case ${5:-} in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  _ms=$5
+}
+
+# A clock in nanoseconds. busybox date has no %N, so there it counts seconds.
+now_ns() {
+  _ns=$(date +%s%N)
+  case $_ns in
+    *[!0-9]* | '') _ns=$(date +%s)000000000 ;;
+  esac
+  if [ "${#_ns}" -lt 16 ]; then
+    _ns=${_ns}000000000
+  fi
+  printf '%s\n' "$_ns"
+}
+
+# proto_for BASE: the protocols curl may use for BASE and its redirects, in $_p
+proto_for() {
+  case $1 in
+    https://*) _p='=https' ;;
+    *) _p='=http,https' ;;
+  esac
+}
+
+#---------------------------------------------------------------------------#
+# The run store, beyond the fast path
+#---------------------------------------------------------------------------#
+run_key
+store=$out_dir/.pacman-oci.$key.
+
+# entry_ok NAME: the entry exists, is a regular file, and is ours
+entry_ok() {
+  [ -n "$key" ] && owned "$store$1"
+}
+
+# put NAME [FROM]: make the entry NAME, empty or holding the file FROM, which
+# must be a mktemp file in the same directory
+put() {
+  if [ -n "${2:-}" ]; then
+    mv -f -- "$2" "$store$1"
+    return
+  fi
+  _t=$(mktemp "${store}tmp.XXXXXX") || return 1
+  mv -f -- "$_t" "$store$1"
+}
+
+# beating KEY: run KEY touched its ,open in this directory in the last 2
+# minutes. Its remover touches that entry once a second while the run is live.
+beating() {
+  _o=$out_dir/.pacman-oci.$1.,open
+  owned "$_o" || return 1
+  case $_o in
+    /*) ;;
+    *) _o=./$_o ;;
+  esac
+  _m=$(find "$_o" -prune -mmin -2) || return 1
+  [ -n "$_m" ]
+}
+
+# Remove the entries of runs that are gone. A run is gone when its pid is
+# missing or has another start time, and its ,open here has no heartbeat. A
+# run in another pid namespace has a pid that this /proc cannot show. Its
+# heartbeat keeps its entries. Once this run's store is open in this
+# directory, that was done, and the call goes straight on.
+sweep() {
+  [ -d "$PROC" ] || return 0
+  if entry_ok ,open; then
+    return 0
+  fi
+  set --
+  # The entries of one key are next to each other, so each key is decided once.
+  _seen=''
+  _keep=1
+  for _e in "$out_dir"/.pacman-oci.*; do
+    owned "$_e" || continue
+    _k=${_e##*/.pacman-oci.}
+    _k=${_k%%.*}
+    [ "$_k" != "$key" ] || continue
+    if [ "$_k" != "$_seen" ]; then
+      _seen=$_k
+      _keep=1
+      _pid=${_k%%-*}
+      _start=${_k#*-}
+      case $_pid:$_start in
+        *[!0-9:]* | :* | *:) continue ;;
+      esac
+      start_of "$_pid"
+      if [ "$_st" != "$_start" ] && ! beating "$_k"; then
+        _keep=0
+      fi
+    fi
+    if [ "$_keep" = 0 ]; then
+      set -- "$@" "$_e"
+    fi
+  done
+  if [ "$#" -gt 0 ]; then
+    debug "removing $# file(s) of pacman runs that are gone"
+    rm -f -- "$@"
+  fi
+}
+
+# reap PID START PREFIX: wait for the pacman run to end, then remove its
+# entries in one directory. While the run is live, it touches PREFIX,open
+# once a second: that is the heartbeat sweep reads. pacman waits for its
+# child alone, never for this.
+# shellcheck disable=SC2329 # run in the background by store_open
+reap() {
+  trap '' HUP INT
+  while start_of "$1" && [ "$_st" = "$2" ]; do
+    if owned "$3,open"; then
+      : > "$3,open"
+    fi
+    sleep 1
+  done
+  rm -f -- "$3"*
+}
+
+store_open() {
+  [ -n "$key" ] || return 1
+  if entry_ok ,open; then
+    return 0
+  fi
+  put ,reaper || return 1
+  put ,open || return 1
+  (cd / && reap "${key%%-*}" "${key#*-}" "$store") < /dev/null >> "${store},reaper" 2>&1 &
+  return 0
+}
+
+# sig_absent MESSAGE: a database signature that the registry does not hold.
+# pacman sleeps 2 s after every download that fails, also for an optional
+# signature, so each repository costs 2 s on every -Sy. Under the sandbox
+# (OUTPUT in a download-XXXXXX directory), pacman 7.0 and 7.1 unlink a
+# zero-byte file there and then read the signature as missing (libalpm
+# dload.c finalize_download_file): an empty OUTPUT and exit 0 cost no pause.
+# With no sandbox the empty file would stay as the signature, so this is a
+# miss there, and for every pacman version not known to work this way.
+# PACMAN_OCI_EMPTY_SIG=0 turns it off.
+sig_absent() {
+  if [ "${PACMAN_OCI_EMPTY_SIG:-1}" != 0 ] && [ "$kind" = dbsig ] && sandboxed && pacman_unlinks_empty; then
+    if : > "$out"; then
+      debug "$1; OUTPUT is empty, and pacman removes it"
+      exit 0
+    fi
+  fi
+  miss "$1"
+}
+
+sandboxed() {
+  case ${out_dir##*/} in
+    download-?*) return 0 ;;
+  esac
+  return 1
+}
+
+# pacman_unlinks_empty: the parent pacman is a version whose sandbox removes a
+# zero-byte download. Asked once per run; the answer is kept in the store.
+pacman_unlinks_empty() {
+  [ -n "$key" ] || return 1
+  if entry_ok ,pacver; then
+    IFS= read -r _pv < "$store,pacver" || _pv=''
+  else
+    _pv=''
+    argv_scan || debug "pacman's arguments: $scan_why"
+    if find_exe; then
+      need_work
+      _rc=0
+      "$exe" --version > "$work/pacver" 2>&1 || _rc=$?
+      if [ "$_rc" = 0 ]; then
+        _pv=$(sed -n 's/.*Pacman v\([0-9][0-9.]*\).*/\1/p' "$work/pacver")
+      fi
+    fi
+    _t=$(mktemp "${store}tmp.XXXXXX") && printf '%s\n' "${_pv:-unknown}" > "$_t" && put ,pacver "$_t"
+  fi
+  case $_pv in
+    7.0 | 7.0.* | 7.1 | 7.1.*) return 0 ;;
+  esac
+  debug "pacman ${_pv:-of unknown version}: a missing database signature is a miss"
+  return 1
+}
+
+# serve NAME: a ready entry becomes OUTPUT, and the call ends
+serve() {
+  entry_ok "$1" || return 1
+  if mv -f -- "$store$1" "$out"; then
+    debug "$file from the prefetch"
+    exit 0
+  fi
+  return 1
+}
+
+# host_of URL: the host[:port] of URL into $_host, empty when it has none
+host_of() {
+  _host=${1#*://}
+  if [ "$_host" = "$1" ]; then
+    _host=''
+    return
+  fi
+  _host=${_host%%/*}
+  _host=${_host##*@}
+  case $_host in
+    *[!A-Za-z0-9.:-]*) _host='' ;;
+  esac
+}
+
+# mark_down HOST HTTP: later requests of this run to HOST miss at once. Only no
+# answer at all, 429 and 5xx count. A signature request never marks a host:
+# pacman ignores a failed optional signature, then asks the same host for the
+# next file. A failed required signature stops the transaction anyway. pacman's
+# own downloader also never counts an optional request against a server
+# (libalpm dload.c, request_errors_ok).
+mark_down() {
+  case $kind in
+    pkgsig | dbsig) return 0 ;;
+  esac
+  [ -n "$1" ] || return 0
+  case $2 in
+    000 | 429 | 5??) ;;
+    *) return 0 ;;
+  esac
+  if store_open && put ",down.$1"; then
+    debug "$1 is down for the rest of this run (HTTP $2)"
+  fi
+}
+
+#---------------------------------------------------------------------------#
+# pacman's own arguments, for a print run
+#
+# They come from /proc/PPID/cmdline. Anything this cannot read with certainty
+# means no prefetch: a newline in an argument, an option it does not know
+# (getopt also takes abbreviations), a relative path, or a target read from
+# stdin. The rewrite drops every refresh (--refresh, and each y of a short
+# group before its first b or r), --confirm, --noconfirm and --print-format,
+# and keeps everything after -- as it is.
+#
+# Input: one argument per line, a newline inside one turned into \001.
+# Output: NAME<TAB>VALUE lines (why, sync, print, sysroot, arch, config,
+# argv0); the rewritten arguments, one per line, go to the file ENVIRON["ARGS"].
+#---------------------------------------------------------------------------#
+# shellcheck disable=SC2016 # an awk program: awk expands it, the shell must not
+ARGV_AWK='
+BEGIN {
+  args = ENVIRON["ARGS"]
+  printf "" > args
+  split("database files query remove sync deptest upgrade version help cascade changelog clean nodeps deps explicit groups info check list foreign native nosave owns file print quiet recursive search regex machinereadable unrequired upgrades sysupgrade unneeded verbose downloadonly refresh noconfirm confirm force noprogressbar noscriptlet asdeps needed asexplicit dbonly disable-download-timeout disable-sandbox disable-sandbox-filesystem disable-sandbox-syscalls", a, " ")
+  for (i in a) noarg[a[i]] = 1
+  split("dbpath root sysroot config ignore assume-installed overwrite ask cachedir hookdir logfile ignoregroup arch print-format gpgdir color", a, " ")
+  for (i in a) reqarg[a[i]] = 1
+  split("dbpath root sysroot config cachedir hookdir logfile gpgdir", a, " ")
+  for (i in a) ispath[a[i]] = 1
+  shorts = "DFQRSTUVcdefghiklmnopqstuvwxy"
+  config = "/etc/pacman.conf"
+}
+function refuse(why) { if (why_ == "") why_ = why }
+function emit(s) { print s > args }
+function value(name, v) {
+  if ((name in ispath) && substr(v, 1, 1) != "/") refuse("--" name " is a relative path")
+  if (name == "config") config = v
+  if (name == "sysroot") sysroot = 1
+  if (name == "arch") arch = 1
+}
+function long(s,   eq, name) {
+  eq = index(s, "=")
+  name = eq ? substr(s, 1, eq - 1) : s
+  if (name == "debug") { emit("--" s); return }
+  if (name in noarg) {
+    if (eq) { refuse("--" name " takes no value"); return }
+    if (name == "refresh" || name == "confirm" || name == "noconfirm") return
+    if (name == "print") print_ = 1
+    if (name == "sync") sync = 1
+    emit("--" s)
+    return
+  }
+  if (name in reqarg) {
+    if (eq) {
+      value(name, substr(s, eq + 1))
+      if (name != "print-format") emit("--" s)
+      return
+    }
+    pending = name
+    drop = (name == "print-format")
+    if (!drop) emit("--" s)
+    return
+  }
+  refuse("pacman option --" name " is not known here")
+}
+function short(s,   i, c, o, n) {
+  o = "-"
+  n = length(s)
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (c == "b" || c == "r") {
+      emit(o substr(s, i))
+      if (i == n) { pending = (c == "b") ? "dbpath" : "root"; drop = 0 }
+      else value((c == "b") ? "dbpath" : "root", substr(s, i + 1))
+      return
+    }
+    if (index(shorts, c) == 0) { refuse("pacman option -" c " is not known here"); return }
+    if (c == "y") continue
+    if (c == "S") sync = 1
+    if (c == "p") print_ = 1
+    o = o c
+  }
+  if (o != "-") emit(o)
+}
+NR == 1 { argv0 = $0; next }
+index($0, "\001") { refuse("an argument holds a newline"); next }
+pending != "" { value(pending, $0); if (!drop) emit($0); pending = ""; next }
+dashdash { if ($0 == "-") refuse("a target is read from stdin"); emit($0); next }
+$0 == "--" { dashdash = 1; emit($0); next }
+/^--/ { long(substr($0, 3)); next }
+/^-./ { short(substr($0, 2)); next }
+$0 == "-" { refuse("a target is read from stdin"); next }
+{ emit($0) }
+END {
+  if (NR == 0) refuse("the argument list is empty")
+  if (pending != "") refuse("--" pending " has no value")
+  if (index(argv0, "\001")) refuse("an argument holds a newline")
+  printf "why\t%s\nsync\t%d\nprint\t%d\nsysroot\t%d\narch\t%d\nconfig\t%s\nargv0\t%s\n", why_, sync, print_, sysroot, arch, config, argv0
+}
+'
+
+# argv_scan: read and rewrite pacman's arguments, once per call. Sets scan_why
+# (empty when they are usable), scan_sync, scan_print, scan_sysroot, scan_arch,
+# scan_config and scan_argv0, and writes $work/args.
+argv_scan() {
+  if [ -n "${scan_done:-}" ]; then
+    [ -z "$scan_why" ]
+    return
+  fi
+  scan_done=1
+  scan_why="the argument list of pacman ($PROC/$PPID/cmdline) could not be read"
+  scan_sync=0 scan_print=0 scan_sysroot=0 scan_arch=0 scan_config='' scan_argv0=''
+  need_work
+  [ -r "$PROC/$PPID/cmdline" ] || return 1
+  tr '\000\n' '\n\001' < "$PROC/$PPID/cmdline" > "$work/cmdline" || return 1
+  ARGS="$work/args" awk "$ARGV_AWK" "$work/cmdline" > "$work/scan" || return 1
+  while IFS= read -r _l; do
+    _v=${_l#*"$TAB"}
+    case $_l in
+      "why$TAB"*) scan_why=$_v ;;
+      "sync$TAB"*) scan_sync=$_v ;;
+      "print$TAB"*) scan_print=$_v ;;
+      "sysroot$TAB"*) scan_sysroot=$_v ;;
+      "arch$TAB"*) scan_arch=$_v ;;
+      "config$TAB"*) scan_config=$_v ;;
+      "argv0$TAB"*) scan_argv0=$_v ;;
+    esac
+  done < "$work/scan"
+  [ -z "$scan_why" ]
+}
+
+# find_exe: the pacman binary into $exe. /proc/PPID/exe is unreadable for the
+# download user (measured), so argv[0] is the fallback: absolute, or on PATH.
+find_exe() {
+  exe=''
+  if [ -r "$PROC/$PPID/exe" ]; then
+    exe=$(readlink "$PROC/$PPID/exe") || exe=''
+  fi
+  if [ -z "$exe" ]; then
+    case $scan_argv0 in
+      /*) exe=$scan_argv0 ;;
+      */* | '') ;;
+      *) exe=$(command -v "$scan_argv0") || exe='' ;;
+    esac
+  fi
+  case $exe in
+    /*) [ -x "$exe" ] ;;
+    *) return 1 ;;
+  esac
+}
+
+#---------------------------------------------------------------------------#
+# Tokens
+#
+# A public GHCR repository accepts the dummy token Bearer QQ==, which saves a
+# token request on every file. When the registry refuses it (401 or 403), the
+# WWW-Authenticate header names a realm, and the realm gives an anonymous pull token
+# for one repository. That token is kept in the run store as
+# ,token.HOST.SHA256-OF-REPOSITORY, mode 0600, and goes with the store. Every
+# later request of the run for that repository sends it first: the prefetch,
+# and each call of the serial path.
+#---------------------------------------------------------------------------#
+AUTH='Bearer QQ=='
+if [ "${PACMAN_OCI_NO_DUMMY:-0}" = 1 ]; then
+  AUTH=''
+fi
+
+# token_name HOST REPO: the name of the store entry for the token of REPO on
+# HOST, into $_tn
+token_name() {
+  _tn=$(printf '%s' "$2" | sha256sum) || return 1
+  _tn=,token.$1.${_tn%% *}
+}
+
+# token_read HOST REPO: the run's token for REPO on HOST into $_tok; 1 when
+# the run has none
+token_read() {
+  _tok=''
+  [ -n "$key" ] || return 1
+  token_name "$1" "$2" || return 1
+  entry_ok "$_tn" || return 1
+  IFS= read -r _tok < "$store$_tn" || _tok=''
+  [ -n "$_tok" ]
+}
+
+# token_keep HOST REPO TOKEN: keep TOKEN in the run store. mktemp makes the
+# file with mode 0600.
+token_keep() {
+  _af_base=''
+  [ -n "$key" ] || return 0
+  token_name "$1" "$2" || return 0
+  if store_open && _tt=$(mktemp "${store}tmp.XXXXXX") && printf '%s\n' "$3" > "$_tt" && put "$_tn" "$_tt"; then
+    debug "the anonymous token of $1/$2 is kept for this run"
+  else
+    debug "could not keep the anonymous token of $1/$2"
+  fi
+}
+
+# say_refused HOST: one line on stderr, once per call, when the registry
+# refuses the dummy token. With PACMAN_OCI_NO_DUMMY=1 no dummy is sent.
+say_refused() {
+  [ "$AUTH" = 'Bearer QQ==' ] || return 0
+  [ -z "${said_refused:-}" ] || return 0
+  said_refused=1
+  printf 'pacman-oci: %s refused the dummy token Bearer QQ==; the anonymous token flow is used\n' "$1" >&2
+}
+
+# token_from HDR REPO PROTO SCHEME: the anonymous pull token of REPO into
+# $_token, from the WWW-Authenticate header in the headers file HDR. The scope is
+# always REPO's pull scope. An http realm is accepted only for an http
+# registry. The token must be a plain token: it goes into a curl config.
+token_from() {
+  _token=''
+  _www=$(tr -d '\r' < "$1" | sed -n 's/^[Ww][Ww][Ww]-[Aa][Uu][Tt][Hh][Ee][Nn][Tt][Ii][Cc][Aa][Tt][Ee]: *[Bb]earer //p' | sed -n '$p')
+  [ -n "$_www" ] || return 1
+  _realm=$(printf '%s\n' "$_www" | sed -n 's/.*realm="\([^"]*\)".*/\1/p')
+  _service=$(printf '%s\n' "$_www" | sed -n 's/.*service="\([^"]*\)".*/\1/p')
+  case $_realm in
+    https://*) ;;
+    http://*) [ "$4" = http ] || return 1 ;;
+    *) return 1 ;;
+  esac
+  need_work
+  _trc=0
+  # shellcheck disable=SC2086 # RETRY is several words on purpose
+  curl -q --silent --show-error --fail --proto "$3" --max-filesize 65536 \
+    --connect-timeout 10 --max-time 15 $RETRY \
+    --user-agent "pacman-oci/$PACMAN_OCI_VERSION" \
+    --get --data-urlencode "service=$_service" --data-urlencode "scope=repository:$2:pull" \
+    --output "$work/token.json" --url "$_realm" || _trc=$?
+  debug "token: GET $_realm service=$_service scope=repository:$2:pull (curl $_trc)"
+  [ "$_trc" -eq 0 ] || return 1
+  json_flat "$work/token.json" > "$work/token.flat" || return 1
+  _token=$(flat_get "$work/token.flat" /token)
+  [ -n "$_token" ] || _token=$(flat_get "$work/token.flat" /access_token)
+  case $_token in
+    '' | *[!A-Za-z0-9._~+/=-]*)
+      _token=''
+      return 1
+      ;;
+  esac
+}
+
+# auth_for BASE: the Authorization value for a request to BASE
+# (scheme://host/v2/repo) into $_auth: the run's token for that repository,
+# else $AUTH. The last answer is kept, since blobs come mostly in runs of one
+# repository; token_keep forgets it.
+auth_for() {
+  if [ -n "${_af_base:-}" ] && [ "$1" = "$_af_base" ]; then
+    _auth=$_af_auth
+    return 0
+  fi
+  _af_host=${1#*://}
+  _af_repo=${_af_host#*/v2/}
+  _af_host=${_af_host%%/*}
+  _auth=$AUTH
+  if token_read "$_af_host" "$_af_repo"; then
+    _auth="Bearer $_tok"
+  fi
+  _af_base=$1
+  _af_auth=$_auth
+}
+
+# anon_token BASE URL HDR CODE: make sure the run keeps a token for BASE's
+# repository, after URL was refused with CODE. HDR holds the headers of that
+# answer, or is empty. With no such header there, one request with no
+# authorization to URL reads it. Each repository is tried once per call.
+anon_token() {
+  case " ${_anon_ok:-} " in
+    *" $1 "*) return 0 ;;
+  esac
+  case " ${_anon_tried:-} " in
+    *" $1 "*) return 1 ;;
+  esac
+  _anon_tried="${_anon_tried:-} $1"
+  _at_host=${1#*://}
+  _at_repo=${_at_host#*/v2/}
+  _at_host=${_at_host%%/*}
+  if ! token_read "$_at_host" "$_at_repo"; then
+    say_refused "$_at_host"
+  fi
+  proto_for "$1"
+  _at_hdr=$3
+  if [ -z "$_at_hdr" ] || ! grep -qi '^www-authenticate: *bearer ' "$_at_hdr"; then
+    need_work
+    _at_hdr=$work/anon.hdr
+    _arc=0
+    curl -q --silent --show-error --proto "$_p" --max-filesize 65536 \
+      --connect-timeout 10 --max-time 15 --user-agent "pacman-oci/$PACMAN_OCI_VERSION" \
+      --dump-header "$_at_hdr" --output "$work/anon.body" --url "$2" || _arc=$?
+    debug "token: GET $2 with no authorization, for the WWW-Authenticate header (curl $_arc, after HTTP $4)"
+  fi
+  if ! token_from "$_at_hdr" "$_at_repo" "$_p" "${1%%://*}"; then
+    debug "no anonymous token for $_at_host/$_at_repo"
+    return 1
+  fi
+  token_keep "$_at_host" "$_at_repo" "$_token"
+  _anon_ok="${_anon_ok:-} $1"
+}
+
+#---------------------------------------------------------------------------#
+# Parallel transfers
+#
+# One curl process runs a whole list with --parallel, from a generated config
+# with one block per transfer. Each block carries its own deadlines and limits,
+# and writes one line when it ends: EXIT<TAB>HTTP<TAB>BYTES<TAB>OUTPUT.
+#---------------------------------------------------------------------------#
+WRITE_OUT='%{exitcode}\t%{http_code}\t%{size_download}\t%{filename_effective}\n'
+
+# 32 transfers at a time: curl multiplexes them over one HTTP/2 connection per
+# host. Measured with 40 small packages from Nepal, median of 8 runs through
+# pacman: 3.8 s with 8, 7.8 s with 16, 3.0 s with 24, 2.7 s with 32.
+jobs=${PACMAN_OCI_JOBS:-32}
+case $jobs in
+  '' | *[!0-9]*) jobs=1 ;;
+esac
+if [ "$jobs" -gt 64 ]; then
+  jobs=64
+fi
+sigmode=auto
+if [ "${PACMAN_OCI_SIG:-auto}" = registry ]; then
+  sigmode=registry
+fi
+
+prefetch_allowed() {
+  [ -n "$key" ] || return 1
+  [ "${PACMAN_OCI_PREFETCH:-1}" != 0 ] || return 1
+  [ "$jobs" -gt 1 ] || return 1
+  # The directory goes into curl's config as it is, so it may hold nothing
+  # that needs quoting there.
+  case $out_dir in
+    *\"* | *\\* | *"$TAB"* | *"$NL"*) return 1 ;;
+  esac
+  return 0
+}
+
+# A connection to GHCR's blob host can stall: it goes on, at a few KB/s, for
+# minutes, while a new connection is fast. Measured from a WSL2 VM in Nepal:
+# 150 small blobs on one HTTP/2 connection that stalled took 425 and 440 s,
+# and 4 to 6 s on a new connection right after; one 208 MB blob ran at
+# 330 KB/s for 625 s; in about 1 of 4 runs of 40 small blobs, the connection
+# sent at a few KB/s for 10 s or more, where a normal run takes 1 to 2 s. So
+# each transfer gets a short time limit, and a transfer it cuts keeps its
+# bytes and goes on in the next attempt, on a new connection. That costs
+# about one round trip.
+
+# deadline SIZE ATTEMPT: the time limit of one attempt of the single-file
+# path, into $_dl. Attempt 1 allows 3 s plus 1 MiB/s, attempt 2 30 s plus
+# 128 KiB/s, attempt 3 no limit.
+deadline() {
+  case $2 in
+    1) _dl=$((3 + $1 / 1048576)) ;;
+    2) _dl=$((30 + $1 / 131072)) ;;
+    *) _dl='' ;;
+  esac
+}
+
+# slice SIZE PASS: the time limit of one transfer in one pass of a prefetch,
+# into $_dl: 3 s for each pass so far plus 1 MiB/s, at most 30 s. A file that
+# needs longer goes on in the next pass, so a slow connection costs at most
+# 30 s, not the time of the whole file. Measured with 40 small packages: a
+# limit of 3 s, not 10 s, took a run with a stall from 11 to 17 s down to 6.5
+# to 9 s. With one limit of 3 s plus 1 MiB/s for the whole file, 3 large
+# packages (540 MB) took 238 s in one run, where the official mirror took 40 s.
+slice() {
+  _dl=$((3 * $2 + $1 / 1048576))
+  if [ "$_dl" -gt 30 ]; then
+    _dl=30
+  fi
+}
+
+# block URL OUTPUT SIZE AUTH(0|1) RESUME(0|1) PROTO DEADLINE: one transfer,
+# added to the config file $cfg
+block() {
+  if [ -s "$cfg" ]; then
+    printf 'next\n' >> "$cfg"
+  fi
+  _max=$3
+  if [ "$_max" -eq 0 ]; then
+    _max=1
+  fi
+  _auth=''
+  if [ "$4" = 1 ]; then
+    auth_for "${1%/blobs/*}"
+  fi
+  {
+    printf 'url = "%s"\noutput = "%s"\n' "$1" "$2"
+    if [ -n "$_auth" ]; then
+      printf 'header = "Authorization: %s"\n' "$_auth"
+    fi
+    if [ "$5" = 1 ]; then
+      printf 'continue-at = "-"\n'
+    fi
+    if [ -n "$7" ]; then
+      printf 'max-time = %s\n' "$7"
+    fi
+    printf 'max-filesize = %s\nconnect-timeout = 10\nspeed-limit = 1024\nspeed-time = 60\n' "$_max"
+    printf 'location\nmax-redirs = 5\nfail\nproto = "%s"\nproto-redir = "%s"\n' "$6" "$6"
+    printf 'user-agent = "pacman-oci/%s"\nwrite-out = "%s"\n' "$PACMAN_OCI_VERSION" "$WRITE_OUT"
+  } >> "$cfg"
+}
+
+#---------------------------------------------------------------------------#
+# Blobs
+#
+# A blob item is a set of variables named by its number N: u_N the URL, h_N the
+# sha256, s_N the size, r_N the entry it becomes, a_N 1 to send the token, p_N
+# curl's protocols, c_N 1 to resume, z_N 1 once it started again from zero.
+# It downloads to $tmpbase.N. Each pass is one curl process, so each pass has
+# new connections. A transfer that ends with bytes on disk goes on in the next
+# pass with --continue-at -; one that met 408, 429, 5xx or a broken connection
+# with no bytes starts again; a resumed file with a wrong sha256 starts again
+# from zero, once. A file whose size and sha256 check out becomes its entry.
+# The passes go on while they move data: a pass after the first that makes no
+# file ready and moves less than 30 KiB, 1 KiB/s for its 30 s, is the last.
+#---------------------------------------------------------------------------#
+blobs=''
+blob_count=0
+got_files=0
+got_bytes=0
+
+# add_blob URL SHA256 SIZE ENTRY AUTH PROTO
+add_blob() {
+  blob_count=$((blob_count + 1))
+  eval "u_$blob_count=\$1 h_$blob_count=\$2 s_$blob_count=\$3 r_$blob_count=\$4 a_$blob_count=\$5 p_$blob_count=\$6 c_$blob_count=0"
+  blobs="$blobs $blob_count"
+}
+
+# check_file FILE SIZE SHA256
+check_file() {
+  [ "$(size_of "$1")" = "$2" ] && [ "$(sha256_of "$1")" = "$3" ]
+}
+
+# again ID RESUME(0|1): item ID goes into the next pass
+again() {
+  eval "c_$1=\$2"
+  _next="$_next $1"
+}
+
+# ended EXIT HTTP ID: one transfer of a pass has ended. A whole file waits in
+# $_whole for check_whole; a cut one goes into the next pass.
+ended() {
+  if [ "$1" = 0 ] && { [ "$2" = 200 ] || [ "$2" = 206 ]; }; then
+    eval "k_$3=\$2"
+    _whole="$_whole $3"
+    return 0
+  fi
+  _o=$tmpbase.$3
+  _u=''
+  eval "_u=\$u_$3"
+  debug "prefetch GET $_u -> $2 (curl $1)"
+  # A time limit goes on in the next pass. A 401 or 403 goes on once, with
+  # the anonymous token of its repository. No answer at all, another refusal,
+  # or a file over its size: no other pass does better, and the call for that
+  # file decides alone.
+  case $1:$2 in
+    28:*) ;;
+    *:408 | *:429 | *:5??) ;;
+    *:401 | *:403)
+      rm -f -- "$_o"
+      _y=''
+      eval "_y=\${y_$3:-}"
+      if [ -z "$_y" ] && anon_token "${_u%/blobs/*}" "$_u" '' "$2"; then
+        eval "y_$3=1"
+        again "$3" 0
+      fi
+      return 0
+      ;;
+    *:000 | 63:* | *:4??)
+      rm -f -- "$_o"
+      return 0
+      ;;
+    16:* | 18:* | 35:* | 52:* | 55:* | 56:* | 92:*) ;;
+    *)
+      rm -f -- "$_o"
+      return 0
+      ;;
+  esac
+  if [ -s "$_o" ]; then
+    again "$3" 1
+  else
+    again "$3" 0
+  fi
+}
+
+# CHECK_AWK reads the output of sha256sum and then of wc -c on files named
+# ENVIRON["P"]ID, and prints ID<TAB>SIZE<TAB>SHA256 for each file both read.
+# shellcheck disable=SC2016 # an awk program: awk expands it, the shell must not
+CHECK_AWK='
+BEGIN { p = ENVIRON["P"]; lp = length(p) }
+FILENAME == ARGV[1] {
+  n = substr($0, 67)
+  if (length($0) > 66 && substr($0, 1, 64) !~ /[^0-9a-f]/ && substr(n, 1, lp) == p) h[substr(n, lp + 1)] = substr($0, 1, 64)
+  next
+}
+{
+  l = $0
+  sub(/^ +/, "", l)
+  i = index(l, " ")
+  if (i < 2) next
+  s = substr(l, 1, i - 1)
+  n = substr(l, i + 1)
+  if (s ~ /^[0-9]+$/ && substr(n, 1, lp) == p) z[substr(n, lp + 1)] = s
+}
+END { for (k in h) if ((k in z) && k ~ /^[0-9]+$/) print k "\t" z[k] "\t" h[k] }
+'
+
+# check_whole: the size and sha256 of each file in $_whole, from one sha256sum
+# and one wc for all of them. A file that matches becomes its entry. A resumed
+# file that does not match goes into the next pass, from zero, once.
+check_whole() {
+  [ -n "$_whole" ] || return 0
+  set --
+  for _id in $_whole; do
+    set -- "$@" "$tmpbase.$_id"
+  done
+  rc=0
+  sha256sum -- "$@" > "$work/sums" 2>> "$work/check.err" || rc=$?
+  [ "$rc" -eq 0 ] || debug "prefetch: sha256sum ended $rc"
+  rc=0
+  wc -c -- "$@" > "$work/sizes" 2>> "$work/check.err" || rc=$?
+  [ "$rc" -eq 0 ] || debug "prefetch: wc ended $rc"
+  P="$tmpbase." awk "$CHECK_AWK" "$work/sums" "$work/sizes" > "$work/checked" || debug "prefetch: the check ended $?"
+  while IFS="$TAB" read -r _id _gs _gh; do
+    case $_id in
+      '' | *[!0-9]*) continue ;;
+    esac
+    eval "gs_$_id=\$_gs gh_$_id=\$_gh"
+  done < "$work/checked"
+  for _id in $_whole; do
+    _h='' _s='' _r='' _c='' _u='' _k='' _z='' _gs='' _gh=''
+    eval "_h=\$h_$_id _s=\$s_$_id _r=\$r_$_id _c=\$c_$_id _u=\$u_$_id _k=\$k_$_id _z=\${z_$_id:-} _gs=\${gs_$_id:-} _gh=\${gh_$_id:-} gs_$_id='' gh_$_id=''"
+    if [ "$_gs" = "$_s" ] && [ "$_gh" = "$_h" ] && put "$_r" "$tmpbase.$_id"; then
+      debug "prefetch GET $_u -> $_k, $_r ready"
+      got_files=$((got_files + 1))
+      got_bytes=$((got_bytes + _s))
+      continue
+    fi
+    rm -f -- "$tmpbase.$_id"
+    if [ "$_c" = 1 ] && [ "$_z" != 1 ]; then
+      debug "prefetch GET $_u -> $_k: the resumed file is not sha256 $_h, once more from zero"
+      eval "z_$_id=1"
+      again "$_id" 0
+    else
+      debug "prefetch GET $_u -> $_k: not $_s bytes with sha256 $_h"
+    fi
+  done
+}
+
+# fetch_blobs: every blob item, in passes while they move data, at most 100.
+# Adds to got_files and got_bytes.
+fetch_blobs() {
+  [ "$blob_count" -gt 0 ] || return 0
+  tmpbase=$(mktemp "${store}tmp.XXXXXX") || return 0
+  _todo=$blobs
+  _pass=1
+  while [ -n "$_todo" ] && [ "$_pass" -le 100 ]; do
+    cfg=$work/blobs.cfg
+    : > "$cfg"
+    for _id in $_todo; do
+      eval "_u=\$u_$_id _s=\$s_$_id _a=\$a_$_id _c=\$c_$_id _p=\$p_$_id"
+      slice "$_s" "$_pass"
+      block "$_u" "$tmpbase.$_id" "$_s" "$_a" "$_c" "$_p" "$_dl"
+    done
+    debug "prefetch: pass $_pass starts"
+    rc=0
+    curl -q --parallel --parallel-max "$jobs" --silent --show-error \
+      --connect-timeout 10 --speed-limit 1024 --speed-time 60 \
+      --config "$cfg" > "$work/blobs.out" 2>> "$work/curl.err" || rc=$?
+    _next=''
+    _whole=''
+    _moved=0
+    _ready=$got_files
+    while IFS="$TAB" read -r _x _code _bytes _fn; do
+      _id=${_fn##*.}
+      case $_id in
+        '' | *[!0-9]*) continue ;;
+      esac
+      case $_bytes in
+        '' | *[!0-9]*) ;;
+        *) _moved=$((_moved + _bytes)) ;;
+      esac
+      ended "$_x" "$_code" "$_id"
+    done < "$work/blobs.out"
+    check_whole
+    debug "prefetch: pass $_pass ended, curl $rc, $_moved bytes, $((got_files - _ready)) ready"
+    _todo=$_next
+    if [ "$_pass" -gt 1 ] && [ "$got_files" -eq "$_ready" ] && [ "$_moved" -lt 30720 ]; then
+      break
+    fi
+    _pass=$((_pass + 1))
+  done
+  if [ -s "$work/curl.err" ]; then
+    debug "prefetch: curl said: $(sed -n 1,5p "$work/curl.err")"
+  fi
+  rm -f -- "$tmpbase" "$tmpbase".*
+}
+
+# manifest_pass LIST RES: one parallel run of the manifests of LIST (ID<TAB>URL
+# lines), each with the token of its repository or $AUTH. Each body goes to
+# $work/m.ID and its headers to $work/m.ID.hdr; RES gets ID<TAB>EXIT<TAB>HTTP
+# lines.
+manifest_pass() {
+  cfg=$work/m.cfg
+  : > "$cfg"
+  while IFS="$TAB" read -r _id _u; do
+    if [ -s "$cfg" ]; then
+      printf 'next\n' >> "$cfg"
+    fi
+    proto_for "$_u"
+    auth_for "${_u%/manifests/*}"
+    {
+      printf 'url = "%s"\noutput = "%s/m.%s"\ndump-header = "%s/m.%s.hdr"\n' "$_u" "$work" "$_id" "$work" "$_id"
+      if [ -n "$_auth" ]; then
+        printf 'header = "Authorization: %s"\n' "$_auth"
+      fi
+      printf 'header = "Accept: application/vnd.oci.image.manifest.v1+json"\n'
+      printf 'max-filesize = 65536\nconnect-timeout = 10\nmax-time = 15\nproto = "%s"\n' "$_p"
+      printf 'user-agent = "pacman-oci/%s"\nwrite-out = "%s"\n' "$PACMAN_OCI_VERSION" "$WRITE_OUT"
+    } >> "$cfg"
+  done < "$1"
+  [ -s "$cfg" ] || return 0
+  rc=0
+  curl -q --parallel --parallel-max "$jobs" --silent --show-error \
+    --connect-timeout 10 --max-time 15 \
+    --config "$cfg" > "$work/m.out" 2>> "$work/curl.err" || rc=$?
+  while IFS="$TAB" read -r _x _code _bytes _fn; do
+    _id=${_fn##*/m.}
+    case $_id in
+      '' | *[!0-9]*) continue ;;
+    esac
+    debug "prefetch GET manifest $_id -> $_code (curl $_x)"
+    printf '%s\t%s\t%s\n' "$_id" "$_x" "$_code" >> "$2"
+  done < "$work/m.out"
+  debug "prefetch: manifests done, curl ended $rc"
+}
+
+# fetch_manifests LIST: the manifests of LIST, ID<TAB>URL lines; $work/m.res
+# gets ID<TAB>EXIT<TAB>HTTP lines. A manifest the registry refuses (401 or
+# 403) is asked again once, with the anonymous token of its repository.
+fetch_manifests() {
+  : > "$work/m.first"
+  : > "$work/m.again"
+  : > "$work/m.res"
+  manifest_pass "$1" "$work/m.first"
+  while IFS="$TAB" read -r _id _x _code; do
+    case $_code in
+      401 | 403)
+        _u=''
+        while IFS="$TAB" read -r _mi _mu; do
+          if [ "$_mi" = "$_id" ]; then
+            _u=$_mu
+          fi
+        done < "$1"
+        if [ -n "$_u" ] && anon_token "${_u%/manifests/*}" "$_u" "$work/m.$_id.hdr" "$_code"; then
+          printf '%s\t%s\n' "$_id" "$_u" >> "$work/m.again"
+          continue
+        fi
+        ;;
+    esac
+    printf '%s\t%s\t%s\n' "$_id" "$_x" "$_code" >> "$work/m.res"
+  done < "$work/m.first"
+  if [ -s "$work/m.again" ]; then
+    manifest_pass "$work/m.again" "$work/m.res"
+  fi
+}
+
+# say_summary START FILES BYTES: one line, on a terminal
+say_summary() {
+  [ "$2" -gt 0 ] || return 0
+  if [ -t 2 ] || [ "${PACMAN_OCI_DEBUG:-0}" = 1 ]; then
+    _end=$(now_ns)
+    awk -v n="$2" -v b="$3" -v t0="$1" -v t1="$_end" 'BEGIN {
+      printf "pacman-oci: prefetched %d file(s), %.1f MiB in %.1f s\n", n, b / 1048576, (t1 - t0) / 1e9
+    }' >&2
+  fi
+}
+
+#---------------------------------------------------------------------------#
+# Package prefetch
+#
+# pacman -S --print with the run's own arguments, less the refresh, prints one
+# line per file it would download: %l (the first Server, or file:// when the
+# file is cached), %h (sha256), %s (bytes to download) and %g (base64
+# %PGPSIG%). Print mode picks the first provider and never prompts. %s is the
+# size less any .part pacman holds in the cache, so the size of that .part,
+# from its metadata, is added back.
+#
+# PLAN_AWK prints, per file to fetch:
+#   TYPE FILE SHA256 SIZE PGPSIG BASE URL   (TYPE oci or http; "-" when absent)
+#---------------------------------------------------------------------------#
+# shellcheck disable=SC2016 # an awk program: awk expands it, the shell must not
+PLAN_AWK='
+BEGIN { FS = "\t" }
+function hex(x) { return (length(x) == 64 && x !~ /[^0-9a-f]/) ? x : "-" }
+NF != 4 { next }
+{
+  u = $1; h = hex($2); s = $3; g = $4
+  if (s !~ /^(0|[1-9][0-9]*)$/ || length(s) > 15) next
+  if (g !~ /^[A-Za-z0-9+\/]+=*$/ || length(g) % 4 != 0) g = "-"
+  f = u
+  sub(/.*\//, "", f)
+  if (f !~ /^[!-~]+$/ || f ~ /^,/ || f ~ /\.sig$/ || f !~ /\.pkg\.tar(\.[^\/]+)?$/) next
+  if (u ~ /^oci:\/\//) { sch = "https"; r = substr(u, 7) }
+  else if (u ~ /^oci\+http:\/\//) { sch = "http"; r = substr(u, 12) }
+  else if (u ~ /^https?:\/\/[^\/]/) {
+    if (u ~ /[" \\]/ || h == "-") next
+    print "http\t" f "\t" h "\t" s "\t" g "\t-\t" u
+    next
+  }
+  else next
+  i = index(r, "/")
+  if (i == 0) next
+  host = substr(r, 1, i - 1)
+  p = substr(r, i + 1, length(r) - i - length(f) - 1)
+  at = index(p, "@")
+  if (at) p = substr(p, 1, at - 1)
+  else {
+    last = p
+    sub(/.*\//, "", last)
+    c = index(last, ":")
+    if (c) p = substr(p, 1, length(p) - length(last) + c - 1)
+  }
+  if (host !~ /^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]+)?$/) next
+  if (p !~ /^[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(\/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*$/) next
+  print "oci\t" f "\t" h "\t" s "\t" g "\t" sch "://" host "/v2/" p "\t" u
+}
+'
+
+# sig_from_db FILE BASE64 TMP: the entry FILE.sig, from the decoded %PGPSIG%,
+# through TMP, a new name in the store's directory
+sig_from_db() {
+  if entry_ok "$1.sig"; then
+    return 0
+  fi
+  if base64 -d > "$3" << EOF && [ -s "$3" ] && put "$1.sig" "$3"; then
+$2
+EOF
+    return 0
+  fi
+  rm -f -- "$3"
+  return 1
+}
+
+# decode_sigs: an entry FILE.sig for each line FILE<TAB>BASE64 of $work/sigs.
+# It runs beside the downloads. The name of each entry it made goes to
+# $work/sigs.ok.
+decode_sigs() {
+  : > "$work/sigs.ok"
+  _sb=$(mktemp "${store}tmp.XXXXXX") || return 1
+  _i=0
+  while IFS="$TAB" read -r _f _g; do
+    _i=$((_i + 1))
+    if sig_from_db "$_f" "$_g" "$_sb.$_i"; then
+      printf '%s\n' "$_f" >> "$work/sigs.ok"
+    fi
+  done < "$work/sigs"
+  rm -f -- "$_sb"
+}
+
+# print_run: pacman -S --print with the rewritten arguments of $work/args
+print_run() {
+  set --
+  while IFS= read -r _a; do
+    set -- "$@" "$_a"
+  done < "$work/args"
+  _fmt="%l$TAB%h$TAB%s$TAB%g"
+  debug "prefetch: $exe --print $*"
+  rc=0
+  if command -v timeout > /dev/null; then
+    timeout 120 "$exe" --print --print-format "$_fmt" --noconfirm --noprogressbar "$@" \
+      < /dev/null > "$work/print.out" 2> "$work/print.err" || rc=$?
+  else
+    "$exe" --print --print-format "$_fmt" --noconfirm --noprogressbar "$@" \
+      < /dev/null > "$work/print.out" 2> "$work/print.err" || rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    debug "no prefetch: the print run ended $rc: $(sed -n 1,5p "$work/print.err")"
+    return 1
+  fi
+}
+
+# plan_pkgs: one blob item per file of the print run, a manifest request for
+# each file whose sha256 or signature has to come from the registry, and a
+# line in $work/sigs for each signature decode_sigs writes from %PGPSIG%. A
+# signature decode_sigs cannot write is fetched alone, in the serial pass.
+plan_pkgs() {
+  : > "$work/index"
+  : > "$work/mnames"
+  : > "$work/sigs"
+  mitems=''
+  _n=0
+  while IFS="$TAB" read -r _type _f _h _s _g _b _u; do
+    _n=$((_n + 1))
+    if [ -f "$held_dir/$_f.part" ] && [ ! -L "$held_dir/$_f.part" ] && meta_size "$held_dir/$_f.part"; then
+      _s=$((_s + _ms))
+    fi
+    if [ "$_h" != - ]; then
+      printf '%s\t%s\t%s\n' "$_f" "$_h" "$_s" >> "$work/index"
+    fi
+    _sig=0
+    if [ "$sigmode" = auto ] && [ "$_g" != - ]; then
+      _sig=1
+      printf '%s\t%s\n' "$_f" "$_g" >> "$work/sigs"
+    fi
+    if [ "$_type" = http ]; then
+      add_blob "$_u" "$_h" "$_s" "$_f" 0 '=http,https'
+    elif [ "$_h" != - ] && [ "$_sig" = 1 ]; then
+      proto_for "$_b"
+      add_blob "$_b/blobs/sha256:$_h" "$_h" "$_s" "$_f" 1 "$_p"
+    else
+      eval "mb_$_n=\$_b mf_$_n=\$_f mh_$_n=\$_h mg_$_n=\$_sig"
+      mitems="$mitems $_n"
+      printf '%s\n' "$_f" >> "$work/mnames"
+    fi
+  done < "$work/plan"
+  if [ -s "$work/index" ]; then
+    if ! { _t=$(mktemp "${store}tmp.XXXXXX") && cp -- "$work/index" "$_t" && put ,index "$_t"; }; then
+      debug "prefetch: could not keep the index of sha256 values"
+    fi
+  fi
+}
+
+# pkg_manifests: the manifest of each planned file that needs one, then its
+# package layer and, when the signature comes from the registry, its .sig layer
+pkg_manifests() {
+  tags_of < "$work/mnames" > "$work/mtags" || return 0
+  : > "$work/mlist"
+  # shellcheck disable=SC2086 # a list of numbers
+  set -- $mitems
+  while IFS="$TAB" read -r _f _tag; do
+    [ "$#" -gt 0 ] || break
+    eval "_b=\$mb_$1"
+    printf '%s\t%s/manifests/%s\n' "$1" "$_b" "$_tag" >> "$work/mlist"
+    shift
+  done < "$work/mtags"
+  fetch_manifests "$work/mlist"
+  while IFS="$TAB" read -r _n _x _code; do
+    [ "$_x" = 0 ] && [ "$_code" = 200 ] || continue
+    eval "_b=\$mb_$_n _f=\$mf_$_n _h=\$mh_$_n _sig=\$mg_$_n"
+    json_flat "$work/m.$_n" > "$work/m.$_n.flat" 2>> "$work/json.err" || continue
+    layers_of "$work/m.$_n.flat" "$_f" > "$work/m.$_n.layers" || continue
+    read -r _fc _fd _fs _sc _sd _ss _media < "$work/m.$_n.layers" || continue
+    case $_media in
+      application/vnd.oci.image.manifest.v1+json | -) ;;
+      *) continue ;;
+    esac
+    [ "$_fc" = 1 ] && [ "$_fd" != - ] && [ "$_fs" != - ] || continue
+    if [ "$_h" != - ] && [ "$_fd" != "sha256:$_h" ]; then
+      debug "prefetch: the registry's $_f is $_fd, the database says sha256:$_h"
+      continue
+    fi
+    proto_for "$_b"
+    add_blob "$_b/blobs/$_fd" "${_fd#sha256:}" "$_fs" "$_f" 1 "$_p"
+    if [ "$_sig" = 0 ] && [ "$_sc" = 1 ] && [ "$_sd" != - ] && [ "$_ss" != - ]; then
+      add_blob "$_b/blobs/$_sd" "${_sd#sha256:}" "$_ss" "$_f.sig" 1 "$_p"
+    fi
+  done < "$work/m.res"
+}
+
+pkg_prefetch() {
+  if ! store_open || ! put ,prefetch; then
+    return 0
+  fi
+  if ! argv_scan; then
+    debug "no prefetch: $scan_why"
+    return 0
+  fi
+  if [ "$scan_sync" != 1 ] || [ "$scan_print" != 0 ]; then
+    debug "no prefetch: pacman is not in a sync operation, or prints only"
+    return 0
+  fi
+  if ! find_exe; then
+    debug "no prefetch: no pacman binary found for argv[0] '$scan_argv0'"
+    return 0
+  fi
+  _t0=$(now_ns)
+  print_run || return 0
+  debug "prefetch: the print run ended"
+  awk "$PLAN_AWK" "$work/print.out" > "$work/plan" || return 0
+  plan_pkgs
+  # The signatures are decoded while the downloads run.
+  _spid=''
+  if [ -s "$work/sigs" ]; then
+    decode_sigs &
+    _spid=$!
+  fi
+  if [ -n "$mitems" ]; then
+    pkg_manifests
+  fi
+  fetch_blobs
+  sigs_from_db=0
+  if [ -n "$_spid" ]; then
+    wait "$_spid" || debug "prefetch: the signature decoder ended $?"
+    while IFS= read -r _l; do
+      sigs_from_db=$((sigs_from_db + 1))
+    done < "$work/sigs.ok"
+  fi
+  say_summary "$_t0" "$((got_files + sigs_from_db))" "$got_bytes"
+}
+
+#---------------------------------------------------------------------------#
+# Database prefetch
+#
+# The config file comes from pacman's arguments (default /etc/pacman.conf), the
+# repositories and their first Server from pacman-conf. For each first Server
+# that is oci://, the manifests in parallel, then each database (.db or .files,
+# as pacman asked) that differs from the copy pacman holds, and its signature.
+# A manifest asked for by digest must hash to that digest. A database whose
+# manifest has no signature layer gets an ,absent entry, so the request for its
+# .sig misses with no network.
+#---------------------------------------------------------------------------#
+db_prefetch() {
+  if ! store_open || ! put ,dbprefetch; then
+    return 0
+  fi
+  if ! argv_scan; then
+    debug "no prefetch: $scan_why"
+    return 0
+  fi
+  if [ "$scan_sysroot" = 1 ] || [ "$scan_arch" = 1 ]; then
+    debug "no prefetch: pacman runs with --sysroot or --arch"
+    return 0
+  fi
+  if ! command -v pacman-conf > /dev/null; then
+    debug "no prefetch: no pacman-conf"
+    return 0
+  fi
+  _t0=$(now_ns)
+  _ext=${file##*.}
+  rc=0
+  pacman-conf --config "$scan_config" --repo-list > "$work/repos" 2> "$work/conf.err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    debug "no prefetch: pacman-conf --repo-list ended $rc: $(sed -n 1,3p "$work/conf.err")"
+    return 0
+  fi
+  : > "$work/mlist"
+  _n=0
+  while IFS= read -r _r; do
+    case $_r in
+      '' | ,* | *[!A-Za-z0-9._+-]*) continue ;;
+    esac
+    rc=0
+    _srv=$(pacman-conf --config "$scan_config" --repo "$_r" Server < /dev/null 2>> "$work/conf.err") || rc=$?
+    [ "$rc" -eq 0 ] || continue
+    _srv=${_srv%%"$NL"*}
+    case $_srv in
+      oci://* | oci+http://*) ;;
+      *) continue ;;
+    esac
+    parse_oci "$_srv/$_r.$_ext" || continue
+    _n=$((_n + 1))
+    eval "dr_$_n=\$_r db_$_n=\$p_base dd_$_n=\$p_digest"
+    printf '%s\t%s/manifests/%s\n' "$_n" "$p_base" "$p_ref" >> "$work/mlist"
+  done < "$work/repos"
+  [ "$_n" -gt 0 ] || return 0
+  fetch_manifests "$work/mlist"
+  _repos=''
+  while IFS="$TAB" read -r _n _x _code; do
+    [ "$_x" = 0 ] && [ "$_code" = 200 ] || continue
+    eval "_r=\$dr_$_n _b=\$db_$_n _d=\$dd_$_n"
+    if [ -n "$_d" ] && [ "sha256:$(sha256_of "$work/m.$_n")" != "$_d" ]; then
+      printf 'pacman-oci: %s answered %s with a manifest of another digest\n' "$_b" "$_d" >&2
+      continue
+    fi
+    json_flat "$work/m.$_n" > "$work/m.$_n.flat" 2>> "$work/json.err" || continue
+    layers_of "$work/m.$_n.flat" "$_r.$_ext" > "$work/m.$_n.layers" || continue
+    read -r _fc _fd _fs _sc _sd _ss _media < "$work/m.$_n.layers" || continue
+    case $_media in
+      application/vnd.oci.image.manifest.v1+json | -) ;;
+      *) continue ;;
+    esac
+    [ "$_fc" = 1 ] && [ "$_fd" != - ] && [ "$_fs" != - ] && [ "$_sc" -le 1 ] || continue
+    proto_for "$_b"
+    _held=$held_dir/$_r.$_ext
+    if [ -f "$_held" ] && check_file "$_held" "$_fs" "${_fd#sha256:}" &&
+      _t=$(mktemp "${store}tmp.XXXXXX") && cp -- "$_held" "$_t" && put "$_r.$_ext" "$_t"; then
+      debug "$_r.$_ext unchanged, $_fd"
+      got_files=$((got_files + 1))
+    else
+      add_blob "$_b/blobs/$_fd" "${_fd#sha256:}" "$_fs" "$_r.$_ext" 1 "$_p"
+    fi
+    if [ "$_sc" = 1 ] && [ "$_sd" != - ] && [ "$_ss" != - ]; then
+      add_blob "$_b/blobs/$_sd" "${_sd#sha256:}" "$_ss" "$_r.$_ext.sig" 1 "$_p"
+      eval "ds_$_n=1"
+    else
+      eval "ds_$_n=0"
+    fi
+    _repos="$_repos $_n"
+  done < "$work/m.res"
+  fetch_blobs
+  # A signature is kept only beside the database of its own manifest.
+  for _n in $_repos; do
+    eval "_r=\$dr_$_n _s=\$ds_$_n"
+    if entry_ok "$_r.$_ext"; then
+      if [ "$_s" = 0 ]; then
+        put ",absent.$_r.$_ext.sig" || debug "could not mark $_r.$_ext.sig absent"
+      fi
+    elif entry_ok "$_r.$_ext.sig"; then
+      rm -f -- "$store$_r.$_ext.sig"
+    fi
+  done
+  say_summary "$_t0" "$got_files" "$got_bytes"
+}
+
+#---------------------------------------------------------------------------#
+# Parse oci://HOST/REPOSITORY[:TAG|@DIGEST]/FILE
+#
+# parse_oci URL sets p_scheme, p_host, p_repo, p_tag, p_digest, p_base, p_ref
+# (what a database is read from) and p_proto. It returns 1, with the reason in
+# p_why, for a URL that is not one.
+#---------------------------------------------------------------------------#
+parse_oci() {
+  case $1 in
+    oci://*)
+      p_scheme=https
+      _rest=${1#oci://}
+      ;;
+    oci+http://*)
+      p_scheme=http
+      _rest=${1#oci+http://}
+      ;;
+    *)
+      p_why="not an oci:// URL: $1"
+      return 1
+      ;;
+  esac
+  _ref=${_rest%/*}
+  p_host=${_ref%%/*}
+  _path=${_ref#*/}
+  if [ "$_ref" = "$_rest" ] || [ "$p_host" = "$_ref" ]; then
+    p_why="not oci://HOST/REPOSITORY/FILE: $1"
+    return 1
+  fi
+  p_tag=''
+  p_digest=''
+  case $_path in
+    *@*)
+      p_digest=${_path#*@}
+      p_repo=${_path%%@*}
+      ;;
+    *)
+      case ${_path##*/} in
+        *:*)
+          p_tag=${_path##*:}
+          p_repo=${_path%:*}
+          ;;
+        *) p_repo=$_path ;;
+      esac
+      ;;
+  esac
+  if ! printf '%s\n' "$p_host" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]+)?$'; then
+    p_why="not a registry host: $p_host"
+    return 1
+  fi
+  if ! printf '%s\n' "$p_repo" | grep -Eq '^[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*$'; then
+    p_why="not a repository name: $p_repo"
+    return 1
+  fi
+  if [ -n "$p_tag" ] && ! printf '%s\n' "$p_tag" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$'; then
+    p_why="not a tag: $p_tag"
+    return 1
+  fi
+  if [ -n "$p_digest" ] && ! printf '%s\n' "$p_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+    p_why="not a sha256 digest: $p_digest"
+    return 1
+  fi
+  p_base=$p_scheme://$p_host/v2/$p_repo
+  p_ref=${p_digest:-${p_tag:-latest}}
+  proto_for "$p_base"
+  p_proto=$_p
+  return 0
+}
+
+#---------------------------------------------------------------------------#
+# One file
+#
+# fetch_one URL SIZE AUTH(0|1) PROTO RESUMABLE(0|1): OUTPUT from URL in up to
+# three attempts. A resumable file keeps what it got and the next attempt
+# resumes with --continue-at -; anything else starts from zero. When SIZE is
+# known and the file can resume, each attempt has its time limit (see
+# deadline). An attempt that cannot resume gets no time limit: a cut would
+# lose all its bytes. A server that refuses a range (curl 33) turns resume off
+# for the attempts after it. No attempt starts after 30 s, unless the one
+# before it added bytes. A refused range starts these 30 s again. Sets one_rc
+# (curl's exit), one_code (the last HTTP status) and one_resumed.
+#---------------------------------------------------------------------------#
+fetch_one() {
+  _url=$1 _max=$2 _auth=$3 _proto=$4 _resumable=$5
+  _try=1
+  _stop=$(($(date +%s) + 30))
+  while :; do
+    _resume=0
+    if [ "$_resumable" = 1 ] && [ "${no_resume:-0}" != 1 ]; then
+      _resume=1
+    fi
+    one_resumed=0
+    _had=0
+    set --
+    if [ "$_resume" = 1 ] && [ -s "$out" ]; then
+      _had=$(size_of "$out")
+    fi
+    if [ "$_had" -gt 0 ] && { [ -z "$_max" ] || [ "$_had" -lt "$_max" ]; }; then
+      set -- --continue-at -
+      one_resumed=1
+    else
+      _had=0
+      rm -f -- "$out"
+    fi
+    if [ -n "$_max" ]; then
+      set -- "$@" --max-filesize "$_max"
+      if [ "$_resume" = 1 ]; then
+        deadline "$_max" "$_try"
+        if [ -n "$_dl" ]; then
+          set -- "$@" --max-time "$_dl"
+        fi
+      fi
+    fi
+    if [ -n "$_proto" ]; then
+      set -- "$@" --proto "$_proto" --proto-redir "$_proto" --max-redirs 5
+    else
+      set -- "$@" --max-redirs 10
+    fi
+    if [ "$_auth" = 1 ]; then
+      set -- "$@" --user-agent "pacman-oci/$PACMAN_OCI_VERSION"
+      if [ -n "$AUTH" ]; then
+        set -- "$@" --header "Authorization: $AUTH"
+      fi
+    fi
+    one_rc=0
+    one_code=$(curl -q --fail --location --show-error "$PROGRESS" \
+      --connect-timeout 20 --speed-limit 1024 --speed-time 60 \
+      --write-out '%{http_code}' "$@" --output "$out" --url "$_url") || one_rc=$?
+    [ -n "$one_code" ] || one_code=000
+    debug "GET $_url -> $one_code (curl $one_rc, resumed $one_resumed)"
+    [ "$one_rc" -ne 0 ] || return 0
+    case $one_rc:$one_code in
+      33:*)
+        rm -f -- "$out"
+        no_resume=1
+        _stop=$(($(date +%s) + 30))
+        ;;
+      *:408 | *:429 | *:5?? | 6:* | 16:* | 18:* | 28:* | 35:* | 52:* | 55:* | 56:* | 92:*) ;;
+      *) return 1 ;;
+    esac
+    [ "$_try" -lt 3 ] || return 1
+    if [ "$(date +%s)" -ge "$_stop" ]; then
+      if [ "$_resume" != 1 ] || [ ! -s "$out" ] || [ "$(size_of "$out")" -le "$_had" ]; then
+        return 1
+      fi
+    fi
+    sleep "$_try"
+    _try=$((_try + 1))
+  done
+}
+
+#---------------------------------------------------------------------------#
+# The run store first: a file the prefetch made ready needs no network.
+#---------------------------------------------------------------------------#
+sweep
+store_ok=0
+if [ -n "$key" ]; then
+  case $file in
+    '' | ,* | *[!!-~]*) ;;
+    *) store_ok=1 ;;
+  esac
+fi
+if [ "$store_ok" = 1 ]; then
+  case $kind in
+    pkg | pkgsig)
+      serve "$file"
+      if prefetch_allowed && ! entry_ok ,prefetch; then
+        pkg_prefetch
+        serve "$file"
+      fi
+      ;;
+    db)
+      if [ "$ours" = 1 ]; then
+        serve "$file"
+        case $file in
+          *.db | *.files)
+            if prefetch_allowed && ! entry_ok ,dbprefetch; then
+              db_prefetch
+              serve "$file"
+            fi
+            ;;
+        esac
+      fi
+      ;;
+    dbsig)
+      if [ "$ours" = 1 ]; then
+        serve "$file"
+        if entry_ok ",absent.$file"; then
+          sig_absent "no layer $file in the database manifest of this run"
+        fi
+      fi
+      ;;
+  esac
+  # A host that failed earlier in this run is skipped, never for a signature:
+  # pacman asks for a .sig only of the server that served its file.
+  case $kind in
+    pkg | db)
+      host_of "$url"
+      if [ -n "$_host" ] && entry_ok ",down.$_host"; then
+        miss "$_host failed earlier in this run; pacman tries the next Server"
+      fi
+      ;;
+  esac
+fi
+
+#---------------------------------------------------------------------------#
+# Not ours: an ordinary download. pacman's own downloader is off whenever an
+# XferCommand is set, so this is what fetches from the fallback mirrors. A
+# package resumes what it got. When the prefetch of this run planned the
+# package, its size bounds the download, and a resumed file must have its
+# sha256, or it is fetched once more from zero.
+#---------------------------------------------------------------------------#
+if [ "$ours" = 0 ]; then
+  want='' want_size='' resumable=0
+  if [ "$kind" = pkg ]; then
+    resumable=1
+    if entry_ok ,index; then
+      want=$(F="$file" awk -F '\t' '$1 == ENVIRON["F"] { print $2 "\t" $3; exit }' "$store,index")
+      want_size=${want#*"$TAB"}
+      want=${want%%"$TAB"*}
+    fi
+  fi
+  if ! fetch_one "$url" "$want_size" 0 '' "$resumable"; then
+    host_of "$url"
+    mark_down "$_host" "$one_code"
+    rm -f -- "$out"
+    exit 1
+  fi
+  if [ "$one_resumed" = 1 ] && [ -n "$want" ] && [ "$(sha256_of "$out")" != "$want" ]; then
+    debug "$file: the resumed file is not sha256 $want, once more from zero"
+    no_resume=1
+    if ! fetch_one "$url" "$want_size" 0 '' 0; then
+      rm -f -- "$out"
+      exit 1
+    fi
+  fi
+  exit 0
+fi
+
+parse_oci "$url" || broken "$p_why"
+host=$p_host
+repo=$p_repo
+scheme=$p_scheme
+base=$p_base
+PROTO=$p_proto
+# No shell ever reads FILE: it becomes a tag, which the mapping escapes or
+# hashes, and reaches awk through the environment. A name makepkg could never
+# produce is refused: empty, a space, a control character, or a byte above 0x7e.
+case $file in
+  '' | . | .. | *[!!-~]*) broken "not a file name pacman asks for: $file" ;;
+esac
+
+# What to ask the registry for, and what must be in the answer (see kind).
+pair_hex=""
+case $kind in
+  pkgsig) manifest_ref=$(oci_tag "${file%.sig}") ;;
+  pkg) manifest_ref=$(oci_tag "$file") ;;
+  dbsig)
+    sibling="$out_dir/${file%.sig}"
+    manifest_ref=$p_ref
+    if [ -f "$sibling" ]; then
+      pair_hex=$(sha256_of "$sibling")
+      case $file in
+        *.db.sig) manifest_ref="db-$pair_hex" ;;
+        *) manifest_ref="files-$pair_hex" ;;
+      esac
+    fi
+    ;;
+  *) manifest_ref=$p_ref ;;
+esac
+
+need_work
+work_hdr="$work/headers"
+work_json="$work/body.json"
+work_flat="$work/body.flat"
+
+# A token that an earlier call of this run got for this repository is sent
+# first: the dummy token would be refused again.
+if token_read "$host" "$repo"; then
+  AUTH="Bearer $_tok"
+  debug "the run's anonymous token for $host/$repo"
+fi
+
+#---------------------------------------------------------------------------#
+# Requests
+#
+# A public GHCR repository answers a dummy bearer token, which saves the token
+# round trip on every file. A registry that refuses it answers 401, or 403 with
+# no WWW-Authenticate header (GHCR, measured), so the same request is then made
+# with no Authorization at all to read the WWW-Authenticate header, and the anonymous token it
+# names is fetched once. Manifest and token requests follow no redirect: GHCR
+# answers a reference it cannot parse with 303 to an HTML page.
+#---------------------------------------------------------------------------#
+
+# get URL FILE: the body into FILE, the HTTP status into $code (000 when
+# nothing answered, cut when the body was not read whole), the headers into
+# $work_hdr
+get() {
+  get_rc=0
+  if [ -n "$AUTH" ]; then
+    # shellcheck disable=SC2086 # RETRY is several words on purpose
+    code=$(curl -q --silent --show-error --proto "$PROTO" --max-filesize 65536 \
+      --connect-timeout 10 --max-time 15 $RETRY \
+      --user-agent "pacman-oci/$PACMAN_OCI_VERSION" \
+      --header "Authorization: $AUTH" \
+      --header 'Accept: application/vnd.oci.image.manifest.v1+json' \
+      --dump-header "$work_hdr" --output "$2" --write-out '%{http_code}' --url "$1") || get_rc=$?
+  else
+    # shellcheck disable=SC2086 # RETRY is several words on purpose
+    code=$(curl -q --silent --show-error --proto "$PROTO" --max-filesize 65536 \
+      --connect-timeout 10 --max-time 15 $RETRY \
+      --user-agent "pacman-oci/$PACMAN_OCI_VERSION" \
+      --header 'Accept: application/vnd.oci.image.manifest.v1+json' \
+      --dump-header "$work_hdr" --output "$2" --write-out '%{http_code}' --url "$1") || get_rc=$?
+  fi
+  case $get_rc:$code in
+    0:???) ;;
+    *:000 | *:) code='000' ;;
+    *) code='cut' ;;
+  esac
+  debug "GET $1 -> $code (curl $get_rc)"
+}
+
+# The anonymous pull token named by the WWW-Authenticate header in $work_hdr,
+# for this repository's pull scope. It is kept for the rest of the run.
+bearer_token() {
+  token_from "$work_hdr" "$repo" "$PROTO" "$scheme" || return 1
+  AUTH="Bearer $_token"
+  token_keep "$host" "$repo" "$_token"
+  return 0
+}
+
+# fetch_manifest REF: the body into $work_json, the status into $code. Runs in
+# this shell, never in $( ), so a token won here is the one the blob uses. A
+# 303 is asked again once, after 1 s: every REF here passed its check.
+fetch_manifest() {
+  get "$base/manifests/$1" "$work_json"
+  case $code in
+    401 | 403)
+      if [ "${tried_bearer:-0}" = 0 ]; then
+        tried_bearer=1
+        say_refused "$host"
+        if [ "$code" = 403 ]; then
+          AUTH=''
+          get "$base/manifests/$1" "$work_json"
+        fi
+        if bearer_token; then
+          get "$base/manifests/$1" "$work_json"
+        fi
+      fi
+      ;;
+  esac
+  if [ "$code" = 303 ]; then
+    sleep 1
+    get "$base/manifests/$1" "$work_json"
+  fi
+}
+
+fetch_manifest "$manifest_ref"
+
+# A database signature whose content tag is missing: read the URL's own
+# manifest, and use it only if it names the very database pacman holds.
+if [ "$kind" = dbsig ] && [ -n "$pair_hex" ] && [ "$code" = 404 ]; then
+  manifest_ref=$p_ref
+  fetch_manifest "$manifest_ref"
+fi
+
+case $code in
+  200) ;;
+  404) miss "no manifest $manifest_ref in $host/$repo" ;;
+  401 | 403) broken "the registry refused to serve $host/$repo:$manifest_ref (HTTP $code); is the package public?" ;;
+  000)
+    mark_down "$host" 000
+    miss "no answer from $host"
+    ;;
+  cut) miss "the manifest $host/$repo:$manifest_ref was not read whole" ;;
+  *)
+    mark_down "$host" "$code"
+    miss "HTTP $code for $host/$repo:$manifest_ref"
+    ;;
+esac
+
+# A manifest asked for by digest must be that digest, or pinning means nothing.
+case $manifest_ref in
+  sha256:*)
+    if [ "$(sha256_of "$work_json")" != "${manifest_ref#sha256:}" ]; then
+      broken "$host/$repo answered $manifest_ref with a manifest of another digest"
+    fi
+    ;;
+esac
+
+json_flat "$work_json" > "$work_flat" || broken "the manifest for $host/$repo:$manifest_ref is not JSON"
+media=$(flat_get "$work_flat" /mediaType)
+case $media in
+  application/vnd.oci.image.manifest.v1+json | '') ;;
+  *) broken "$host/$repo:$manifest_ref is a $media, not an image manifest" ;;
+esac
+
+# layer NAME -> the index of the one layer whose title is NAME; empty when
+# none, "many" when the manifest is ambiguous.
+layer() {
+  T="$1" awk -F '\t' '
+    $1 ~ /^\/layers\/[0-9]+\/annotations\/org\.opencontainers\.image\.title$/ && $2 == ENVIRON["T"] {
+      split($1, p, "/"); found = found " " p[3]; count++
+    }
+    END { if (count == 1) print substr(found, 2); else if (count > 1) print "many" }
+  ' "$work_flat"
+}
+
+if [ "$kind" = dbsig ] && [ -n "$pair_hex" ]; then
+  db_idx=$(layer "${file%.sig}")
+  case $db_idx in
+    '' | many) miss "$host/$repo:$manifest_ref does not hold one ${file%.sig}" ;;
+  esac
+  if [ "$(flat_get "$work_flat" "/layers/$db_idx/digest")" != "sha256:$pair_hex" ]; then
+    miss "$host/$repo:$manifest_ref moved on from the ${file%.sig} pacman holds, so its signature is not this one"
+  fi
+fi
+
+idx=$(layer "$file")
+case $idx in
+  many) broken "$host/$repo:$manifest_ref has more than one layer named $file" ;;
+  '')
+    if [ "$kind" = pkgsig ]; then
+      broken "$file: no signature layer in $host/$repo:$manifest_ref; pacman tries no other server for a .sig"
+    fi
+    sig_absent "$host/$repo:$manifest_ref has no layer named $file"
+    ;;
+esac
+digest=$(flat_get "$work_flat" "/layers/$idx/digest")
+size=$(flat_get "$work_flat" "/layers/$idx/size")
+printf '%s\n' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || broken "layer $file has digest '$digest', not sha256"
+printf '%s\n' "$size" | grep -Eq '^(0|[1-9][0-9]{0,14})$' || broken "layer $file has size '$size'"
+hex=${digest#sha256:}
+
+# pacman re-downloads every database on each -Sy when an XferCommand is set.
+# When the copy it already holds is the one the registry names, hand that back.
+held="$held_dir/$file"
+if [ -f "$held" ] && [ "$(size_of "$held")" = "$size" ] && [ "$(sha256_of "$held")" = "$hex" ]; then
+  if cp -- "$held" "$out"; then
+    debug "$file unchanged, $digest"
+    exit 0
+  fi
+  rm -f -- "$out"
+fi
+
+#---------------------------------------------------------------------------#
+# The blob. GHCR answers 307 to a signed URL on another host; curl does not send
+# the Authorization header across hosts, and that URL needs none.
+#---------------------------------------------------------------------------#
+if [ -t 2 ]; then
+  printf ' %s\n' "$file" >&2
+fi
+max_size=$size
+if [ "$max_size" -eq 0 ]; then
+  max_size=1
+fi
+
+# blob: the blob into OUTPUT; 0 when its size and sha256 are the descriptor's
+blob() {
+  if ! fetch_one "$base/blobs/$digest" "$max_size" 1 "$PROTO" 1; then
+    mark_down "$host" "$one_code"
+    miss "could not read blob $digest for $file (curl $one_rc, HTTP $one_code)"
+  fi
+  got_size=$(size_of "$out")
+  got=$(sha256_of "$out")
+  [ "$got_size" = "$size" ] && [ "$got" = "$hex" ]
+}
+
+# A resumed file that fails its check starts again from zero, once.
+if ! blob && [ "$one_resumed" = 1 ]; then
+  debug "$file: the resumed file is not sha256 $hex, once more from zero"
+  no_resume=1
+  blob
+fi
+if [ "$got_size" != "$size" ]; then
+  broken "$file from $host/$repo is $got_size bytes, the manifest says $size"
+fi
+if [ "$got" != "$hex" ]; then
+  broken "$file from $host/$repo has sha256 $got, the manifest says $hex"
+fi
+debug "$file $digest $size bytes"
+exit 0

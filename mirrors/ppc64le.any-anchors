@@ -1,14 +1,11 @@
-# The `any` architecture database, which ArchPOWER keeps separate.
+# Anchors for the [base-any] repository of ppc64le. scripts/gen-mirrorlist writes
+# them in this order to rootfs/ppc64le/etc/pacman.d/mirrorlist-any.
+# At least one must answer.
 #
-# ⛔ This is a second database, not a second mirror of the first. base/any holds
-# the packages that carry no architecture, and iana-etc is one of them, so a
-# root built from the architecture specific database alone cannot satisfy the
-# dependencies of filesystem and unwinds all the way back to base.
-#
-# ⚠ The path is base/any. It is not $repo/$arch for any value of either, which
-# is why it cannot go in the ranked list and gets a file of its own.
-#
-# The second entry is the read through proxy, for the same reason as in
-# mirrors/<arch>.anchors: the origin refuses datacentre address ranges.
+# [base-any] holds the packages with no architecture, for example iana-etc.
+# On the GHCR mirror, $arch/$repo gives /<arch>/base-any. On the origin and
+# the proxy, the path is base/any.
+# ⚠ The origin and the proxy answer HTTP 403 to GitHub runner addresses.
+Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo
 Server = https://repo.archlinuxpower.org/base/any
 Server = https://api.rv.pkgforge.dev/https://repo.archlinuxpower.org/base/any

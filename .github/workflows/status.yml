@@ -1,0 +1,283 @@
+# Measure the published images each hour, and publish the result as a static
+# site: on GitHub Pages, and on the branch status.
+#
+#   build   read the branch status, scripts/status-collect, then
+#           scripts/status-render. On the default branch: push the site, the
+#           history and the evidence to the branch status as one orphan
+#           commit, and upload the Pages artifact.
+#   deploy  actions/deploy-pages, when Pages takes a workflow build
+#   keep    the history and the evidence of the branch status as the
+#           artifact status-history (90 days). A run with no branch status
+#           starts from it. Its own job: a fault of the artifact store stops
+#           neither the record nor the deploy.
+#   check   scripts/check-status-record, whatever build did: issues
+#           status-down and registry-drift
+#
+# build-deploy.yml starts this workflow after each build. The watchdog
+# starts it when its newest run is too old (scripts/dispatch-overdue).
+#
+# ⚠ Pages takes a workflow build only after a person enables it once:
+#   gh api -X POST repos/OWNER/NAME/pages -f build_type=workflow
+# Until then deploy writes a notice and deploys nothing, and the watchdog
+# raises pages-stale (scripts/check-status-site).
+name: Status
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: status
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+    # One Pages artifact name per run attempt. A re-run of build uploads a
+    # second artifact into the same run, and deploy-pages refuses a name that
+    # two artifacts share.
+    outputs:
+      pages_artifact: github-pages-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read the history and the evidence from the branch status
+        id: read
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          in="$RUNNER_TEMP/status"
+          mkdir -p "$in"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)"
+          echo "::add-mask::$auth"
+          rc=0
+          timeout -k 5 120 git -c http.extraheader="AUTHORIZATION: basic $auth" \
+            ls-remote --exit-code --heads "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" status > "$RUNNER_TEMP/heads.txt" || rc=$?
+          case "$rc" in
+            0)
+              timeout -k 5 300 git -c http.extraheader="AUTHORIZATION: basic $auth" \
+                clone --quiet --depth 1 --branch status --single-branch \
+                "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$RUNNER_TEMP/prev"
+              if [ -f "$RUNNER_TEMP/prev/history.jsonl" ]; then
+                cp "$RUNNER_TEMP/prev/history.jsonl" "$in/history.jsonl"
+              fi
+              if [ -d "$RUNNER_TEMP/prev/evidence" ]; then
+                cp -r "$RUNNER_TEMP/prev/evidence" "$in/evidence"
+              fi
+              ;;
+            2)
+              # No branch status: start from the newest status-history
+              # artifact. Without one, the history starts with this run.
+              # ⛔ Only a run of this workflow by this repository on the
+              # default branch counts. A pull request from a fork can upload
+              # an artifact of that name too.
+              echo "::notice::no branch status; the history starts from the newest status-history artifact"
+              branch="${DEFAULT_BRANCH:-}"
+              if [ -z "$branch" ]; then
+                branch="$(timeout -k 5 60 gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)"
+              fi
+              rc=0
+              timeout -k 5 60 gh api "repos/$GITHUB_REPOSITORY/actions/workflows/status.yml/runs?branch=$branch&status=completed&per_page=30" \
+                > "$RUNNER_TEMP/runs.json" || rc=$?
+              if [ "$rc" -eq 0 ]; then
+                jq -r --arg repo "$GITHUB_REPOSITORY" --arg branch "$branch" '.workflow_runs[]
+                  | select(.head_repository.full_name == $repo and .head_branch == $branch
+                           and (.event == "schedule" or .event == "workflow_dispatch" or .event == "push"))
+                  | .id' "$RUNNER_TEMP/runs.json" > "$RUNNER_TEMP/runs.id" || rc=$?
+              fi
+              id=""
+              run=""
+              if [ "$rc" -eq 0 ]; then
+                while read -r run; do
+                  timeout -k 5 60 gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?name=status-history" \
+                    > "$RUNNER_TEMP/artifacts.json" || rc=$?
+                  [ "$rc" -eq 0 ] || break
+                  id="$(jq -r '[.artifacts[] | select(.name == "status-history" and .expired == false) | .id] | .[0] // empty' \
+                    "$RUNNER_TEMP/artifacts.json")" || rc=$?
+                  [ "$rc" -eq 0 ] && [ -z "$id" ] || break
+                done < "$RUNNER_TEMP/runs.id"
+              fi
+              if [ "$rc" -eq 0 ] && [ -n "$id" ]; then
+                timeout -k 5 120 gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > "$RUNNER_TEMP/history.zip" || rc=$?
+              fi
+              if [ "$rc" -ne 0 ]; then
+                echo "::warning::the status-history artifact did not read (ended $rc); the history starts with this run"
+              elif [ -n "$id" ]; then
+                unzip -q -o "$RUNNER_TEMP/history.zip" -d "$in"
+                echo "the history starts from artifact $id of run $run"
+              else
+                echo "::notice::no run of $GITHUB_REPOSITORY on $branch has a status-history artifact; the history starts with this run"
+              fi
+              ;;
+            *)
+              echo "::error::git ls-remote of the branch status ended $rc"
+              exit "$rc"
+              ;;
+          esac
+          ls -la "$in"
+      - name: Measure the images
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/status-collect "$RUNNER_TEMP/status"
+      - name: Render the site
+        run: |
+          python3 --version
+          python3 -I scripts/status-render "$RUNNER_TEMP/status" "$RUNNER_TEMP/site"
+          touch "$RUNNER_TEMP/site/.nojekyll"
+      - name: Push the site to the branch status
+        if: ${{ github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # One orphan commit each run: the branch holds the current state,
+          # and history.jsonl is the record of the runs.
+          branch="$RUNNER_TEMP/branch"
+          rm -rf "$branch"
+          mkdir -p "$branch"
+          cp -r "$RUNNER_TEMP/site/." "$branch/"
+          generated="$(jq -r .generated "$branch/status.json")"
+          cd "$branch"
+          git init --quiet --initial-branch status
+          git add -A
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit --quiet -m "status: $generated"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)"
+          echo "::add-mask::$auth"
+          git -c http.extraheader="AUTHORIZATION: basic $auth" \
+            push --force --quiet "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" HEAD:refs/heads/status
+          echo "branch status: $(git rev-parse HEAD), $(git ls-files | awk 'END { print NR }') file(s), measured $generated"
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: ${{ github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        with:
+          name: github-pages-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/site
+
+  deploy:
+    needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' && (github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - name: Check that Pages takes a workflow build
+        id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rc=0
+          gh api "repos/$GITHUB_REPOSITORY/pages" > "$RUNNER_TEMP/pages.json" 2> "$RUNNER_TEMP/pages.err" || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            type="$(jq -r '.build_type // "unknown"' "$RUNNER_TEMP/pages.json")"
+          elif grep -q 'HTTP 404' "$RUNNER_TEMP/pages.err"; then
+            type=disabled
+          else
+            cat "$RUNNER_TEMP/pages.err" >&2
+            echo "::error::could not read the Pages settings: gh api ended $rc"
+            echo "  reproduce: gh api repos/$GITHUB_REPOSITORY/pages"
+            exit 1
+          fi
+          if [ "$type" = workflow ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Pages is '$type', not a workflow build, so nothing is deployed. A person enables it once: gh api -X POST repos/$GITHUB_REPOSITORY/pages -f build_type=workflow"
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Deploy to Pages
+        id: deploy
+        if: ${{ steps.pages.outputs.deploy == 'true' }}
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        with:
+          artifact_name: ${{ needs.build.outputs.pages_artifact }}
+
+  # The branch status that build pushed, as the artifact status-history. The
+  # concurrency group keeps every other run of this workflow out until this
+  # run ends, so the branch holds what build pushed. Nothing needs this job.
+  keep:
+    needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' && (github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Read the branch status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)"
+          echo "::add-mask::$auth"
+          timeout -k 5 300 git -c http.extraheader="AUTHORIZATION: basic $auth" \
+            clone --quiet --depth 1 --branch status --single-branch \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$RUNNER_TEMP/status"
+          echo "branch status: $(git -C "$RUNNER_TEMP/status" rev-parse HEAD), measured $(jq -r .generated "$RUNNER_TEMP/status/status.json")"
+      - name: Keep the history as an artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: status-history
+          path: |
+            ${{ runner.temp }}/status/history.jsonl
+            ${{ runner.temp }}/status/evidence
+          retention-days: 90
+          if-no-files-found: error
+          overwrite: true
+
+  # ⛔ This runs whatever build did. A build that fails pushes no record, and
+  # then this job raises status-down.
+  check:
+    needs: build
+    if: ${{ always() && (github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Raise or clear status-down and registry-drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: |
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)"
+          echo "::add-mask::$auth"
+          rc=0
+          git -c http.extraheader="AUTHORIZATION: basic $auth" \
+            ls-remote --exit-code --heads origin status > "$RUNNER_TEMP/heads.txt" || rc=$?
+          case "$rc" in
+            0)
+              git -c http.extraheader="AUTHORIZATION: basic $auth" fetch --quiet --depth 1 origin status
+              if git cat-file -e FETCH_HEAD:status.json; then
+                git show FETCH_HEAD:status.json > "$RUNNER_TEMP/status.json"
+              fi
+              ;;
+            2) echo "::notice::no branch status: status.yml has recorded nothing" ;;
+            *)
+              echo "::error::git ls-remote of the branch status ended $rc"
+              exit "$rc"
+              ;;
+          esac
+          scripts/check-status-record "$BUILD_RESULT" "$RUNNER_TEMP/status.json"

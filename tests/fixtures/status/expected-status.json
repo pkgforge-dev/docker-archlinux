@@ -1,0 +1,1204 @@
+{
+  "budget": {
+    "exhausted": false,
+    "seconds": 600
+  },
+  "builds": {
+    "default_branch": "main",
+    "error": false,
+    "newest_run": {
+      "conclusion": "failure",
+      "created_at": "2026-10-16T05:30:00Z",
+      "event": "schedule",
+      "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002",
+      "id": 1002,
+      "run_number": 52,
+      "status": "completed"
+    },
+    "read": true,
+    "runs": 2,
+    "workflow": ".github/workflows/build-deploy.yml"
+  },
+  "generated": "2026-10-16T12:00:00Z",
+  "generated_epoch": 1792152000,
+  "images": {
+    "ghcr": "ghcr.io/test-owner/archlinux",
+    "hub": "docker.io/test/archlinux"
+  },
+  "interval": {
+    "gap_days": 1,
+    "tolerance_days": 3,
+    "workflow": ".github/workflows/build-deploy.yml"
+  },
+  "latest": {
+    "digest": "sha256:5b4a8a76ce719cd14efd7e3a2b6e5791afa62cfd9ac2414283d967113487c425",
+    "error": false,
+    "extra": [],
+    "hub_digest": "sha256:5b4a8a76ce719cd14efd7e3a2b6e5791afa62cfd9ac2414283d967113487c425",
+    "hub_match": true,
+    "missing": [
+      "linux/ppc64le"
+    ],
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64",
+      "linux/arm/v7",
+      "linux/loong64",
+      "linux/ppc",
+      "linux/ppc64",
+      "linux/riscv64"
+    ],
+    "state": "published"
+  },
+  "mirror": {
+    "error": false,
+    "generated": "2026-10-16T11:47:00Z",
+    "read": true,
+    "url": "https://test-owner.github.io/mirror-archlinux/status.json"
+  },
+  "ports": [
+    {
+      "age_seconds": 22188,
+      "aliases": [
+        "x86_64",
+        "amd64"
+      ],
+      "arch": "amd64",
+      "build": {
+        "completed": "2026-10-16T05:45:00Z",
+        "duration_seconds": 840,
+        "event": "schedule",
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "job_id": 100210,
+        "job_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002/job/100210",
+        "result": "success",
+        "run_id": 1002,
+        "run_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002",
+        "started": "2026-10-16T05:31:00Z"
+      },
+      "builds": [
+        {
+          "duration_seconds": 840,
+          "job_id": 100210,
+          "result": "success",
+          "run_id": 1002,
+          "started": "2026-10-16T05:31:00Z"
+        },
+        {
+          "duration_seconds": 900,
+          "job_id": 100110,
+          "result": "success",
+          "run_id": 1001,
+          "started": "2026-10-15T05:31:00Z"
+        }
+      ],
+      "distribution": "Arch Linux",
+      "evidence": {
+        "anchor": "7.1.0.r9.g54d9411-2",
+        "built": "2026-10-16T05:50:12.345678Z",
+        "bytes": 12800000,
+        "digest": "sha256:2e653876ad223a769905309ba37d863f812c1dbe42b5b7f7fdc6d36e1a2ec13f",
+        "error": false,
+        "installed_bytes": 313500000,
+        "matches": true,
+        "packages": 3,
+        "run_id": 1002,
+        "source": "artifact",
+        "source_commit": "aaaa111",
+        "version_id": "2026.10.16"
+      },
+      "ghcr": {
+        "created": "2026-10-16T05:50:12Z",
+        "digest": "sha256:2e653876ad223a769905309ba37d863f812c1dbe42b5b7f7fdc6d36e1a2ec13f",
+        "error": false,
+        "image_digest": "sha256:36c6c2999b30b61fe947733a0694dec9f19cc3a7417f11a6f59485f77d1c0219",
+        "layers": 2,
+        "newest_dated": "2026.10.16",
+        "ref": "x86_64",
+        "revision": "aaaa111",
+        "rolling": {
+          "amd64": "sha256:2e653876ad223a769905309ba37d863f812c1dbe42b5b7f7fdc6d36e1a2ec13f",
+          "x86_64": "sha256:2e653876ad223a769905309ba37d863f812c1dbe42b5b7f7fdc6d36e1a2ec13f"
+        },
+        "size": 105906176,
+        "state": "published",
+        "tags": {
+          "anchor": 2,
+          "dated": 4,
+          "rolling": 2,
+          "total": 8
+        },
+        "version": "2026.10.16"
+      },
+      "homepage": "https://archlinux.org",
+      "hub": {
+        "error": false,
+        "match": true,
+        "newest_dated": "2026.10.16",
+        "rolling": {
+          "amd64": "sha256:2e653876ad223a769905309ba37d863f812c1dbe42b5b7f7fdc6d36e1a2ec13f",
+          "x86_64": "sha256:2e653876ad223a769905309ba37d863f812c1dbe42b5b7f7fdc6d36e1a2ec13f"
+        },
+        "state": "published",
+        "tags": {
+          "anchor": 2,
+          "dated": 4,
+          "rolling": 2,
+          "total": 8
+        }
+      },
+      "in_latest": true,
+      "latest_current": true,
+      "mirror": {
+        "current": false,
+        "lag_seconds": 17766,
+        "read": true,
+        "targets": [
+          {
+            "age_seconds": 3600,
+            "current": true,
+            "found": true,
+            "lag_seconds": 0,
+            "ratio_files": 1,
+            "repo": "core",
+            "state": "promoted",
+            "target": "x86_64-core"
+          },
+          {
+            "age_seconds": 3600,
+            "current": false,
+            "found": true,
+            "lag_seconds": 17766,
+            "ratio_files": 0.9917,
+            "repo": "extra",
+            "state": "promoted",
+            "target": "x86_64-extra"
+          }
+        ]
+      },
+      "pacman_arch": "x86_64",
+      "parity": {
+        "ratio": 1,
+        "same": 8,
+        "tags": 8,
+        "unknown": 0
+      },
+      "platform": "linux/amd64",
+      "repos": [
+        "core",
+        "extra"
+      ]
+    },
+    {
+      "age_seconds": 21000,
+      "aliases": [
+        "aarch64",
+        "arm64"
+      ],
+      "arch": "arm64",
+      "build": {
+        "completed": "2026-10-16T05:58:05Z",
+        "duration_seconds": 1620,
+        "event": "schedule",
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "job_id": 100211,
+        "job_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002/job/100211",
+        "result": "success",
+        "run_id": 1002,
+        "run_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002",
+        "started": "2026-10-16T05:31:05Z"
+      },
+      "builds": [
+        {
+          "duration_seconds": 1620,
+          "job_id": 100211,
+          "result": "success",
+          "run_id": 1002,
+          "started": "2026-10-16T05:31:05Z"
+        },
+        {
+          "duration_seconds": 1680,
+          "job_id": 100111,
+          "result": "success",
+          "run_id": 1001,
+          "started": "2026-10-15T05:31:05Z"
+        }
+      ],
+      "distribution": "Arch Linux ARM",
+      "evidence": {
+        "anchor": "7.1.0.r9.g54d9411-2",
+        "built": "2026-10-16T06:10:00Z",
+        "bytes": 2680000,
+        "digest": "sha256:745ce3aa89003d4403e26b49cfa6750a536b4e127147c207d8d8ebfd22e127a4",
+        "error": false,
+        "installed_bytes": 264400000,
+        "matches": true,
+        "packages": 2,
+        "run_id": null,
+        "source": "stored",
+        "source_commit": "aaaa111",
+        "version_id": "2026.10.16"
+      },
+      "ghcr": {
+        "created": "2026-10-16T06:10:00Z",
+        "digest": "sha256:745ce3aa89003d4403e26b49cfa6750a536b4e127147c207d8d8ebfd22e127a4",
+        "error": false,
+        "image_digest": "sha256:47e9bda392949a273d5af4bb2d05a6ea5d6ca43d0aa385ca06721546ea06a5e2",
+        "layers": 1,
+        "newest_dated": "2026.10.16",
+        "ref": "aarch64",
+        "revision": "aaaa111",
+        "rolling": {
+          "aarch64": "sha256:745ce3aa89003d4403e26b49cfa6750a536b4e127147c207d8d8ebfd22e127a4",
+          "arm64": "sha256:745ce3aa89003d4403e26b49cfa6750a536b4e127147c207d8d8ebfd22e127a4"
+        },
+        "size": 99614720,
+        "state": "published",
+        "tags": {
+          "anchor": 2,
+          "dated": 4,
+          "rolling": 2,
+          "total": 8
+        },
+        "version": "2026.10.16"
+      },
+      "homepage": "https://archlinuxarm.org",
+      "hub": {
+        "error": false,
+        "match": false,
+        "newest_dated": "2026.10.16",
+        "rolling": {
+          "aarch64": "sha256:745ce3aa89003d4403e26b49cfa6750a536b4e127147c207d8d8ebfd22e127a4",
+          "arm64": "sha256:dff9de10919148711140d349bf03f1a99eb06f94b03e51715ccebfa7cdc518e2"
+        },
+        "state": "published",
+        "tags": {
+          "anchor": 2,
+          "dated": 4,
+          "rolling": 2,
+          "total": 8
+        }
+      },
+      "in_latest": true,
+      "latest_current": true,
+      "mirror": {
+        "current": false,
+        "lag_seconds": 173110,
+        "read": true,
+        "targets": [
+          {
+            "age_seconds": 7200,
+            "current": false,
+            "found": true,
+            "lag_seconds": 173110,
+            "ratio_files": 0.9808,
+            "repo": "core",
+            "state": "promoted",
+            "target": "aarch64-core"
+          },
+          {
+            "age_seconds": 7200,
+            "current": false,
+            "found": true,
+            "lag_seconds": 32392,
+            "ratio_files": 0.9837,
+            "repo": "extra",
+            "state": "promoted",
+            "target": "aarch64-extra"
+          },
+          {
+            "age_seconds": 7200,
+            "current": true,
+            "found": true,
+            "lag_seconds": 0,
+            "ratio_files": 1,
+            "repo": "alarm",
+            "state": "promoted",
+            "target": "aarch64-alarm"
+          },
+          {
+            "age_seconds": 7200,
+            "current": true,
+            "found": true,
+            "lag_seconds": 0,
+            "ratio_files": 1,
+            "repo": "aur",
+            "state": "promoted",
+            "target": "aarch64-aur"
+          }
+        ]
+      },
+      "pacman_arch": "aarch64",
+      "parity": {
+        "ratio": 0.875,
+        "same": 7,
+        "tags": 8,
+        "unknown": 0
+      },
+      "platform": "linux/arm64",
+      "repos": [
+        "core",
+        "extra",
+        "alarm",
+        "aur"
+      ]
+    },
+    {
+      "age_seconds": 20400,
+      "aliases": [
+        "armv7l",
+        "armv7h",
+        "armv7"
+      ],
+      "arch": "armv7",
+      "build": {
+        "completed": "2026-10-16T06:05:10Z",
+        "duration_seconds": 2040,
+        "event": "schedule",
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "job_id": 100212,
+        "job_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002/job/100212",
+        "result": "success",
+        "run_id": 1002,
+        "run_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002",
+        "started": "2026-10-16T05:31:10Z"
+      },
+      "builds": [
+        {
+          "duration_seconds": 2040,
+          "job_id": 100212,
+          "result": "success",
+          "run_id": 1002,
+          "started": "2026-10-16T05:31:10Z"
+        },
+        {
+          "duration_seconds": 2160,
+          "job_id": 100112,
+          "result": "success",
+          "run_id": 1001,
+          "started": "2026-10-15T05:31:10Z"
+        }
+      ],
+      "distribution": "Arch Linux ARM",
+      "evidence": {
+        "anchor": "7.1.0.r9.g54d9411-2",
+        "built": "2026-10-16T06:20:00Z",
+        "bytes": 860000,
+        "digest": "sha256:ea9b1a3323bc4cceb71f1d9c0d80d89000e593d5a268cb096d12287fb3407bc4",
+        "error": false,
+        "installed_bytes": 240000000,
+        "matches": true,
+        "packages": 1,
+        "run_id": 1001,
+        "source": "artifact",
+        "source_commit": "aaaa111",
+        "version_id": "2026.10.16"
+      },
+      "ghcr": {
+        "created": "2026-10-16T06:20:00Z",
+        "digest": "sha256:ea9b1a3323bc4cceb71f1d9c0d80d89000e593d5a268cb096d12287fb3407bc4",
+        "error": false,
+        "image_digest": "sha256:9e9175ecf655a0e56dfd770db1203eaa69a218c9197f8fc84c38a24c175c48ac",
+        "layers": 2,
+        "newest_dated": "2026.10.16",
+        "ref": "armv7l",
+        "revision": "aaaa111",
+        "rolling": {
+          "armv7": "sha256:ea9b1a3323bc4cceb71f1d9c0d80d89000e593d5a268cb096d12287fb3407bc4",
+          "armv7h": "sha256:ea9b1a3323bc4cceb71f1d9c0d80d89000e593d5a268cb096d12287fb3407bc4",
+          "armv7l": "sha256:ea9b1a3323bc4cceb71f1d9c0d80d89000e593d5a268cb096d12287fb3407bc4"
+        },
+        "size": 84410368,
+        "state": "published",
+        "tags": {
+          "anchor": 3,
+          "dated": 6,
+          "rolling": 3,
+          "total": 12
+        },
+        "version": "2026.10.16"
+      },
+      "homepage": "https://archlinuxarm.org",
+      "hub": {
+        "error": false,
+        "match": true,
+        "newest_dated": "2026.10.16",
+        "rolling": {
+          "armv7": "sha256:ea9b1a3323bc4cceb71f1d9c0d80d89000e593d5a268cb096d12287fb3407bc4",
+          "armv7h": "sha256:ea9b1a3323bc4cceb71f1d9c0d80d89000e593d5a268cb096d12287fb3407bc4",
+          "armv7l": "sha256:ea9b1a3323bc4cceb71f1d9c0d80d89000e593d5a268cb096d12287fb3407bc4"
+        },
+        "state": "published",
+        "tags": {
+          "anchor": 3,
+          "dated": 5,
+          "rolling": 3,
+          "total": 11
+        }
+      },
+      "in_latest": true,
+      "latest_current": true,
+      "mirror": {
+        "current": true,
+        "lag_seconds": 0,
+        "read": true,
+        "targets": [
+          {
+            "age_seconds": 5400,
+            "current": true,
+            "found": true,
+            "lag_seconds": 0,
+            "ratio_files": 1,
+            "repo": "core",
+            "state": "promoted",
+            "target": "armv7h-core"
+          },
+          {
+            "age_seconds": 5400,
+            "current": true,
+            "found": true,
+            "lag_seconds": 0,
+            "ratio_files": 1,
+            "repo": "extra",
+            "state": "promoted",
+            "target": "armv7h-extra"
+          },
+          {
+            "age_seconds": 5400,
+            "current": true,
+            "found": true,
+            "lag_seconds": 0,
+            "ratio_files": 1,
+            "repo": "alarm",
+            "state": "promoted",
+            "target": "armv7h-alarm"
+          },
+          {
+            "age_seconds": 5400,
+            "current": true,
+            "found": true,
+            "lag_seconds": 0,
+            "ratio_files": 1,
+            "repo": "aur",
+            "state": "promoted",
+            "target": "armv7h-aur"
+          }
+        ]
+      },
+      "pacman_arch": "armv7h",
+      "parity": {
+        "ratio": 0.9166666666666666,
+        "same": 11,
+        "tags": 12,
+        "unknown": 0
+      },
+      "platform": "linux/arm/v7",
+      "repos": [
+        "core",
+        "extra",
+        "alarm",
+        "aur"
+      ]
+    },
+    {
+      "age_seconds": 21720,
+      "aliases": [
+        "loongarch64",
+        "loong64"
+      ],
+      "arch": "loong64",
+      "build": {
+        "completed": "2026-10-16T05:50:15Z",
+        "duration_seconds": 1140,
+        "event": "schedule",
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "job_id": 100213,
+        "job_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002/job/100213",
+        "result": "success",
+        "run_id": 1002,
+        "run_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002",
+        "started": "2026-10-16T05:31:15Z"
+      },
+      "builds": [
+        {
+          "duration_seconds": 1140,
+          "job_id": 100213,
+          "result": "success",
+          "run_id": 1002,
+          "started": "2026-10-16T05:31:15Z"
+        }
+      ],
+      "distribution": "Arch Linux for Loong64 (LCPU)",
+      "evidence": {
+        "anchor": null,
+        "built": null,
+        "bytes": null,
+        "digest": null,
+        "error": false,
+        "installed_bytes": null,
+        "matches": null,
+        "packages": null,
+        "run_id": null,
+        "source": null,
+        "source_commit": null,
+        "version_id": null
+      },
+      "ghcr": {
+        "created": "2026-10-16T05:58:00Z",
+        "digest": "sha256:20b456c4e827d9db8c526c8599314733ec1722024cb2924736354905c7acad31",
+        "error": false,
+        "image_digest": "sha256:20b456c4e827d9db8c526c8599314733ec1722024cb2924736354905c7acad31",
+        "layers": 1,
+        "newest_dated": "2026.10.16",
+        "ref": "loongarch64",
+        "revision": "aaaa111",
+        "rolling": {
+          "loong64": "sha256:20b456c4e827d9db8c526c8599314733ec1722024cb2924736354905c7acad31",
+          "loongarch64": "sha256:20b456c4e827d9db8c526c8599314733ec1722024cb2924736354905c7acad31"
+        },
+        "size": 94371840,
+        "state": "published",
+        "tags": {
+          "anchor": 2,
+          "dated": 2,
+          "rolling": 2,
+          "total": 6
+        },
+        "version": "2026.10.16"
+      },
+      "homepage": "https://loongarchlinux.lcpu.dev",
+      "hub": {
+        "error": false,
+        "match": true,
+        "newest_dated": "2026.10.16",
+        "rolling": {
+          "loong64": "sha256:20b456c4e827d9db8c526c8599314733ec1722024cb2924736354905c7acad31",
+          "loongarch64": "sha256:20b456c4e827d9db8c526c8599314733ec1722024cb2924736354905c7acad31"
+        },
+        "state": "published",
+        "tags": {
+          "anchor": 2,
+          "dated": 2,
+          "rolling": 2,
+          "total": 6
+        }
+      },
+      "in_latest": true,
+      "latest_current": true,
+      "mirror": {
+        "current": true,
+        "lag_seconds": 0,
+        "read": true,
+        "targets": [
+          {
+            "age_seconds": 34560,
+            "current": true,
+            "found": true,
+            "lag_seconds": 0,
+            "ratio_files": 1,
+            "repo": "core",
+            "state": "promoted",
+            "target": "loong64-core"
+          },
+          {
+            "age_seconds": 34560,
+            "current": true,
+            "found": true,
+            "lag_seconds": 0,
+            "ratio_files": 1,
+            "repo": "extra",
+            "state": "promoted",
+            "target": "loong64-extra"
+          }
+        ]
+      },
+      "pacman_arch": "loong64",
+      "parity": {
+        "ratio": 1,
+        "same": 6,
+        "tags": 6,
+        "unknown": 0
+      },
+      "platform": "linux/loong64",
+      "repos": [
+        "core",
+        "extra"
+      ]
+    },
+    {
+      "age_seconds": 3552300,
+      "aliases": [
+        "ppc",
+        "powerpc"
+      ],
+      "arch": "ppc",
+      "build": {
+        "completed": "2026-10-16T05:33:20Z",
+        "duration_seconds": 120,
+        "event": "schedule",
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "job_id": 100214,
+        "job_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002/job/100214",
+        "result": "failure",
+        "run_id": 1002,
+        "run_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002",
+        "started": "2026-10-16T05:31:20Z"
+      },
+      "builds": [
+        {
+          "duration_seconds": 120,
+          "job_id": 100214,
+          "result": "failure",
+          "run_id": 1002,
+          "started": "2026-10-16T05:31:20Z"
+        },
+        {
+          "duration_seconds": 90,
+          "job_id": 100114,
+          "result": "failure",
+          "run_id": 1001,
+          "started": "2026-10-15T05:31:20Z"
+        }
+      ],
+      "distribution": "ArchPOWER",
+      "evidence": {
+        "anchor": "7.1.0.r9.g54d9411-2.2",
+        "built": "2026-09-05T09:15:00Z",
+        "bytes": 2200000,
+        "digest": "sha256:e5416521fe45f8bcd57c928b860c8989fd67533db3b770013a475b33aafdf97a",
+        "error": false,
+        "installed_bytes": 193600000,
+        "matches": true,
+        "packages": 2,
+        "run_id": null,
+        "source": "stored",
+        "source_commit": "bbbb222",
+        "version_id": "2026.09.05"
+      },
+      "ghcr": {
+        "created": "2026-09-05T09:15:00Z",
+        "digest": "sha256:e5416521fe45f8bcd57c928b860c8989fd67533db3b770013a475b33aafdf97a",
+        "error": false,
+        "image_digest": "sha256:5f4e6f54f04b8aabf851b7d3cff14140018bebcada51cb8bbfc1f0db8f04e10a",
+        "layers": 1,
+        "newest_dated": "2026.09.05",
+        "ref": "ppc",
+        "revision": "bbbb222",
+        "rolling": {
+          "powerpc": "sha256:e5416521fe45f8bcd57c928b860c8989fd67533db3b770013a475b33aafdf97a",
+          "ppc": "sha256:e5416521fe45f8bcd57c928b860c8989fd67533db3b770013a475b33aafdf97a"
+        },
+        "size": 73400320,
+        "state": "published",
+        "tags": {
+          "anchor": 2,
+          "dated": 2,
+          "rolling": 2,
+          "total": 6
+        },
+        "version": "2026.09.05"
+      },
+      "homepage": "https://archlinuxpower.org",
+      "hub": {
+        "error": false,
+        "match": true,
+        "newest_dated": "2026.09.05",
+        "rolling": {
+          "powerpc": "sha256:e5416521fe45f8bcd57c928b860c8989fd67533db3b770013a475b33aafdf97a",
+          "ppc": "sha256:e5416521fe45f8bcd57c928b860c8989fd67533db3b770013a475b33aafdf97a"
+        },
+        "state": "published",
+        "tags": {
+          "anchor": 2,
+          "dated": 2,
+          "rolling": 2,
+          "total": 6
+        }
+      },
+      "in_latest": true,
+      "latest_current": true,
+      "mirror": {
+        "current": true,
+        "lag_seconds": 0,
+        "read": true,
+        "targets": [
+          {
+            "age_seconds": 12240,
+            "current": true,
+            "found": true,
+            "lag_seconds": 0,
+            "ratio_files": 1,
+            "repo": "base",
+            "state": "promoted",
+            "target": "powerpc-base"
+          },
+          {
+            "age_seconds": 50040,
+            "current": true,
+            "found": true,
+            "lag_seconds": 0,
+            "ratio_files": 1,
+            "repo": "base-any",
+            "state": "promoted",
+            "target": "powerpc-base-any"
+          }
+        ]
+      },
+      "pacman_arch": "powerpc",
+      "parity": {
+        "ratio": 1,
+        "same": 6,
+        "tags": 6,
+        "unknown": 0
+      },
+      "platform": "linux/ppc",
+      "repos": [
+        "base",
+        "base-any"
+      ]
+    },
+    {
+      "age_seconds": null,
+      "aliases": [
+        "ppc64",
+        "powerpc64"
+      ],
+      "arch": "ppc64",
+      "build": {
+        "completed": "2026-10-16T06:20:25Z",
+        "duration_seconds": 2940,
+        "event": "schedule",
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "job_id": 100215,
+        "job_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002/job/100215",
+        "result": "success",
+        "run_id": 1002,
+        "run_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002",
+        "started": "2026-10-16T05:31:25Z"
+      },
+      "builds": [
+        {
+          "duration_seconds": 2940,
+          "job_id": 100215,
+          "result": "success",
+          "run_id": 1002,
+          "started": "2026-10-16T05:31:25Z"
+        },
+        {
+          "duration_seconds": 2820,
+          "job_id": 100115,
+          "result": "cancelled",
+          "run_id": 1001,
+          "started": "2026-10-15T05:31:25Z"
+        }
+      ],
+      "distribution": "ArchPOWER",
+      "evidence": {
+        "anchor": null,
+        "built": null,
+        "bytes": null,
+        "digest": null,
+        "error": false,
+        "installed_bytes": null,
+        "matches": null,
+        "packages": null,
+        "run_id": null,
+        "source": null,
+        "source_commit": null,
+        "version_id": null
+      },
+      "ghcr": {
+        "created": null,
+        "digest": "sha256:ba5f40110a1097c7937ee0e15528b02da27ef29e5199ecebd827e33a7595afc6",
+        "error": true,
+        "image_digest": null,
+        "layers": null,
+        "newest_dated": "2026.09.05",
+        "ref": "ppc64",
+        "revision": null,
+        "rolling": {
+          "powerpc64": "sha256:ba5f40110a1097c7937ee0e15528b02da27ef29e5199ecebd827e33a7595afc6",
+          "ppc64": "sha256:ba5f40110a1097c7937ee0e15528b02da27ef29e5199ecebd827e33a7595afc6"
+        },
+        "size": null,
+        "state": "error",
+        "tags": {
+          "anchor": 2,
+          "dated": 2,
+          "rolling": 2,
+          "total": 6
+        },
+        "version": null
+      },
+      "homepage": "https://archlinuxpower.org",
+      "hub": {
+        "error": false,
+        "match": null,
+        "newest_dated": "2026.09.05",
+        "rolling": {
+          "powerpc64": "sha256:ba5f40110a1097c7937ee0e15528b02da27ef29e5199ecebd827e33a7595afc6",
+          "ppc64": "sha256:ba5f40110a1097c7937ee0e15528b02da27ef29e5199ecebd827e33a7595afc6"
+        },
+        "state": "published",
+        "tags": {
+          "anchor": 2,
+          "dated": 2,
+          "rolling": 2,
+          "total": 6
+        }
+      },
+      "in_latest": true,
+      "latest_current": null,
+      "mirror": {
+        "current": null,
+        "lag_seconds": null,
+        "read": true,
+        "targets": [
+          {
+            "age_seconds": null,
+            "current": null,
+            "found": false,
+            "lag_seconds": null,
+            "ratio_files": null,
+            "repo": "base",
+            "state": null,
+            "target": "powerpc64-base"
+          },
+          {
+            "age_seconds": null,
+            "current": null,
+            "found": false,
+            "lag_seconds": null,
+            "ratio_files": null,
+            "repo": "base-any",
+            "state": null,
+            "target": "powerpc64-base-any"
+          }
+        ]
+      },
+      "pacman_arch": "powerpc64",
+      "parity": {
+        "ratio": 1,
+        "same": 6,
+        "tags": 6,
+        "unknown": 0
+      },
+      "platform": "linux/ppc64",
+      "repos": [
+        "base",
+        "base-any"
+      ]
+    },
+    {
+      "age_seconds": 3551700,
+      "aliases": [
+        "ppc64le",
+        "powerpc64le"
+      ],
+      "arch": "ppc64le",
+      "build": {
+        "completed": "2026-10-16T06:22:30Z",
+        "duration_seconds": 3060,
+        "event": "schedule",
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "job_id": 100216,
+        "job_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002/job/100216",
+        "result": "success",
+        "run_id": 1002,
+        "run_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002",
+        "started": "2026-10-16T05:31:30Z"
+      },
+      "builds": [
+        {
+          "duration_seconds": 3060,
+          "job_id": 100216,
+          "result": "success",
+          "run_id": 1002,
+          "started": "2026-10-16T05:31:30Z"
+        },
+        {
+          "duration_seconds": 3240,
+          "job_id": 100116,
+          "result": "success",
+          "run_id": 1001,
+          "started": "2026-10-15T05:31:30Z"
+        }
+      ],
+      "distribution": "ArchPOWER",
+      "evidence": {
+        "anchor": "7.1.0.r9.g54d9411-2",
+        "built": "2026-09-05T09:25:00Z",
+        "bytes": 720000,
+        "digest": "sha256:1cb4682f7bc56a8f7554129156b860ee79e273643a807de37578227f288644cc",
+        "error": false,
+        "installed_bytes": 210000000,
+        "matches": false,
+        "packages": 1,
+        "run_id": null,
+        "source": "stored",
+        "source_commit": "bbbb222",
+        "version_id": "2026.09.05"
+      },
+      "ghcr": {
+        "created": "2026-09-05T09:25:00Z",
+        "digest": "sha256:78be9a8650b268bcc04eab486b1fd5f61e4a4dd2f3cc22f39fcb217b93ac7e8d",
+        "error": false,
+        "image_digest": "sha256:2a8d4cc051c703fb79d506876deede4753b7dfc78d23a3a464429ff3aeb0b283",
+        "layers": 1,
+        "newest_dated": "2026.09.05",
+        "ref": "ppc64le",
+        "revision": "bbbb222",
+        "rolling": {
+          "powerpc64le": "sha256:78be9a8650b268bcc04eab486b1fd5f61e4a4dd2f3cc22f39fcb217b93ac7e8d",
+          "ppc64le": "sha256:78be9a8650b268bcc04eab486b1fd5f61e4a4dd2f3cc22f39fcb217b93ac7e8d"
+        },
+        "size": 77594624,
+        "state": "published",
+        "tags": {
+          "anchor": 2,
+          "dated": 2,
+          "rolling": 2,
+          "total": 6
+        },
+        "version": "2026.09.05"
+      },
+      "homepage": "https://archlinuxpower.org",
+      "hub": {
+        "error": false,
+        "match": true,
+        "newest_dated": "2026.09.05",
+        "rolling": {
+          "powerpc64le": "sha256:78be9a8650b268bcc04eab486b1fd5f61e4a4dd2f3cc22f39fcb217b93ac7e8d",
+          "ppc64le": "sha256:78be9a8650b268bcc04eab486b1fd5f61e4a4dd2f3cc22f39fcb217b93ac7e8d"
+        },
+        "state": "published",
+        "tags": {
+          "anchor": 2,
+          "dated": 2,
+          "rolling": 2,
+          "total": 6
+        }
+      },
+      "in_latest": false,
+      "latest_current": null,
+      "mirror": {
+        "current": true,
+        "lag_seconds": 0,
+        "read": true,
+        "targets": [
+          {
+            "age_seconds": 43920,
+            "current": true,
+            "found": true,
+            "lag_seconds": 0,
+            "ratio_files": 1,
+            "repo": "base",
+            "state": "promoted",
+            "target": "powerpc64le-base"
+          },
+          {
+            "age_seconds": 43920,
+            "current": true,
+            "found": true,
+            "lag_seconds": 0,
+            "ratio_files": 1,
+            "repo": "base-any",
+            "state": "promoted",
+            "target": "powerpc64le-base-any"
+          }
+        ]
+      },
+      "pacman_arch": "powerpc64le",
+      "parity": {
+        "ratio": 1,
+        "same": 6,
+        "tags": 6,
+        "unknown": 0
+      },
+      "platform": "linux/ppc64le",
+      "repos": [
+        "base",
+        "base-any"
+      ]
+    },
+    {
+      "age_seconds": 15600,
+      "aliases": [
+        "riscv64"
+      ],
+      "arch": "riscv64",
+      "build": {
+        "completed": "2026-10-16T06:40:35Z",
+        "duration_seconds": 4140,
+        "event": "schedule",
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "job_id": 100217,
+        "job_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002/job/100217",
+        "result": "success",
+        "run_id": 1002,
+        "run_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1002",
+        "started": "2026-10-16T05:31:35Z"
+      },
+      "builds": [
+        {
+          "duration_seconds": 4140,
+          "job_id": 100217,
+          "result": "success",
+          "run_id": 1002,
+          "started": "2026-10-16T05:31:35Z"
+        },
+        {
+          "duration_seconds": 4380,
+          "job_id": 100117,
+          "result": "success",
+          "run_id": 1001,
+          "started": "2026-10-15T05:31:35Z"
+        }
+      ],
+      "distribution": "Arch Linux RISC-V",
+      "evidence": {
+        "anchor": "7.1.0.r9.g54d9411-2.1",
+        "built": "2026-10-16T07:40:00Z",
+        "bytes": 930000,
+        "digest": "sha256:c15ebd0d6d3ecc7984d6d18e7c7520de2d70dbfa471ebc78d8f9528a71495f58",
+        "error": false,
+        "installed_bytes": 230300000,
+        "matches": true,
+        "packages": 2,
+        "run_id": 1002,
+        "source": "artifact",
+        "source_commit": "aaaa111",
+        "version_id": "2026.10.16"
+      },
+      "ghcr": {
+        "created": "2026-10-16T07:40:00Z",
+        "digest": "sha256:c15ebd0d6d3ecc7984d6d18e7c7520de2d70dbfa471ebc78d8f9528a71495f58",
+        "error": false,
+        "image_digest": "sha256:faa3a28be2b1007ae26d72f7cd93fa367325c652fdfd57dcae1ac8e3a9f3d6f8",
+        "layers": 1,
+        "newest_dated": "2026.10.16",
+        "ref": "riscv64",
+        "revision": "aaaa111",
+        "rolling": {
+          "riscv64": "sha256:c15ebd0d6d3ecc7984d6d18e7c7520de2d70dbfa471ebc78d8f9528a71495f58"
+        },
+        "size": 89128960,
+        "state": "published",
+        "tags": {
+          "anchor": 2,
+          "dated": 2,
+          "rolling": 1,
+          "total": 5
+        },
+        "version": "2026.10.16"
+      },
+      "homepage": "https://archriscv.felixc.at",
+      "hub": {
+        "error": false,
+        "match": true,
+        "newest_dated": "2026.10.16",
+        "rolling": {
+          "riscv64": "sha256:c15ebd0d6d3ecc7984d6d18e7c7520de2d70dbfa471ebc78d8f9528a71495f58"
+        },
+        "state": "published",
+        "tags": {
+          "anchor": 2,
+          "dated": 2,
+          "rolling": 1,
+          "total": 5
+        }
+      },
+      "in_latest": true,
+      "latest_current": true,
+      "mirror": {
+        "current": false,
+        "lag_seconds": 48116,
+        "read": true,
+        "targets": [
+          {
+            "age_seconds": 9000,
+            "current": false,
+            "found": true,
+            "lag_seconds": 48116,
+            "ratio_files": 0.9932,
+            "repo": "core",
+            "state": "promoted",
+            "target": "riscv64-core"
+          },
+          {
+            "age_seconds": 9000,
+            "current": false,
+            "found": true,
+            "lag_seconds": 8676,
+            "ratio_files": 0.9884,
+            "repo": "extra",
+            "state": "promoted",
+            "target": "riscv64-extra"
+          }
+        ]
+      },
+      "pacman_arch": "riscv64",
+      "parity": {
+        "ratio": 1,
+        "same": 5,
+        "tags": 5,
+        "unknown": 0
+      },
+      "platform": "linux/riscv64",
+      "repos": [
+        "core",
+        "extra"
+      ]
+    }
+  ],
+  "registries": {
+    "drift_runs": 2,
+    "ghcr": {
+      "error": false,
+      "image": "ghcr.io/test-owner/archlinux",
+      "read": true,
+      "tags": 60
+    },
+    "hub": {
+      "error": false,
+      "image": "docker.io/test/archlinux",
+      "read": true,
+      "tags": 59
+    },
+    "index": {
+      "ratio": 1,
+      "same": 3,
+      "tags": 3,
+      "unknown": 0
+    },
+    "parity": 0.9666666666666667,
+    "pinned": {
+      "missing": 1,
+      "missing_names": [
+        "armv7h-v2026.10.15"
+      ],
+      "present": 42,
+      "total": 43
+    },
+    "rolling": {
+      "differs": [
+        "arm64"
+      ],
+      "same": 16,
+      "total": 17,
+      "unknown": 0
+    }
+  },
+  "schema": 1,
+  "site_url": "https://test-owner.github.io/docker-archlinux/",
+  "source": "https://github.com/test-owner/docker-archlinux",
+  "summary": {
+    "absent": 0,
+    "builds_known": 8,
+    "builds_passed": 7,
+    "ports": 8,
+    "published": 7,
+    "unread": 1,
+    "with_evidence": 6
+  }
+}

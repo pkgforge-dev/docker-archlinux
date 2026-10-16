@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# The final image must have a working shell.
+# The image has a shell.
 #
-# When the bootstrap installs nothing, the scratch stage receives only empty
-# directories and every later instruction fails with
+# When the bootstrap installs nothing, the image stage gets empty directories,
+# and each later instruction fails with
 #   runc run failed: exec: "/bin/sh": stat /bin/sh: no such file or directory
-# The image is inspected without being started, because an image in that state
-# cannot run anything at all.
+# So the test creates a container and does not start it: an image in that
+# state can run nothing.
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR/..
 # shellcheck source=lib/harness.sh
@@ -25,14 +25,15 @@ for path in /bin/sh /usr/bin/bash; do
   if img_extract "$cid" "$path" "$work/x$name" >/dev/null 2>>"$work/err"; then
     size="$(wc -c < "$work/x$name" | tr -d '[:space:]')"
     if [ "$size" -gt 0 ]; then
-      ok "$path exists and resolves in $IMAGE on $PLATFORM ($size bytes)"
+      ok "$path is in $IMAGE on $PLATFORM and resolves ($size bytes)"
     else
       fail "$path is not empty in $IMAGE on $PLATFORM" "size: $size bytes" \
         "reproduce: $RUNTIME create --platform $PLATFORM $IMAGE true, then $RUNTIME cp CID:$path ."
     fi
   else
-    fail "$path exists and resolves in $IMAGE on $PLATFORM" \
-      "the path is missing, or it is a symlink with no target" \
+    fail "$path is in $IMAGE on $PLATFORM and resolves" \
+      "the path is not there, or it is a link with no target" \
+      "runtime said: $(tr -d '\r' < "$work/err" | awk 'NF { last = $0 } END { print last }')" \
       "reproduce: $RUNTIME create --platform $PLATFORM $IMAGE true, then $RUNTIME cp CID:$path ."
   fi
 done

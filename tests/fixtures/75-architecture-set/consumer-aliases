@@ -1,0 +1,11 @@
+# Tag aliases that another repository pulls by name, one per line.
+# mirror-archlinux pins ghcr.io/pkgforge-dev/archlinux:<alias>@sha256 in its
+# targets/*.conf keyring_image lines. Each alias here must stay an alias of a
+# port in ports/*.conf.
+aarch64
+armv7h
+loong64
+riscv64
+ppc
+ppc64
+ppc64le

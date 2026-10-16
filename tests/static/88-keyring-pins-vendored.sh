@@ -1,22 +1,20 @@
 #!/usr/bin/env bash
 #
-# Every keyring pin carries its package, and the package is the pin.
+# Each keyring pin has its package in the tree, and the package is the pin.
 #
-# ⛔ A port deletes a superseded keyring package from its mirror. A build that
-# could only fetch its pin by name failed every day the pin was behind: loong64
-# from 2026-09-06. bootstrap/any/usr/local/bin/install-port-keyring now reads
-# the package from the tree, so the tree has to carry it, and carry the bytes
-# the pin names. HISTORY/outage-2026-09.md.
+# ⛔ A port deletes an old keyring package from its mirrors. So
+# bootstrap/any/usr/local/bin/install-port-keyring reads the package from the
+# tree, and the tree must have the bytes that the pin names.
 #
-# Asserted per pin:
-#   1. the package the pin names is in bootstrap/keyrings/ under that name
-#   2. it hashes to the pin's sha256
-#   3. its trusted set is the pin's trusted set, and every expiry matches
-# and over the directory:
-#   4. no package sits there that no pin names
+# For each pin:
+#   1. the pin has a mirror line, and the first mirror line is https
+#   2. the package that the pin names is in bootstrap/keyrings/ under that name
+#   3. its sha256 is the sha256 of the pin
+#   4. its trusted set is the trusted set of the pin, with each expiry
+# For the directory:
+#   5. each package in it is one that a pin names
 #
-# ⚠ 3 needs gpg and an archive reader that knows xz and zstd. A host without
-# them says which assertion it skipped.
+# 4 needs gpg (need_tool), and an archive reader for xz and zstd.
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR/..
 # shellcheck source=lib/harness.sh
@@ -36,6 +34,17 @@ field() {
     }' "$1" | tr -d '\r'
 }
 
+# field_all FILE KEY -> each value of KEY, in file order
+field_all() {
+  awk -F= -v k="$2" '
+    $0 ~ /^[[:space:]]*#/ { next }
+    $1 ~ "^[[:space:]]*" k "[[:space:]]*$" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      sub(/[[:space:]]+$/, "")
+      print
+    }' "$1" | tr -d '\r'
+}
+
 # unpack ARCHIVE DIR -> 0 when the archive was read
 unpack() {
   if command -v bsdtar > /dev/null; then
@@ -46,7 +55,7 @@ unpack() {
 }
 
 can_read_keys=1
-command -v gpg > /dev/null || can_read_keys=0
+need_tool gpg || can_read_keys=0
 
 work="$(work_dir)"
 trap 'rm -rf "$work"' EXIT
@@ -63,69 +72,82 @@ for pin in "$DIR"/*.pin; do
   named="$named$pkg
 "
 
-  # 1. present
+  # 1. The mirror lines
+  mirrors="$(field_all "$pin" mirror)"
+  first="$(awk 'NF { print; exit }' <<< "$mirrors")"
+  case "$first" in
+    https://*)
+      ok "$rel has $(awk 'NF { n++ } END { print n + 0 }' <<< "$mirrors") mirror line(s), and the first is https"
+      ;;
+    *)
+      fail "$rel has a mirror line, and the first is https" \
+        "first mirror line: ${first:-none}" \
+        "install-port-keyring and scripts/check-keyring-pin try the mirror lines in file order" \
+        "reproduce: grep -n '^mirror' $rel"
+      ;;
+  esac
+
+  # 2. The package is in the tree
   if [ ! -f "$DIR/$pkg" ]; then
     fail "$rel has its package in the tree" \
       "missing: bootstrap/keyrings/$pkg" \
-      "the build reads the pinned package from the tree, because a port deletes a superseded one from its mirror" \
-      "reproduce: ls bootstrap/keyrings/$pkg, and scripts/check-keyring-pin --apply $rel to fetch it"
+      "the build reads the pinned package from the tree" \
+      "reproduce: ls bootstrap/keyrings/$pkg; scripts/check-keyring-pin --apply $rel puts it there"
     continue
   fi
   ok "$rel has its package in the tree, $pkg"
 
-  # 2. the bytes the pin names
+  # 3. The sha256
   got="$(sha256sum "$DIR/$pkg" | cut -d' ' -f1)"
   if [ "$got" = "$want" ]; then
-    ok "$pkg hashes to the pin's sha256"
+    ok "$pkg has the sha256 of the pin"
   else
-    fail "$pkg hashes to the pin's sha256" \
-      "pin says: $want" \
-      "tree has: $got" \
-      "⛔ either the pin or the file was edited without the other" \
+    fail "$pkg has the sha256 of the pin" \
+      "pin : $want" \
+      "tree: $got" \
+      "⛔ the pin or the file changed without the other" \
       "reproduce: sha256sum bootstrap/keyrings/$pkg"
     continue
   fi
 
-  # 3. the trusted set inside it is the pinned set, with the pinned dates
+  # 4. The trusted set in the package, with each expiry
   if [ "$can_read_keys" -eq 0 ]; then
-    diag "skipped for $pkg: gpg is not on PATH, so the key material cannot be read"
     continue
   fi
   x="$work/${pkg%%.pkg.tar.*}"
   mkdir -p "$x"
   if ! unpack "$DIR/$pkg" "$x" > "$work/unpack.err" 2>&1; then
-    diag "skipped for $pkg: this host cannot read the archive: $(awk 'NF { print; exit }' "$work/unpack.err")"
+    fail "this host can read $pkg" \
+      "$(awk 'NF { print; exit }' "$work/unpack.err")" \
+      "reproduce: bsdtar -tf bootstrap/keyrings/$pkg"
     continue
   fi
   src="$x/usr/share/pacman/keyrings"
   if [ ! -f "$src/$keyring-trusted" ] || [ ! -f "$src/$keyring.gpg" ]; then
-    fail "$pkg carries the $keyring keyring" \
-      "no $keyring-trusted or $keyring.gpg under usr/share/pacman/keyrings" \
+    fail "$pkg has the $keyring keyring" \
+      "no $keyring-trusted or $keyring.gpg in usr/share/pacman/keyrings" \
       "reproduce: bsdtar -tf bootstrap/keyrings/$pkg"
     continue
   fi
 
-  awk -F= '$0 !~ /^[[:space:]]*#/ && $1 ~ /^[[:space:]]*trusted[[:space:]]*$/ {
-             sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print }' "$pin" \
-    | tr -d '\r' | LC_ALL=C sort > "$work/pin.txt"
-  gpg --batch --with-colons --fixed-list-mode --show-keys "$src/$keyring.gpg" 2> "$work/gpg.err" \
-    | awk -F: '
-        $1 == "pub" { expires = $7; seen = 1; next }
-        $1 == "fpr" && seen {
-          if (expires == "") { print $10 " never" }
-          else { print $10 " " strftime("%Y-%m-%d", expires + 0, 1) }
-          seen = 0
-        }' | LC_ALL=C sort > "$work/expiry.txt"
-  cut -d: -f1 < "$src/$keyring-trusted" | awk 'NF' | LC_ALL=C sort \
-    | awk 'NR == FNR { e[$1] = $2; next } { print $1 " " (($1 in e) ? e[$1] : "no-key") }' \
-        "$work/expiry.txt" - | LC_ALL=C sort > "$work/pkg.txt"
+  field_all "$pin" trusted | LC_ALL=C sort > "$work/pin.txt"
+  gpg --batch --with-colons --fixed-list-mode --show-keys "$src/$keyring.gpg" 2> "$work/gpg.err" |
+    awk -F: '
+      $1 == "pub" { expires = $7; seen = 1; next }
+      $1 == "fpr" && seen {
+        if (expires == "") { print $10 " never" }
+        else { print $10 " " strftime("%Y-%m-%d", expires + 0, 1) }
+        seen = 0
+      }' | LC_ALL=C sort > "$work/expiry.txt"
+  cut -d: -f1 < "$src/$keyring-trusted" | awk 'NF' | LC_ALL=C sort |
+    awk 'NR == FNR { e[$1] = $2; next } { print $1 " " (($1 in e) ? e[$1] : "no-key") }' \
+      "$work/expiry.txt" - | LC_ALL=C sort > "$work/pkg.txt"
 
-  # Compared as text. cmp is in diffutils, which the Arch image this suite also
-  # runs in does not carry.
+  # Compared as text: the Arch image of this suite has no cmp (diffutils).
   if [ "$(cat "$work/pin.txt")" = "$(cat "$work/pkg.txt")" ]; then
-    ok "$pkg trusts exactly the $(awk 'END { print NR + 0 }' "$work/pin.txt") fingerprints $rel pins, with the pinned expiry dates"
+    ok "$pkg trusts the $(awk 'END { print NR + 0 }' "$work/pin.txt") fingerprints of $rel, with the pinned expiry"
   else
-    fail "$pkg trusts exactly what $rel pins" \
+    fail "$pkg trusts the fingerprints of $rel, with the pinned expiry" \
       "only in the pin    : $(LC_ALL=C comm -23 "$work/pin.txt" "$work/pkg.txt" | tr '\n' ' ')" \
       "only in the package: $(LC_ALL=C comm -13 "$work/pin.txt" "$work/pkg.txt" | tr '\n' ' ')" \
       "the trusted lines are a set, and the whole set is the trust root" \
@@ -134,27 +156,27 @@ for pin in "$DIR"/*.pin; do
 done
 
 if [ "$pins" -eq 0 ]; then
-  fail "bootstrap/keyrings holds at least one pin" \
-    "no .pin file found" \
+  fail "bootstrap/keyrings has at least one pin" \
+    "no .pin file" \
     "reproduce: ls bootstrap/keyrings"
 fi
 
-# 4. nothing carried that no pin names
+# 5. Each package in the directory is one that a pin names
 orphans=""
 for f in "$DIR"/*.pkg.tar.*; do
   [ -e "$f" ] || continue
   b="$(basename "$f")"
-  if ! printf '%s' "$named" | awk -v b="$b" '$0 == b { found = 1 } END { exit found ? 0 : 1 }'; then
+  if ! grep -qxF -e "$b" <<< "$named"; then
     orphans="$orphans $b"
   fi
 done
 if [ -z "$orphans" ]; then
-  ok "every keyring package in the tree is one a pin names"
+  ok "each keyring package in the tree is one that a pin names"
 else
-  fail "every keyring package in the tree is one a pin names" \
-    "not named by any pin:$orphans" \
-    "a package left behind by a pin bump is a second trust root that nothing reads and nothing checks" \
-    "reproduce: grep -h '^package' bootstrap/keyrings/*.pin, and ls bootstrap/keyrings"
+  fail "each keyring package in the tree is one that a pin names" \
+    "no pin names:$orphans" \
+    "a package left after a pin moved is a second trust root that nothing checks" \
+    "reproduce: grep -h '^package' bootstrap/keyrings/*.pin; ls bootstrap/keyrings"
 fi
 
 summary

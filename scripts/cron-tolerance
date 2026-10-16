@@ -1,47 +1,49 @@
 #!/usr/bin/env bash
 #
-# How many days of silence from one workflow's schedule is normal.
+# Print how many days of silence the schedule of one workflow allows.
 #
 #   scripts/cron-tolerance .github/workflows/build-deploy.yml
+#   scripts/cron-tolerance --minutes .github/workflows/status.yml
 #
-# Prints two integers on one line: the largest gap in days the schedule itself
-# produces, and the tolerance built from it.
+# The output is two integers on one line: the largest gap in days that the
+# schedule makes, and the tolerance.
 #
-#   1 3      a daily cron: it never skips a day, and three days of silence is a stop
+#   1 3      a daily cron: the gap is one day, and three silent days is a stop
 #
-# ⛔ The number is derived, never written down. A check that says "fail after 3
-# days" stops being right the moment somebody changes a cron from daily to
-# weekly, and nothing would say so. This reads the cron the workflow actually
-# carries, so the threshold follows the schedule with no edit here and no edit
-# there.
+# With --minutes the output is one integer: the largest gap in minutes between
+# two firings. The status site shows the age of an image against it.
 #
-# tolerance = gap * 2 + 1. One missed firing is a transient and is tolerated.
-# Two consecutive misses is the schedule having stopped, which is what
-# HISTORY/reviews/19-a-job-that-stops-running.md measured: daily runs to
-# 2026-07-13, then 45 days of nothing. The extra day is slack for a run that
-# fires late in its window.
+#   180      '17 */3 * * *'
+#   1440     '41 7 * * *'
 #
-# ⚠ This answers a question about the calendar, not about GitHub. A cron that
-# fires daily has a gap of 1 whether or not GitHub ever ran it, which is the
-# point: the schedule is the contract and the runs are what is measured against
-# it.
+# ⭐ The number comes from the cron that the workflow carries. When a person
+# changes the cron, the tolerance changes with it, with no edit here.
 #
-# ⛔ Day resolution only. The hour and minute fields are read and ignored: a
-# published tag is named for a date, so a check finer than a day has nothing to
-# compare against. ⚠ GitHub's own delay is measured in hours here, the two runs
-# on record firing at 17:32Z and 16:36Z against a `30 05` cron, and a delay of
-# hours cannot move a date by more than one day.
+# tolerance = gap + min(gap, 7) + 1. The extra day is for a run that GitHub
+# starts late.
+#   gap up to 7 days  one missed firing is a transient, two missed firings in
+#                     a row is a stop: daily 3, weekly 15
+#   gap above 7 days  one missed firing and 7 more days is a stop: the 1st of
+#                     each month gives 39, not two missed months
 #
-# ⚠ **A sub-daily cron is therefore under-served, and that is a weakening rather
-# than a break.** `0 */6 * * *` fires four times a day and still reports a gap of
-# 1, so a schedule expected four times a day is given three days of grace. It
-# would still catch a stop, later than it could have. Nothing in this repository
-# has a sub-daily cron; if one is added, the thing to change is the resolution
-# of what is being compared against, not this number.
+# ⛔ A tolerance above 60 days is refused (exit 1). GitHub stops the schedules
+# of a repository after 60 days with no activity. A check that waits longer
+# than that cannot report a stop in time. Give such a workflow a cron
+# that fires at least every 52 days.
+#
+# ⚠ This reads the calendar, not GitHub. A daily cron has a gap of 1 whether
+# or not GitHub runs it. The callers measure the runs against this number.
+#
+# ⛔ The tolerance has day resolution. The hour and minute fields are read and
+# not used for it, because a dated tag carries only a date. GitHub delays a
+# scheduled run by hours, and hours do not move a date by more than one day.
+#
+# ⚠ A sub-daily cron gets the tolerance of a daily cron. '0 */6 * * *' gets
+# three days. The check still sees a stop, later than it could.
 #
 # Exit status:
-#   0  a tolerance was derived and printed
-#   1  the check could not run
+#   0  the tolerance was printed
+#   1  the cron could not be read
 set -euo pipefail
 
 die() {
@@ -54,17 +56,20 @@ die() {
   exit 1
 }
 
+mode=days
+if [ "${1:-}" = --minutes ]; then
+  mode=minutes
+  shift
+fi
 wf="${1:-}"
-[ -n "$wf" ] || die "usage: cron-tolerance <workflow file>"
+[ -n "$wf" ] || die "usage: cron-tolerance [--minutes] <workflow file>"
 [ -f "$wf" ] || die "no such file: $wf" \
   "reproduce: ls .github/workflows/"
 
 #---------------------------------------------------------------------------#
-# The cron expressions.
-#
-# A workflow may carry several, and any one of them firing counts, so they are
-# collected and evaluated together. Quotes and a trailing comment are stripped;
-# both shapes appear in this repository.
+# The cron expressions. A workflow can have more than one, and the firing of
+# any one counts, so all of them are read together. Quotes and a trailing
+# comment are removed.
 #---------------------------------------------------------------------------#
 crons="$(awk '
   /^[[:space:]]*-[[:space:]]*cron:/ {
@@ -78,29 +83,28 @@ crons="$(awk '
 
 if [ -z "$crons" ]; then
   die "no cron expression in $wf" \
-    "a workflow with no schedule has no schedule to be silent" \
+    "a workflow with no schedule has no tolerance" \
     "reproduce: grep -n 'cron:' $wf"
 fi
 
 #---------------------------------------------------------------------------#
-# The walk.
+# The walk: 1461 days from 2024-01-01 (a Monday), which is 2024 to 2027 and
+# one full leap cycle. The answer depends on the schedule only, not on the day
+# of the run. A cron that names 29 February is measured, not estimated.
 #
-# One full leap cycle from a fixed start, so the answer is a property of the
-# schedule and not of the day it was asked on. The start is 2024-01-01, a
-# Monday, and 1461 days is 2024 through 2027 inclusive, so a cron naming
-# 29 February is measured rather than guessed.
+# ⚠ The silence after the last firing in the window counts too. Without it, a
+# cron that fires once early in the window gives a gap that is too small. The
+# check then fails on a schedule that works.
 #
-# ⚠ The silence after the last firing counts too. Without it a cron that fires
-# once early in the window reports the gap before that firing and nothing after,
-# which under-reports, and an under-reported gap is a tolerance too small: the
-# check then fails on a schedule that is working. ⛔ Over-reporting misses a
-# stop for longer; under-reporting trains a reader to ignore the red mark.
+# ⛔ No strftime, no mktime and no third argument to match(). They are gawk
+# extensions, and mawk does not have them.
 #
-# ⛔ No strftime and no mktime. Both are gawk extensions and the runners ship
-# mawk, which is the same reason scripts/check-anchor-floor avoids match()'s
-# third argument. The calendar is walked by hand instead.
+# With --minutes the walk also makes the list of firing minutes of each day.
+# The hour and minute fields do not depend on the day, so each set of crons
+# that fire on one day gives one sorted list. The gap from the last firing
+# back to the first firing of the window counts too.
 #---------------------------------------------------------------------------#
-read -r gap tolerance <<< "$(awk -v crons="$crons" '
+read -r gap tolerance <<< "$(awk -v crons="$crons" -v mode="$mode" '
   function leap(y) { return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 }
 
   function mdays(y, m) {
@@ -109,9 +113,8 @@ read -r gap tolerance <<< "$(awk -v crons="$crons" '
     return 31
   }
 
-  # A cron field name, lowered to its number. GitHub documents numbers; the
-  # names are accepted by enough cron implementations to be worth reading
-  # rather than silently mismatching.
+  # A cron field name as its number. GitHub documents numbers, and most cron
+  # programs also accept the names.
   function tonum(t,   i) {
     t = tolower(t)
     for (i in NAMES) if (i == t) return NAMES[i]
@@ -120,9 +123,8 @@ read -r gap tolerance <<< "$(awk -v crons="$crons" '
 
   # One comma separated field against one value.
   #
-  # "*" is every value. "a-b" is a range. "a" alone is one value. A "/n" suffix
-  # steps from the low end of whatever precedes it, and a bare "a/n" is read as
-  # "a-max/n", which is what cron implementations do.
+  # "*" is every value. "a-b" is a range. "a" is one value. A "/n" suffix
+  # steps from the low end. A bare "a/n" means "a-max/n", as in cron programs.
   function field(spec, val, lo_lim, hi_lim,   n, parts, i, p, step, lo, hi, sl) {
     n = split(spec, parts, ",")
     for (i = 1; i <= n; i++) {
@@ -149,13 +151,12 @@ read -r gap tolerance <<< "$(awk -v crons="$crons" '
     return 0
   }
 
-  # ⛔ Day of month and day of week are ORed when both are restricted and ANDed
-  # when either is "*". That is the POSIX rule and getting it backwards makes a
-  # weekday cron look far rarer than it is.
+  # ⛔ When both day of month and day of week are restricted, either one
+  # matching is a firing. When one of them is "*", both must match. That is the
+  # POSIX rule.
   #
-  # ⚠ Sunday is 0, and 7 is also Sunday in enough cron implementations that
-  # rejecting it would hard-fail a schedule that works. The field runs 0 to 7
-  # and Sunday is tested as both.
+  # ⚠ Sunday is 0, and many cron programs also accept 7 for Sunday. The field
+  # takes 0 to 7, and Sunday is tested as both.
   function fires(expr, mon, dom, dow,   f, nf, a, b) {
     nf = split(expr, f, /[[:space:]]+/)
     if (nf != 5) return -1
@@ -179,18 +180,44 @@ read -r gap tolerance <<< "$(awk -v crons="$crons" '
 
     nc = split(crons, list, "\n")
 
-    y = 2024; m = 1; d = 1; dow = 1        # 2024-01-01 was a Monday
+    # The minutes of the day each cron fires at, ascending.
+    for (i = 1; i <= nc; i++) {
+      if (split(list[i], f, /[[:space:]]+/) != 5) {
+        printf "cron-tolerance: cannot parse cron expression: %s\n", list[i] > "/dev/stderr"
+        exit 2
+      }
+      cnt[i] = 0
+      for (h = 0; h < 24; h++) {
+        a = field(f[2], h, 0, 23)
+        for (mm = 0; mm < 60; mm++) {
+          b = field(f[1], mm, 0, 59)
+          if (a < 0 || b < 0) {
+            printf "cron-tolerance: cannot parse cron expression: %s\n", list[i] > "/dev/stderr"
+            exit 2
+          }
+          if (a == 1 && b == 1) mins[i, ++cnt[i]] = h * 60 + mm
+        }
+      }
+      if (cnt[i] == 0) {
+        printf "cron-tolerance: the cron expression fires at no minute of the day: %s\n", list[i] > "/dev/stderr"
+        exit 2
+      }
+    }
+
+    y = 2024; m = 1; d = 1; dow = 1        # 2024-01-01 is a Monday
     run = 0; gap = 0; fired = 0
+    mgap = 0; mlast = -1; mfirst = -1
 
     for (day = 0; day < 1461; day++) {
       hit = 0
+      key = ""
       for (i = 1; i <= nc; i++) {
         r = fires(list[i], m, d, dow)
         if (r < 0) {
           printf "cron-tolerance: cannot parse cron expression: %s\n", list[i] > "/dev/stderr"
           exit 2
         }
-        if (r == 1) { hit = 1 }
+        if (r == 1) { hit = 1; key = key " " i }
       }
       if (hit) {
         fired++
@@ -198,6 +225,25 @@ read -r gap tolerance <<< "$(awk -v crons="$crons" '
         run = 0
       } else {
         run++
+      }
+
+      if (hit && mode == "minutes") {
+        if (!(key in daylist)) {
+          split("", mark)
+          nk = split(key, ks, " ")
+          for (j = 1; j <= nk; j++)
+            for (k = 1; k <= cnt[ks[j]]; k++) mark[mins[ks[j], k]] = 1
+          s = ""
+          for (t = 0; t < 1440; t++) if (t in mark) s = s " " t
+          daylist[key] = s
+        }
+        nt = split(daylist[key], ts, " ")
+        for (j = 1; j <= nt; j++) {
+          abs = day * 1440 + ts[j]
+          if (mlast >= 0 && abs - mlast > mgap) mgap = abs - mlast
+          if (mfirst < 0) mfirst = abs
+          mlast = abs
+        }
       }
 
       d++
@@ -212,14 +258,32 @@ read -r gap tolerance <<< "$(awk -v crons="$crons" '
     }
     if (run > gap) gap = run
 
-    # gap counts the silent days between two firings. A daily cron has none, and
-    # its largest gap is one day.
+    if (mode == "minutes") {
+      # From the last firing of the window back to the first one.
+      if (1461 * 1440 - mlast + mfirst > mgap) mgap = 1461 * 1440 - mlast + mfirst
+      printf "%d %d\n", mgap, 0
+      exit 0
+    }
+
+    # gap counts the silent days between two firings. A daily cron has none,
+    # and its largest gap is one day.
     gap = gap + 1
-    printf "%d %d\n", gap, gap * 2 + 1
+    printf "%d %d\n", gap, gap + (gap < 7 ? gap : 7) + 1
   }' </dev/null)" || die "the cron walk failed for $wf" \
   "reproduce: grep -n 'cron:' $wf"
 
 [ -n "${gap:-}" ] && [ -n "${tolerance:-}" ] || die "the cron walk printed nothing for $wf" \
   "reproduce: scripts/cron-tolerance $wf"
 
-printf '%s %s\n' "$gap" "$tolerance"
+if [ "$mode" = days ] && [ "$tolerance" -gt 60 ]; then
+  die "the schedule of $wf has a gap of $gap days, so its tolerance is $tolerance days, more than 60" \
+    "GitHub stops the schedules of a repository after 60 days with no activity" \
+    "give the workflow a cron that fires at least every 52 days" \
+    "reproduce: grep -n 'cron:' $wf"
+fi
+
+if [ "$mode" = minutes ]; then
+  printf '%s\n' "$gap"
+else
+  printf '%s %s\n' "$gap" "$tolerance"
+fi

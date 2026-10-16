@@ -1,47 +1,43 @@
 #!/bin/sh
 #
-# Make an executable that a package installed outside PATH callable by name.
+# Make an executable that a package installs outside PATH callable by name.
 #
-# Arch installs perl scripts into /usr/bin/vendor_perl, /usr/bin/site_perl and
-# /usr/bin/core_perl, none of which is on PATH. The perl package adds them
-# through /etc/profile.d/perlbin.sh, which only a login shell reads, and a
-# container is not a login shell:
+#   /usr/local/lib/docker-archlinux/bindir-links
+#
+# Arch installs perl scripts in /usr/bin/vendor_perl, /usr/bin/site_perl and
+# /usr/bin/core_perl. These are not on PATH. The perl package adds them in
+# /etc/profile.d/perlbin.sh, which only a login shell reads:
 #
 #   podman run <image> exiftool            command not found
 #   podman run <image> bash -lc exiftool   /usr/bin/vendor_perl/exiftool
 #
-# That is upstream issue 80. It is a property of the packaging rather than of
-# this image, and the official image has it identically.
+# The official image has the same behaviour (upstream issue 80).
 #
-# ⛔ PATH is not the fix. This image's PATH is byte for byte the official
-# image's, consumer tooling reads it, and changing it would make this image
-# disagree with a normal Arch install. So the executables come to PATH instead.
-# A symlink in /usr/local/bin, which is on PATH, is owned by filesystem, holds
-# nothing any package ships, and is the location FHS reserves for this.
+# ⛔ PATH stays the PATH of the official image. A symbolic link in
+# /usr/local/bin, which is on PATH, makes the name callable. The filesystem
+# package owns /usr/local/bin, and no package puts a file in it.
 #
-# ⛔ Nothing is ever shadowed. A name that already resolves is left alone, so
-# no command that resolved before this ran resolves anywhere new. That is
-# policy 7: more is possible, nothing changed.
+# ⛔ No link hides a name. A name that already resolves gets no link.
 #
-# ⭐ Undoable, which is the test this repository applies to any default:
+# To remove the behaviour:
 #
 #   rm /etc/pacman.d/hooks/bindir-links.hook
 #   find /usr/local/bin -lname '/usr/bin/*_perl/*' -delete
 #
-# Run from /etc/pacman.d/hooks/bindir-links.hook after a transaction that
-# touches /usr/bin. It reconciles rather than appends, so running it by hand at
-# any time is safe and running it twice changes nothing the first run did not.
+# /etc/pacman.d/hooks/bindir-links.hook runs this after a transaction that
+# changes /usr/bin. It makes the links agree with the files, so a second run
+# changes nothing.
 set -eu
 
 LINKDIR=/usr/local/bin
 
-# The directories under /usr/bin that hold executables and are not on PATH.
-# ⚠ Space separated, and no path here may contain whitespace.
+# The directories under /usr/bin with executables that are not on PATH.
+# ⚠ Separated by spaces, so a path here has no space in it.
 BINDIRS="/usr/bin/core_perl /usr/bin/site_perl /usr/bin/vendor_perl"
 
-# Where a name already resolving means no link may be made. /usr/sbin, /sbin
-# and /bin are symlinks to /usr/bin, so /usr/bin covers all three, and
-# tests/image/60-defect-parity.sh asserts those links hold.
+# A name in one of these directories gets no link. /usr/sbin, /sbin and /bin
+# are symbolic links to /usr/bin, so /usr/bin covers the three.
+# tests/image/60-defect-parity.sh checks those links.
 SEARCHDIRS="/usr/local/sbin /usr/bin"
 
 [ -d "$LINKDIR" ] || exit 0
@@ -70,15 +66,14 @@ resolves() {
 }
 
 #---------------------------------------------------------------------------#
-# 1. Prune.
+# 1. Remove links.
 #
-# A link this script made goes when its target is gone, and when the name has
-# since been claimed by a package. The second case is what keeps the no
-# shadowing rule true over time: a package that later installs /usr/bin/exiftool
-# has to win, not a symlink left behind here.
+# A link of this script goes when its target is gone, and when a package now
+# has the name. So a package that later installs /usr/bin/exiftool gets the
+# name, not the old link.
 #
-# ⛔ Only links pointing into BINDIRS are touched. Everything else in
-# /usr/local/bin belongs to the consumer.
+# ⛔ Only links into BINDIRS change. All else in /usr/local/bin belongs to the
+# consumer.
 #---------------------------------------------------------------------------#
 for link in "$LINKDIR"/*; do
   if [ ! -L "$link" ]; then
@@ -88,7 +83,7 @@ for link in "$LINKDIR"/*; do
     continue
   fi
   name="${link##*/}"
-  # -e follows the link, so a false here is a dangling link.
+  # -e follows the link, so false means the target is gone.
   if [ ! -e "$link" ] || resolves "$name"; then
     rm -f "$link"
     pruned=$((pruned + 1))
@@ -96,7 +91,7 @@ for link in "$LINKDIR"/*; do
 done
 
 #---------------------------------------------------------------------------#
-# 2. Link what is not reachable by name.
+# 2. Make a link for each name that does not resolve.
 #---------------------------------------------------------------------------#
 for dir in $BINDIRS; do
   if [ ! -d "$dir" ]; then
@@ -112,18 +107,17 @@ for dir in $BINDIRS; do
     fi
     if [ -L "$LINKDIR/$name" ]; then
       current="$(readlink "$LINKDIR/$name")"
-      # Already correct. ⛔ Re-making it would count as work every run and
-      # print a line on a transaction where nothing changed.
+      # The link is correct. Do not make it again: the count would then
+      # show a change when there is none.
       if [ "$current" = "$f" ]; then
         continue
       fi
-      # A link to somewhere else entirely is the consumer's, not this
-      # script's, and is left exactly as it is.
+      # A link to another place belongs to the consumer. It stays.
       if ! in_bindir "$current"; then
         continue
       fi
     elif [ -e "$LINKDIR/$name" ]; then
-      # A real file here is the consumer's.
+      # A file here belongs to the consumer.
       continue
     fi
     ln -sfn "$f" "$LINKDIR/$name"
@@ -131,8 +125,7 @@ for dir in $BINDIRS; do
   done
 done
 
-# Quiet when there was nothing to do. A hook that prints on every transaction
-# whether or not it acted teaches a reader to skip its output.
+# Print a line only when something changed.
 if [ "$linked" -gt 0 ] || [ "$pruned" -gt 0 ]; then
   printf '  %d linked, %d pruned in %s\n' "$linked" "$pruned" "$LINKDIR"
 fi

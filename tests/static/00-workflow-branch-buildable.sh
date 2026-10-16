@@ -1,68 +1,87 @@
 #!/usr/bin/env bash
 #
-# The workflow must build the ref that triggered it.
+# Check that each workflow builds and tests the commit that started it.
 #
-# A hand-clone of the default branch builds main whatever ref was dispatched,
-# so a branch cannot be tested and a green run proves nothing about the branch.
+#   - no run: block runs git clone; a clone gets the default branch, not the
+#     commit of the run
+#   - a checkout with a fixed ref (a branch name or a hash) also has a path,
+#     so it is a second tree of data, not the code under test
+#   - each job that runs a file of scripts/ or tests/ checks the tree out
+#     before that step
+#   - each image build reads the checked-out tree: build-push-action has no
+#     context, ".", or ${{ github.workspace }}; a docker build command ends
+#     in "." or "$GITHUB_WORKSPACE"
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR/..
 # shellcheck source=lib/harness.sh
 . "$REPO_ROOT/tests/lib/harness.sh"
 
-WF="$REPO_ROOT/.github/workflows/build-deploy.yml"
+cd "$REPO_ROOT"
+work="$(work_dir)"
+trap 'rm -rf "$work"' EXIT
 
-if [ ! -f "$WF" ]; then
-  fail "workflow exists" "expected: $WF" \
-    "reproduce: ls .github/workflows/build-deploy.yml"
+if ! need_tool yq jq; then
+  rc=0
+  summary || rc=$?
+  exit "$rc"
+fi
+
+mapfile -t wfs < <(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) | LC_ALL=C sort)
+if [ "${#wfs[@]}" -eq 0 ]; then
+  fail "there are workflows" "no .github/workflows/*.yml" "reproduce: ls .github/workflows"
   summary
   exit 1
 fi
 
-# 1. the repository arrives through actions/checkout, pinned by commit hash
-checkout="$(grep_matches 'uses:[[:space:]]*actions/checkout@' "$WF")"
-if [ -z "$checkout" ]; then
-  fail "actions/checkout is used" \
-    "no 'uses: actions/checkout@' in $WF" \
-    "reproduce: grep -nE 'uses:[[:space:]]*actions/checkout@' .github/workflows/build-deploy.yml"
-elif ! printf '%s\n' "$checkout" | grep -qE 'actions/checkout@[0-9a-f]{40}'; then
-  fail "actions/checkout is pinned to a commit hash" \
-    "found: $checkout" \
-    "a tag is not a pin, see standing policy 10" \
-    "reproduce: grep -n 'actions/checkout' .github/workflows/build-deploy.yml, then resolve the tag with gh api repos/actions/checkout/git/ref/tags/TAG --jq .object.sha"
-else
-  ok "actions/checkout is used and pinned to a commit hash"
-fi
+# The rules, in one jq program. Each fault line is "<rule><TAB><text>".
+# shellcheck disable=SC2016 # a jq program, not shell
+program='
+  def steps_of: .value.steps // [] | to_entries;
+  def is_checkout: (.uses // "") | startswith("actions/checkout@");
+  (.jobs | to_entries[] | .key as $j | steps_of[] | .value
+    | select((.run // "") | tostring | test("(^|[^A-Za-z0-9_-])git[[:space:]]+clone([[:space:]]|$)"))
+    | "clone\t\($j): \(.name // .id // "a step")"),
+  (.jobs | to_entries[] | .key as $j | steps_of[] | .value | select(is_checkout)
+    | select(((.with // {}).ref // null) as $r | $r != null and ($r | tostring | test("\\$\\{\\{") | not))
+    | select(((.with // {}).path // "") == "")
+    | "ref\t\($j): ref \(.with.ref) with no path"),
+  (.jobs | to_entries[] | .key as $j
+    | ([steps_of[] | select(.value | is_checkout) | .key] | min // 1e9) as $co
+    | steps_of[] | select(.key < $co)
+    | select((.value.run // "") | tostring | test("(^|[[:space:];|&(=\"])(\\./)?(scripts|tests)/[A-Za-z0-9_.-]+"))
+    | "checkout\t\($j): \(.value.name // .value.id // "step \(.key)") runs a file of the tree before any checkout"),
+  (.jobs | to_entries[] | .key as $j | steps_of[] | .value
+    | select((.uses // "") | startswith("docker/build-push-action@"))
+    | select(((.with // {}).context // ".") as $c | ($c != "." and ($c | test("^\\$\\{\\{[[:space:]]*github\\.workspace[[:space:]]*\\}\\}$") | not)))
+    | "context\t\($j): context \(.with.context)"),
+  (.jobs | to_entries[] | .key as $j | steps_of[] | .value | select(.run != null)
+    | .run | tostring | gsub("\\\\\n"; " ") | split("\n")[]
+    | select(test("(^|[[:space:]])docker([[:space:]]+buildx)?[[:space:]]+build[[:space:]]"))
+    | select(test("[[:space:]](\\.|\"?\\$\\{?GITHUB_WORKSPACE\\}?\"?)[[:space:]]*$") | not)
+    | "context\t\($j): \(.)")
+'
 
-# 2. nothing hand-clones this repository
-clones="$(grep_matches 'git[[:space:]]+clone' "$WF")"
-if [ -n "$clones" ]; then
-  fail "the workflow does not hand-clone the repository" \
-    "found: $clones" \
-    "a hand-clone without --branch builds the default branch, not the triggering ref" \
-    "reproduce: grep -n 'git clone' .github/workflows/build-deploy.yml, and use actions/checkout instead"
-else
-  ok "the workflow does not hand-clone the repository"
-fi
-
-# 3. every build context is the checked-out workspace
-contexts="$(grep_matches '^[[:space:]]*context:' "$WF")"
-if [ -z "$contexts" ]; then
-  ok "no explicit build context, so the action default of the workspace applies"
-else
-  bad=0
-  while IFS= read -r c; do
-    [ -n "$c" ] || continue
-    if ! printf '%s\n' "$c" | grep -qE 'context:[[:space:]]*"?(\.|\$\{\{[[:space:]]*github\.workspace)'; then
-      fail "build context is the workspace" \
-        "found: $c" \
-        "expected . or \${{ github.workspace }}" \
-        "reproduce: grep -n 'context:' .github/workflows/build-deploy.yml"
-      bad=1
-    fi
-  done <<< "$contexts"
-  if [ "$bad" -eq 0 ]; then
-    ok "every build context is the checked-out workspace"
+declare -A hits=([clone]="" [ref]="" [checkout]="" [context]="")
+for wf in "${wfs[@]}"; do
+  rc=0
+  out="$(yaml_json "$wf" | jq -r "$program" 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "$wf: reads as a workflow" "$out" "reproduce: yq -o=json . $wf"
+    continue
   fi
-fi
+  while IFS=$'\t' read -r rule text; do
+    [ -n "$rule" ] || continue
+    hits[$rule]="${hits[$rule]}$wf: $text; "
+  done <<< "$out"
+done
+
+check_eq "no run: block runs git clone" "" "${hits[clone]}" \
+  "grep -n 'git clone' .github/workflows/*.yml; use actions/checkout"
+check_eq "a checkout with a fixed ref also has a path" "" "${hits[ref]}" \
+  "yq '.jobs[].steps[] | select(.uses == \"actions/checkout*\") | .with' .github/workflows/*.yml"
+check_eq "each job checks the tree out before it runs a file of scripts/ or tests/" "" "${hits[checkout]}" \
+  "yq '.jobs[].steps[] | [.uses, .run]' .github/workflows/*.yml"
+check_eq "each image build reads the checked-out tree" "" "${hits[context]}" \
+  "grep -nE 'context:|docker (buildx )?build' .github/workflows/*.yml"
 
 summary

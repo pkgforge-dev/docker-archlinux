@@ -1,163 +1,89 @@
 #!/usr/bin/env bash
 #
-# Build-time supply chain surface.
+# Check what the build and the workflows fetch.
 #
-# Every fetch at build time, every action and every credential is surface.
-# What remains must be pinned to content, readable, and currently supported.
+#   - no remote script is piped into a shell (curl ... | sh, sh <(curl ...))
+#   - no download is made executable on the same line it is fetched, with no
+#     hash check between
+#   - no workflow uses a deprecated workflow command (::set-output and the
+#     others); the GITHUB_OUTPUT, GITHUB_STATE, GITHUB_ENV and GITHUB_PATH
+#     files replace them
+#   - each image pinned by digest has a "# tag: <tag>" line at most 3 lines
+#     above it, with the tag of the reference. Renovate and
+#     scripts/check-image-pins read that line.
+#
+# Read: the workflows, the Dockerfile, scripts/ and bootstrap/any/usr/local/bin.
+# Action pins are checked in tests/static/51-workflow-policy.sh.
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR/..
 # shellcheck source=lib/harness.sh
 . "$REPO_ROOT/tests/lib/harness.sh"
 
-workflows="$(find "$REPO_ROOT/.github/workflows" -type f \( -name '*.yml' -o -name '*.yaml' \) | sort)"
-if [ -z "$workflows" ]; then
-  fail "at least one workflow exists" "searched: $REPO_ROOT/.github/workflows" \
-    "reproduce: ls .github/workflows"
+cd "$REPO_ROOT"
+
+mapfile -t wfs < <(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) | LC_ALL=C sort)
+mapfile -t code < <({
+  printf '%s\n' "${wfs[@]}"
+  [ ! -f Dockerfile ] || printf '%s\n' Dockerfile
+  for d in scripts bootstrap/any/usr/local/bin; do
+    [ ! -d "$d" ] || find "$d" -type f
+  done
+} | LC_ALL=C sort)
+if [ "${#wfs[@]}" -eq 0 ] || [ "${#code[@]}" -eq 0 ]; then
+  fail "there are workflows and scripts to read" "workflows ${#wfs[@]}, files ${#code[@]}" \
+    "reproduce: ls .github/workflows scripts"
   summary
   exit 1
 fi
 
-#---------------------------------------------------------------------------#
-# 1. every action is pinned to a commit hash, and says which version that is
-#---------------------------------------------------------------------------#
-unpinned=0
-uncommented=0
-while IFS= read -r wf; do
-  [ -n "$wf" ] || continue
-  rel="${wf#"$REPO_ROOT/"}"
-  uses="$(grep_matches '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*[^ ]+' "$wf")"
-  [ -n "$uses" ] || continue
-  while IFS= read -r u; do
-    [ -n "$u" ] || continue
-    lineno="${u%%:*}"
-    text="${u#*:}"
-    ref="$(printf '%s\n' "$text" | sed -e 's/.*uses:[[:space:]]*//' -e 's/[[:space:]]*#.*//' -e 's/^"//' -e 's/"$//')"
-    # a local action or a reusable workflow in this repository is not a pin target
-    case "$ref" in ./* | .) continue ;; esac
-    if ! printf '%s\n' "$ref" | grep -qE '@[0-9a-f]{40}$'; then
-      fail "action is pinned to a commit hash at $rel:$lineno" \
-        "found: $ref" \
-        "a tag moves, gets deleted and gets re-cut, see standing policy 10" \
-        "resolve with: gh api repos/OWNER/REPO/git/ref/tags/TAG --jq .object.sha" \
-        "reproduce: grep -n 'uses:' $rel"
-      unpinned=$((unpinned + 1))
-    elif ! printf '%s\n' "$text" | grep -qE '#[[:space:]]*v?[0-9]'; then
-      fail "pinned action names its version in a comment at $rel:$lineno" \
-        "found: $text" \
-        "a bare hash is unreadable, so record the version it corresponds to" \
-        "reproduce: add a trailing comment naming the version, shaped: uses: owner/repo@<sha> # v1.2.3"
-      uncommented=$((uncommented + 1))
-    fi
-  done <<< "$uses"
-done <<< "$workflows"
-if [ "$unpinned" -eq 0 ]; then
-  ok "every action is pinned to a commit hash"
-fi
-if [ "$uncommented" -eq 0 ]; then
-  ok "every pinned action names its version in a comment"
-fi
+# lines PATTERN FILE...: "FILE:LINE: TEXT" for each line, comments removed,
+# that matches the extended regex PATTERN.
+lines() {
+  local pat="$1"
+  shift
+  awk -v pat="$pat" '
+    /^[[:space:]]*#/ { next }
+    {
+      line = $0
+      sub(/[[:space:]]#.*$/, "", line)
+      if (line ~ pat) { t = line; sub(/^[[:space:]]+/, "", t); print FILENAME ":" FNR ": " t }
+    }' "$@"
+}
 
-#---------------------------------------------------------------------------#
-# 2. nothing pipes a remote script into a shell, and nothing fetches a binary
-#---------------------------------------------------------------------------#
-targets="$workflows"
-if [ -f "$REPO_ROOT/Dockerfile" ]; then
-  targets="$targets
-$REPO_ROOT/Dockerfile"
-fi
-if [ -d "$REPO_ROOT/scripts" ]; then
-  targets="$targets
-$(find "$REPO_ROOT/scripts" -type f -name '*.sh' | sort)"
-fi
+PIPE_TO_SHELL='(curl|wget)[^|]*[|][[:space:]]*(sudo[[:space:]]+)?(ba|da|z)?sh([[:space:]]|$)|(ba|da|z)?sh[[:space:]]+<[(][[:space:]]*(curl|wget)'
+FETCH_EXEC='(curl|wget)[^;&]*(-O|--output|-o)[^;&]*[;&]+[[:space:]]*(&&)?[[:space:]]*chmod[[:space:]]+([+]x|[0-7]*[1357][0-7]*)'
+DEPRECATED='::(set-output|save-state|set-env|add-path)'
 
-PIPE_TO_SHELL='(curl|wget)[^|]*\|[[:space:]]*(sudo[[:space:]]+)?(ba)?sh|(ba)?sh[[:space:]]+<\((curl|wget)'
-FETCH_BINARY='(curl|wget)[^;&]*(-O|--output|-o)[^;&]*[;&]*[[:space:]]*(&&)?[[:space:]]*chmod[[:space:]]+\+x'
+check_eq "no remote script is piped into a shell" "" "$(lines "$PIPE_TO_SHELL" "${code[@]}")" \
+  "grep -nE 'curl|wget' FILE; vendor the script, or pin the file by sha256"
+check_eq "no download is made executable with no hash check" "" "$(lines "$FETCH_EXEC" "${code[@]}")" \
+  "grep -n chmod FILE; check the sha256 first, as scripts/install-tools does"
+check_eq "no workflow uses a deprecated workflow command" "" "$(lines "$DEPRECATED" "${wfs[@]}")" \
+  "grep -n '::set-' .github/workflows/*.yml; write to the GITHUB_OUTPUT file"
 
-piped=0
-fetched=0
-while IFS= read -r f; do
-  [ -n "$f" ] || continue
-  rel="${f#"$REPO_ROOT/"}"
-
-  hits="$(grep_matches "$PIPE_TO_SHELL" "$f")"
-  if [ -n "$hits" ]; then
-    while IFS= read -r h; do
-      [ -n "$h" ] || continue
-      fail "no remote script is piped into a shell at $rel:${h%%:*}" \
-        "found: $(printf '%s\n' "${h#*:}" | sed 's/^[[:space:]]*//')" \
-        "the fetched content is unpinned and unreviewed at the moment it runs" \
-        "vendor it into this repository instead, see standing policy 1" \
-        "reproduce: grep -nE 'curl|wget' $rel"
-      piped=$((piped + 1))
-    done <<< "$hits"
-  fi
-
-  hits="$(grep_matches "$FETCH_BINARY" "$f")"
-  if [ -n "$hits" ]; then
-    while IFS= read -r h; do
-      [ -n "$h" ] || continue
-      fail "no opaque binary is fetched and made executable at $rel:${h%%:*}" \
-        "found: $(printf '%s\n' "${h#*:}" | sed 's/^[[:space:]]*//')" \
-        "build it from a pinned source, or pin the artefact by sha256" \
-        "reproduce: grep -n chmod $rel"
-      fetched=$((fetched + 1))
-    done <<< "$hits"
-  fi
-done <<< "$targets"
-if [ "$piped" -eq 0 ]; then
-  ok "no remote script is piped into a shell"
-fi
-if [ "$fetched" -eq 0 ]; then
-  ok "no opaque binary is fetched and made executable"
-fi
-
-#---------------------------------------------------------------------------#
-# 3. deprecated workflow commands
-#---------------------------------------------------------------------------#
-deprecated=0
-while IFS= read -r wf; do
-  [ -n "$wf" ] || continue
-  rel="${wf#"$REPO_ROOT/"}"
-  hits="$(grep_matches '::(set-output|save-state|set-env|add-path)' "$wf")"
-  if [ -n "$hits" ]; then
-    while IFS= read -r h; do
-      [ -n "$h" ] || continue
-      fail "no deprecated workflow command at $rel:${h%%:*}" \
-        "found: $(printf '%s\n' "${h#*:}" | sed 's/^[[:space:]]*//')" \
-        "write to the GITHUB_OUTPUT, GITHUB_STATE, GITHUB_ENV or GITHUB_PATH file instead" \
-        "reproduce: grep -n '::set-' $rel"
-      deprecated=$((deprecated + 1))
-    done <<< "$hits"
-  fi
-done <<< "$workflows"
-if [ "$deprecated" -eq 0 ]; then
-  ok "no deprecated workflow command is used"
-fi
-
-#---------------------------------------------------------------------------#
-# 4. least privilege on the token
-#---------------------------------------------------------------------------#
-perms=0
-while IFS= read -r wf; do
-  [ -n "$wf" ] || continue
-  rel="${wf#"$REPO_ROOT/"}"
-  block="$(grep_matches '^[[:space:]]*permissions:' "$wf")"
-  if [ -z "$block" ]; then
-    fail "$rel declares a permissions block" \
-      "no permissions: key, so the token keeps the repository default" \
-      "reproduce: grep -n 'permissions:' $rel"
-    perms=$((perms + 1))
-    continue
-  fi
-  wide="$(grep_matches '^[[:space:]]*permissions:[[:space:]]*write-all' "$wf")"
-  if [ -n "$wide" ]; then
-    fail "$rel does not grant write-all" "found: $wide" \
-      "reproduce: grep -n -A3 'permissions:' $rel"
-    perms=$((perms + 1))
-  fi
-done <<< "$workflows"
-if [ "$perms" -eq 0 ]; then
-  ok "every workflow declares a permissions block and none grants write-all"
-fi
+# Each name[:tag]@sha256:<64 hex> and the "# tag:" lines above it.
+unmarked="$(awk '
+  FNR == 1 { b1 = b2 = b3 = "" }
+  {
+    if ($0 !~ /^[[:space:]]*#/ && match($0, /[A-Za-z0-9.-]+\/[A-Za-z0-9._\/-]+(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}/)) {
+      ref = substr($0, RSTART, RLENGTH)
+      name = ref
+      sub(/@sha256:.*/, "", name)
+      want = ""
+      if (match(name, /:[A-Za-z0-9._-]+$/)) want = substr(name, RSTART + 1)
+      got = ""
+      m = b1 "\n" b2 "\n" b3
+      n = split(m, l, "\n")
+      for (i = 1; i <= n; i++) if (match(l[i], /#[[:space:]]*tag:[[:space:]]*[^[:space:]]+/)) {
+        got = substr(l[i], RSTART, RLENGTH)
+        sub(/#[[:space:]]*tag:[[:space:]]*/, "", got)
+      }
+      if (got == "") print FILENAME ":" FNR ": no # tag: line above " ref
+      else if (want != "" && got != want) print FILENAME ":" FNR ": # tag: " got " above " ref
+    }
+    b1 = b2; b2 = b3; b3 = $0
+  }' "${code[@]}")"
+check_eq "each image pinned by digest has its # tag: line at most 3 lines above" "" "$unmarked" \
+  "grep -nB3 '@sha256:' FILE"
 
 summary

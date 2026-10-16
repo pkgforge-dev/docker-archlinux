@@ -5,29 +5,47 @@
 #   scripts/merge-bot-pr <head-branch> <head-sha>
 #   scripts/merge-bot-pr --check-diff <diff-file>
 #
-# Run by .github/workflows/bot-merge.yml after CI passes on a branch. It never
-# runs anything from the pull request: it reads the pull request's metadata and
-# its diff through the API, and decides from those.
+# .github/workflows/bot-merge.yml runs this script each time CI completes on a
+# branch. The script runs nothing from the pull request. It reads the metadata,
+# the check runs and the diff of the pull request through the API, and decides
+# from them.
 #
-# ⭐ Eligible, and only this: a pull request Renovate opened from one of its own
-# renovate/ branches, against main, in which every changed line differs from the
-# line it replaced only in a commit hash, a sha256 digest or a version comment.
+# ⭐ A pull request is merged only when all of these are true:
+#   - Renovate opened it, from one of its own renovate/ branches, in this
+#     repository (a pull request from a fork with the same branch name is not
+#     counted)
+#   - it is not a draft and has no label hold
+#   - its base branch is the default branch of the repository
+#   - its head is the commit that CI ran on
+#   - each check of tests/policy/required-checks passed on that commit
+#   - it changes only Dockerfile, .github/workflows/*.yml or *.yaml, and
+#     scripts/*
+#   - each changed line is equal to the line it replaces when commit hashes
+#     (40 hex), sha256 digests, image tags before a digest, "==" versions and
+#     trailing version comments ("# v1.2.3", "# tag: 1.2.3") are masked
+#   - no version in those places changes its major number
 #
-# ⛔ Never a freshness pull request. Those are merged by hand, occasionally,
-# decided by the maintainer on 2026-10-13, and nothing breaks while one waits:
-# the build reads the pinned keyrings from the tree and follows the ports
-# forward, holds back a port it cannot reach on its own, and reports a stale
-# mirror list rather than failing on it. HISTORY/maintainer-actions.md
-# section 4.
+# ⭐ The decision reads the required check, not the conclusion of the CI run.
+# A job that the required check does not need (network) can fail, and the
+# pull request still merges.
 #
-# ⛔ Never a draft, never one labelled hold, never one from a fork, never one
-# whose head moved after the CI run that triggered this.
+# ⛔ A freshness/ branch is never merged here. GitHub does not let the author
+# of a pull request approve it, and github-actions[bot] opens those. A person
+# merges them.
 #
-# Needs GH_TOKEN with contents and pull-requests write, and GITHUB_REPOSITORY.
+# Environment: GH_TOKEN with contents: write, pull-requests: write and
+# checks: read; GITHUB_REPOSITORY (owner/name). DEFAULT_BRANCH names the
+# default branch (bot-merge.yml gives it from the event); when it is not set,
+# the script reads it from the repository. REQUIRED_CHECKS_FILE (default
+# tests/policy/required-checks) names the required checks.
 #
-# Exit status: 0 merged, or not eligible and left alone; 1 could not decide.
-# --check-diff: 0 pins only, 3 more than pins, 4 nothing changed.
+# Exit status: 0 merged, or left alone because it does not qualify; 1 could
+# not decide or could not merge.
+# --check-diff: 0 pins only, 3 more than pins, 4 nothing changed, 5 a major
+# version change.
 set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 die() {
   echo "merge-bot-pr: $1" >&2
@@ -40,47 +58,182 @@ die() {
 }
 
 need() {
-  command -v "$1" >/dev/null || die "$1 is required"
+  command -v "$1" > /dev/null || die "$1 is required"
 }
 need awk
 need sed
 
-# pins_only DIFF WORKDIR -> 0 when every changed line in a unified diff differs
-# from the line it replaced only in a commit hash, a sha256 digest or a
-# trailing version comment, 3 when anything else changed, 4 when nothing did
+# pin_path PATH: PATH is a file that a pin bump may change.
+pin_path() {
+  case "$1" in
+    .github/workflows/*/* | scripts/*/*) return 1 ;;
+    Dockerfile | .github/workflows/*.yml | .github/workflows/*.yaml | scripts/*) return 0 ;;
+  esac
+  return 1
+}
+
+# mask KEEP FILE -> FILE with each pin masked, in the same line order.
+# KEEP=major keeps the major number of each version, so a major change stays
+# visible.
 #
-# ⛔ Each changed line is masked and the removed and added sets have to match
-# exactly. Only a full commit hash, 40 hex digits, and a digest, 64, are
-# masked, so a change to any other run of hex is still a change. Lines that
-# differ by more are printed.
+# A version is [prefix-][v]<major>[.rest]: v7.0.1, 1.10.1, qemu-v10.0.4. The
+# prefix stays, so a tag of another family is not a pin change. It is masked
+# in three places: an image tag before @sha256:, a "==" pin, and a trailing
+# comment ("# v7.0.1", "# tag: v0.11.0").
+mask() {
+  local keep="$1" file="$2"
+  # The digest and the hash go first, so the version patterns see DIGEST.
+  local common=(-e 's/sha256:[0-9a-f]{64}/sha256:DIGEST/g'
+    -e 's/(^|[^0-9a-f])[0-9a-f]{40}([^0-9a-f]|$)/\1HASH\2/g')
+  if [ "$keep" = major ]; then
+    sed -E "${common[@]}" \
+      -e 's/(:)([A-Za-z][A-Za-z0-9]*-)?(v?)([0-9]+)[0-9A-Za-z.+_-]*(@sha256:)/\1\2\3\4.VERSION\5/g' \
+      -e 's/(==)(v?)([0-9]+)[0-9A-Za-z.+_-]*/\1\2\3.VERSION/g' \
+      -e 's/(#[[:space:]]*(tag:[[:space:]]*)?)([A-Za-z][A-Za-z0-9]*-)?(v?)([0-9]+)[0-9A-Za-z.+_-]*[[:space:]]*$/\1\3\4\5.VERSION/' \
+      "$file"
+  else
+    sed -E "${common[@]}" \
+      -e 's/(:)([A-Za-z][A-Za-z0-9]*-)?(v?)([0-9]+)[0-9A-Za-z.+_-]*(@sha256:)/\1\2\3VERSION\5/g' \
+      -e 's/(==)(v?)([0-9]+)[0-9A-Za-z.+_-]*/\1\2VERSION/g' \
+      -e 's/(#[[:space:]]*(tag:[[:space:]]*)?)([A-Za-z][A-Za-z0-9]*-)?(v?)([0-9]+)[0-9A-Za-z.+_-]*[[:space:]]*$/\1\3\4VERSION/' \
+      "$file"
+  fi
+}
+
+# differ A B: print each pair of lines of A and B, in the same position, that
+# are not equal.
+differ() {
+  awk 'NR == FNR { a[FNR] = $0; next } a[FNR] != $0 { print "  - " a[FNR]; print "  + " $0 }' "$1" "$2" >&2
+}
+
+# pins_only DIFF WORKDIR -> the result for a unified diff:
+#   0  each changed line differs from the line it replaces only in a pin
+#   3  something other than a pin changed, or a part of the diff that the
+#      check does not read
+#   4  nothing changed
+#   5  a version changes its major number
+#
+# ⛔ The diff is read hunk by hunk, with the line counts of each hunk header.
+# So a removed line that starts with "--" stays a removed line. In a hunk,
+# each run of removed lines must be followed at once by a run of added lines
+# of the same length. The i-th removed line is compared with the i-th added
+# line. Each of these is a refusal:
+#   - a moved line, or a line that is only added or only removed
+#   - a binary file or a mode change
+#   - a new or deleted file, a rename or a copy
+#
+# ⛔ Only a 40 hex commit hash and a 64 hex digest are masked, so a change to
+# any other run of hex is a change.
 pins_only() {
-  local diff="$1" w="$2"
+  local diff="$1" w="$2" rc=0 p outside=""
   : > "$w/removed.txt"
   : > "$w/added.txt"
+  : > "$w/paths.txt"
   awk '
-    /^diff --git / { file = $3; next }
-    /^(\+\+\+|---) / { next }
-    /^-/ { print file "\t" substr($0, 2) > removed; next }
-    /^\+/ { print file "\t" substr($0, 2) > added; next }
-  ' removed="$w/removed.txt" added="$w/added.txt" "$diff"
-  mask() {
-    sed -E -e 's/sha256:[0-9a-f]{64}/sha256:DIGEST/g' \
-      -e 's/(^|[^0-9a-f])[0-9a-f]{40}([^0-9a-f]|$)/\1HASH\2/g' \
-      -e 's/#[[:space:]]*v?[0-9][0-9A-Za-z.+_-]*[[:space:]]*$/# VERSION/' "$1" | LC_ALL=C sort
-  }
-  mask "$w/removed.txt" > "$w/removed.sorted"
-  mask "$w/added.txt" > "$w/added.sorted"
-  [ -s "$w/added.sorted" ] || [ -s "$w/removed.sorted" ] || return 4
-  if [ "$(cat "$w/removed.sorted")" != "$(cat "$w/added.sorted")" ]; then
-    echo "merge-bot-pr: these lines differ by more than a pin:" >&2
-    LC_ALL=C comm -3 "$w/removed.sorted" "$w/added.sorted" | sed 's/^/  /' >&2
+    function refuse(why) {
+      print "merge-bot-pr: " why > "/dev/stderr"
+      bad = 1
+      exit 3
+    }
+    # flush: pair the run of removed lines with the run of added lines.
+    function flush(   k) {
+      if (nm == 0 && np == 0) return
+      if (nm != np) refuse(sprintf("%s: the hunk at line %s removes %d line(s) and adds %d in their place", file, hline, nm, np))
+      for (k = 1; k <= nm; k++) {
+        print file "\t" mline[k] > removed
+        print file "\t" pline[k] > added
+      }
+      nm = 0
+      np = 0
+    }
+    BEGIN { state = 0; nm = 0; np = 0; bad = 0 }
+    # "\ No newline at end of file" follows the line it is about.
+    substr($0, 1, 1) == "\\" { next }
+    {
+      if (state == 1 && rleft == 0 && aleft == 0) { flush(); state = 0 }
+      if (state == 0) {
+        if ($0 ~ /^diff --git /) { file = substr($0, 12); next }
+        if ($0 ~ /^(Binary files |GIT binary patch|old mode |new mode |new file mode |deleted file mode |rename from |rename to |copy from |copy to |similarity index |dissimilarity index )/)
+          refuse(file ": " $0)
+        if ($0 ~ /^index [0-9a-f]+\.\.[0-9a-f]+( [0-7]+)?$/) next
+        if ($0 ~ /^(---|\+\+\+) /) {
+          p = substr($0, 5)
+          if (p == "/dev/null") refuse(file ": a new or a deleted file")
+          sub(/^[ab]\//, "", p)
+          print p > paths
+          next
+        }
+        if ($0 ~ /^@@ -[0-9]+(,[0-9]+)? \+[0-9]+(,[0-9]+)? @@/) {
+          h = substr($0, 5)
+          sub(/ @@.*$/, "", h)
+          split(h, part, " ")
+          r = part[1]
+          a = substr(part[2], 2)
+          hline = r
+          sub(/,.*$/, "", hline)
+          rleft = (index(r, ",") > 0) ? substr(r, index(r, ",") + 1) + 0 : 1
+          aleft = (index(a, ",") > 0) ? substr(a, index(a, ",") + 1) + 0 : 1
+          state = 1
+          next
+        }
+        if ($0 == "") next
+        refuse(file ": a line that the check does not read: " substr($0, 1, 80))
+      }
+      c = substr($0, 1, 1)
+      if (c == " ") {
+        flush()
+        rleft--
+        aleft--
+      } else if (c == "-") {
+        if (np > 0) flush()
+        mline[++nm] = substr($0, 2)
+        rleft--
+      } else if (c == "+") {
+        pline[++np] = substr($0, 2)
+        aleft--
+      } else {
+        refuse(file ": a line in a hunk that is not context, removed or added: " substr($0, 1, 80))
+      }
+      if (rleft < 0 || aleft < 0) refuse(file ": the hunk at line " hline " has more lines than its header")
+    }
+    END {
+      if (bad) exit 3
+      if (state == 1 && (rleft > 0 || aleft > 0)) refuse(file ": the hunk at line " hline " ends before its header says")
+      flush()
+    }
+  ' removed="$w/removed.txt" added="$w/added.txt" paths="$w/paths.txt" "$diff" || rc=$?
+  case "$rc" in
+    0) ;;
+    3) return 3 ;;
+    *) die "awk could not read the diff (exit $rc)" "reproduce: scripts/merge-bot-pr --check-diff $diff" ;;
+  esac
+  while IFS= read -r p; do
+    pin_path "$p" || outside="$outside $p"
+  done < "$w/paths.txt"
+  if [ -n "$outside" ]; then
+    echo "merge-bot-pr: the diff changes files that a pin bump may not change:$outside" >&2
     return 3
+  fi
+  [ -s "$w/added.txt" ] || [ -s "$w/removed.txt" ] || return 4
+  mask all "$w/removed.txt" > "$w/removed.masked"
+  mask all "$w/added.txt" > "$w/added.masked"
+  if ! cmp -s "$w/removed.masked" "$w/added.masked"; then
+    echo "merge-bot-pr: these lines differ by more than a pin:" >&2
+    differ "$w/removed.masked" "$w/added.masked"
+    return 3
+  fi
+  mask major "$w/removed.txt" > "$w/removed.major"
+  mask major "$w/added.txt" > "$w/added.major"
+  if ! cmp -s "$w/removed.major" "$w/added.major"; then
+    echo "merge-bot-pr: these lines change a major version:" >&2
+    differ "$w/removed.major" "$w/added.major"
+    return 5
   fi
   return 0
 }
 
-# ⭐ The guard on its own, for tests/static/89-bot-merge-guard.sh. It reads a
-# diff from a file and touches nothing else.
+# ⭐ The guard alone, for tests/static/89-bot-merge-guard.sh. It reads a diff
+# from a file and reads nothing else.
 if [ "${1:-}" = "--check-diff" ]; then
   if [ "$#" -ne 2 ] || [ ! -f "$2" ]; then
     die "usage: merge-bot-pr --check-diff <diff-file>"
@@ -103,6 +256,7 @@ case "$slug" in
   */*) ;;
   *) die "GITHUB_REPOSITORY is not owner/name: ${slug:-<unset>}" ;;
 esac
+checks_file="${REQUIRED_CHECKS_FILE:-$ROOT/tests/policy/required-checks}"
 
 leave() {
   echo "merge-bot-pr: left alone: $1"
@@ -111,38 +265,68 @@ leave() {
 
 case "$branch" in
   renovate/*) ;;
-  freshness/*) leave "$branch is a freshness branch, and those are merged by hand" ;;
+  freshness/*) leave "$branch is a freshness branch; a person merges those" ;;
   *) leave "$branch is not a Renovate branch" ;;
 esac
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+base_want="${DEFAULT_BRANCH:-}"
+if [ -z "$base_want" ]; then
+  gh api "repos/$slug" > "$work/repo.json"
+  base_want="$(jq -r '.default_branch // empty' "$work/repo.json")"
+  [ -n "$base_want" ] || die "the repository record of $slug has no default_branch" \
+    "reproduce: gh api repos/$slug --jq .default_branch"
+fi
+
+# ⛔ gh pr list --head matches the branch name only, so a pull request from a
+# fork with the same branch name is listed too. Only the pull requests from
+# this repository count.
 gh pr list --repo "$slug" --head "$branch" --state open \
-  --json number,author,headRefOid,isCrossRepository,isDraft,baseRefName,labels,files \
-  > "$work/prs.json"
+  --json number,author,headRefName,headRefOid,isCrossRepository,isDraft,baseRefName,labels,files \
+  > "$work/listed.json"
+jq '[.[] | select(.isCrossRepository == false)]' "$work/listed.json" > "$work/prs.json"
 n="$(jq -r 'length' "$work/prs.json")"
-[ "$n" -eq 1 ] || leave "$n open pull requests have $branch as their head, and exactly one is needed"
+[ "$n" -eq 1 ] || leave "$n open pull requests of $slug have $branch as their head, and exactly one is needed"
 jq '.[0]' "$work/prs.json" > "$work/pr.json"
 
 number="$(jq -r '.number' "$work/pr.json")"
 author="$(jq -r '.author.login' "$work/pr.json")"
-echo "merge-bot-pr: #$number from $author on $branch"
+base="$(jq -r '.baseRefName' "$work/pr.json")"
+echo "merge-bot-pr: #$number from $author on $branch into $base"
 
 case "$author" in
   app/renovate | renovate*) ;;
-  *) leave "#$number is on a Renovate branch and was not opened by Renovate" ;;
+  *) leave "#$number is on a Renovate branch and Renovate did not open it" ;;
 esac
-[ "$(jq -r '.isCrossRepository' "$work/pr.json")" = "false" ] || leave "#$number comes from a fork"
 [ "$(jq -r '.isDraft' "$work/pr.json")" = "false" ] || leave "#$number is a draft"
-[ "$(jq -r '.baseRefName' "$work/pr.json")" = "main" ] || leave "#$number does not target main"
-[ "$(jq -r '.headRefOid' "$work/pr.json")" = "$sha" ] || leave "#$number moved after the CI run that triggered this, so that run says nothing about its head"
+[ "$base" = "$base_want" ] || leave "#$number goes into $base, not into the default branch $base_want"
+[ "$(jq -r '.headRefOid' "$work/pr.json")" = "$sha" ] || leave "#$number moved after the CI run that started this, so that run says nothing about its head"
 if jq -e '[.labels[].name] | index("hold")' "$work/pr.json" > /dev/null; then
-  leave "#$number is labelled hold"
+  leave "#$number has the label hold"
 fi
 
 #---------------------------------------------------------------------------#
-# What changed: only the files a pin lives in, and only the pins in them
+# The required checks, on the head commit. The newest check run of each name
+# from GitHub Actions decides, as in branch protection.
+#---------------------------------------------------------------------------#
+[ -f "$checks_file" ] || die "no file $checks_file" "reproduce: ls tests/policy"
+awk '!/^[[:space:]]*(#|$)/ { sub(/[[:space:]]+$/, ""); print }' "$checks_file" | tr -d '\r' > "$work/checks.txt"
+[ -s "$work/checks.txt" ] || die "$checks_file names no check" "reproduce: cat tests/policy/required-checks"
+while IFS= read -r check; do
+  enc="$(jq -rn --arg s "$check" '$s | @uri')"
+  gh api "repos/$slug/commits/$sha/check-runs?check_name=$enc&per_page=100" < /dev/null > "$work/check-runs.json"
+  state="$(jq -r --arg n "$check" '
+    [.check_runs[] | select(.name == $n and (.app.slug // "") == "github-actions")]
+    | sort_by(.id) | last
+    | if . == null then "absent" else "\(.status) \(.conclusion // "none")" end' "$work/check-runs.json")"
+  echo "merge-bot-pr: the required check '$check' on $sha: $state"
+  [ "$state" = "completed success" ] || leave "the required check '$check' did not pass on $sha ($state)"
+done < "$work/checks.txt"
+
+#---------------------------------------------------------------------------#
+# What changed: only the files that hold pins, and only the pins in them.
 #---------------------------------------------------------------------------#
 jq -r '.files[].path' "$work/pr.json" > "$work/files.txt"
 [ -s "$work/files.txt" ] || leave "#$number changes no file"
@@ -150,36 +334,32 @@ jq -r '.files[].path' "$work/pr.json" > "$work/files.txt"
 outside=""
 while IFS= read -r f; do
   [ -n "$f" ] || continue
-  case "$f" in
-    Dockerfile | .github/workflows/*.yml) ;;
-    *) outside="$outside $f" ;;
-  esac
+  pin_path "$f" || outside="$outside $f"
 done < "$work/files.txt"
-[ -z "$outside" ] || leave "#$number changes files a pin bump may not touch:$outside"
+[ -z "$outside" ] || leave "#$number changes files that a pin bump may not change:$outside"
 
 gh pr diff "$number" --repo "$slug" > "$work/diff.txt"
 rc=0
 pins_only "$work/diff.txt" "$work" || rc=$?
 case "$rc" in
-  0) echo "merge-bot-pr: $(awk 'END { print NR + 0 }' "$work/added.sorted") line(s) changed, each only in a pin" ;;
+  0) echo "merge-bot-pr: $(awk 'END { print NR + 0 }' "$work/added.txt") line(s) changed, each only in a pin" ;;
   3) leave "#$number changes more than pins" ;;
   4) leave "#$number changes no line" ;;
+  5) leave "#$number changes a major version; a person merges it" ;;
   *) die "the pin check could not run on #$number" ;;
 esac
 
 #---------------------------------------------------------------------------#
-# Approve and merge
-#
-# The required check passed on this very commit, which is what started this.
-# Branch protection still decides: if it refuses, gh says why and this fails.
+# Approve and merge. Branch protection still decides: when it refuses, gh says
+# why and this script fails.
 #---------------------------------------------------------------------------#
 gh pr review "$number" --repo "$slug" --approve \
-  --body "Approved by the bot-merge workflow: CI passed on $sha and every changed line differs only in a pin."
+  --body "bot-merge: the required checks passed on $sha, and each changed line differs only in a pin."
 if ! gh pr merge "$number" --repo "$slug" --squash --delete-branch --match-head-commit "$sha" \
-     > "$work/merge.out" 2>&1; then
+  > "$work/merge.out" 2>&1; then
   sed 's/^/  /' "$work/merge.out"
   die "branch protection refused to merge #$number" \
-    "gh's own words are above" \
+    "the message of gh is above" \
     "reproduce: gh pr merge $number --squash --match-head-commit $sha"
 fi
 echo "merge-bot-pr: #$number merged"

@@ -1,30 +1,10 @@
-# Well known servers, always written first and never dropped by ranking.
+# Anchors for ppc64le. scripts/gen-mirrorlist writes them first, in this order.
+# It never ranks or drops them. At least one must answer.
 #
-# ⛔ Two entries, and the second is not a mirror. ArchPOWER publishes from one
-# host, and that host sits behind a Cloudflare bot challenge that refuses
-# datacentre address ranges. Measured 2026-08-28 from a GitHub runner: every
-# request answers 403 with a "Just a moment..." interstitial, for curl's own
-# user agent, for pacman's, for a browser's and for this repository's. It is
-# the source network, not the identity.
-#
-# api.rv.pkgforge.dev is a read through proxy in front of the same origin. It
-# answered 200 from both a runner and a workstation, with byte identical
-# databases: 724493 for powerpc64le, 741715 for powerpc and 684273 for
-# powerpc64. HISTORY/powerpc.md carries the measurement.
-#
-# ⛔ From 2026-09-18 the proxy answers 403 from a runner too, and both answer
-# 200 from a residential network. The build holds the three ports back on its
-# own while that lasts and carries their last published images, and a server
-# added here that a runner can read brings them back with no other edit.
-# HISTORY/outage-2026-09.md.
-#
-# ⭐ The direct host is first, so a consumer that can reach the origin uses the
-# origin and the proxy carries only what cannot. pacman falls through to the
-# next Server on a failed transfer, which is what makes the ordering work.
-#
-# ⚠ The proxy cannot forge a package. SigLevel stays Required and the keyring is
-# pinned in bootstrap/keyrings/archpower.pin, so what a proxy could do is serve
-# a stale but validly signed set, which is what scripts/check-anchor-floor
-# refuses.
+# The first is the GHCR mirror (pkgforge-dev/mirror-archlinux). The second is
+# the ArchPOWER origin. The third is a read-through proxy of the origin.
+# ArchPOWER has no other mirror, so this port has no pool file.
+# ⚠ The origin and the proxy answer HTTP 403 to GitHub runner addresses.
+Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo
 Server = https://repo.archlinuxpower.org/$repo/$arch
 Server = https://api.rv.pkgforge.dev/https://repo.archlinuxpower.org/$repo/$arch

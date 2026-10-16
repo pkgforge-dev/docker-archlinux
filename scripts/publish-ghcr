@@ -1,0 +1,550 @@
+#!/usr/bin/env bash
+#
+# Tag on GHCR the images that the build legs pushed by digest, and make the
+# multi-platform index.
+#
+#   scripts/publish-ghcr [--dry-plan] [--fixtures DIR [--write]] DIGEST_DIR
+#
+# DIGEST_DIR holds digest-<arch>.json, one file for each build leg that
+# passed. The source of each port:
+#   fresh     the digest from its digest-<arch>.json, on TARGET_IMAGE
+#   carried   no file: the digest of <first alias> on CARRY_IMAGE. 404 is
+#             absent. Another answer is tried 3 times, then HUB_IMAGE is
+#             asked. When neither answers, the publish stops.
+#   absent    no file, and CARRY_IMAGE has no <first alias>
+#
+# The steps:
+#   1. Read the tag list of TARGET_IMAGE, and its latest index.
+#   2. Find the source of each port.
+#   3. Read the manifests that latest must hold: the children of each source.
+#   4. With no fresh port: stop when latest holds exactly those manifests.
+#      Else latest is made again, as after a failed index write.
+#   5. Stop before any write when the new latest would lose a platform of the
+#      present latest, or when scripts/tag-names refuses a tag of any port.
+#   6. For each fresh port: tag its digest with `scripts/tag-names --existing`.
+#   7. Make latest, and v<VERSION> when it does not exist, from every fresh
+#      and carried source.
+#   8. Read back each tag: a port tag has its source digest; latest holds
+#      exactly the manifests of the sources; v<VERSION> is latest.
+# ⛔ Pinned tags are made once (scripts/tag-names). latest moves last.
+# v<VERSION> dates a build. It is made only when a source was built on
+# VERSION: a fresh port, or a carried port whose <first alias>-v<VERSION> on
+# CARRY_IMAGE has its carried digest.
+#
+# Environment:
+#   TARGET_IMAGE   the GHCR image to tag (required)
+#   CARRY_IMAGE    the published GHCR image (default TARGET_IMAGE)
+#   HUB_IMAGE      the published Docker Hub image, asked for a carried digest
+#                  when GHCR does not answer (optional)
+#   VERSION        the build date, YYYY.MM.DD (required)
+#   PUBLISH_TRIES  tries for each write and each carried read (default 3)
+#   RETRY_PAUSE    seconds before the second try, doubled after (default 5)
+#   GITHUB_OUTPUT  when set, gets fresh=, carried= and absent= lines, and a
+#                  published= line after the read back passes (not in a dry
+#                  plan)
+#
+# --dry-plan writes nothing. It prints one line for each action on stdout:
+#   source ARCH fresh|carried REF     absent ARCH
+#   tag SOURCE TAG...                 index TAG... from SOURCE...
+#   output KEY=VALUE
+# --fixtures DIR reads every registry fact from DIR, calls no registry, and
+# implies --dry-plan:
+#   DIR/tags.tsv       REGISTRY<TAB>REPO<TAB>TAG
+#   DIR/heads.tsv      REGISTRY<TAB>REPO<TAB>REF<TAB>CODE<TAB>DIGEST
+#   DIR/manifests.tsv  REGISTRY<TAB>REPO<TAB>REF<TAB>JSON on one line
+#   DIR/unreadable     REGISTRY<TAB>REPO, a tag list that cannot be read
+# A HEAD or GET that is not in the files answers 404.
+# --fixtures DIR --write runs the writes with the docker on PATH and reads
+# back from DIR. A test gives a stand-in docker and the state after the write.
+#
+# Exit status: 0 published, or nothing to publish; 1 an error, a source that
+# cannot be read, or a tag that does not read back; 2 usage.
+set -euo pipefail
+shopt -s inherit_errexit
+
+PROG=publish-ghcr
+# shellcheck source=scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORTS="$ROOT/scripts/ports"
+TAGS="$ROOT/scripts/tag-names"
+
+usage() {
+  sed -n '6p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  exit 2
+}
+
+dry=0
+force_write=0
+FIXTURES=""
+digest_dir=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dry-plan) dry=1 ;;
+    --write) force_write=1 ;;
+    --fixtures)
+      [ "$#" -ge 2 ] || usage
+      FIXTURES="$2"
+      dry=1
+      shift
+      ;;
+    -*) usage ;;
+    *)
+      [ -z "$digest_dir" ] || usage
+      digest_dir="$1"
+      ;;
+  esac
+  shift
+done
+[ -n "$digest_dir" ] || usage
+if [ "$force_write" -eq 1 ]; then
+  [ -n "$FIXTURES" ] || die "--write is for a test with --fixtures"
+  dry=0
+fi
+need awk jq sha256sum
+
+TARGET_IMAGE="${TARGET_IMAGE:-}"
+CARRY_IMAGE="${CARRY_IMAGE:-$TARGET_IMAGE}"
+HUB_IMAGE="${HUB_IMAGE:-}"
+VERSION="${VERSION:-}"
+TRIES="${PUBLISH_TRIES:-3}"
+PAUSE="${RETRY_PAUSE:-5}"
+[ -n "$TARGET_IMAGE" ] || die "TARGET_IMAGE is not set"
+[[ "$VERSION" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}$ ]] || die "VERSION '$VERSION' is not YYYY.MM.DD"
+[ -d "$digest_dir" ] || die "$digest_dir is not a directory" \
+  "it holds the digest-<arch>.json files of the build legs"
+if [ -n "$FIXTURES" ]; then
+  [ -d "$FIXTURES" ] || die "--fixtures $FIXTURES is not a directory"
+fi
+if [ "$dry" -eq 0 ]; then
+  need docker timeout
+fi
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+#---------------------------------------------------------------------------#
+# Registry reads, from the registry or from fixtures.
+#---------------------------------------------------------------------------#
+
+# split_image IMAGE -> "REGISTRY REPO"
+split_image() {
+  local first="${1%%/*}"
+  case "$first" in
+    *.* | *:* | localhost) printf '%s %s\n' "$first" "${1#*/}" ;;
+    *) printf 'docker.io %s\n' "$1" ;;
+  esac
+}
+
+# fx_lookup FILE COLUMNS_TO_MATCH... -> the first matching line, columns after
+fx_lookup() {
+  local file="$FIXTURES/$1"
+  shift
+  [ -f "$file" ] || return 0
+  awk -F'\t' -v k="$(printf '%s\t' "$@")" -v n="$#" '
+    {
+      key = ""
+      for (i = 1; i <= n; i++) key = key $i "\t"
+      if (key == k && !done) {
+        out = ""
+        for (i = n + 1; i <= NF; i++) out = out (i > n + 1 ? "\t" : "") $i
+        print out
+        done = 1
+      }
+    }' "$file"
+}
+
+# read_tags REGISTRY REPO OUT -> 0 read, 1 could not read
+read_tags() {
+  if [ -n "$FIXTURES" ]; then
+    if [ -f "$FIXTURES/unreadable" ] &&
+      awk -F'\t' -v r="$1" -v p="$2" '$1 == r && $2 == p { f = 1 } END { exit f ? 0 : 1 }' "$FIXTURES/unreadable"; then
+      return 1
+    fi
+    : > "$3"
+    if [ -f "$FIXTURES/tags.tsv" ]; then
+      awk -F'\t' -v r="$1" -v p="$2" '$1 == r && $2 == p && NF >= 3 { print $3 }' "$FIXTURES/tags.tsv" > "$3"
+    fi
+    return 0
+  fi
+  reg_tags "$1" "$2" "$3"
+}
+
+# head_ref REGISTRY REPO REF -> "CODE DIGEST"
+head_ref() {
+  local line
+  if [ -n "$FIXTURES" ]; then
+    line="$(fx_lookup heads.tsv "$1" "$2" "$3")"
+    if [ -z "$line" ]; then
+      printf '404 \n'
+    else
+      printf '%s\n' "$line" | tr '\t' ' '
+    fi
+    return 0
+  fi
+  reg_head "$1" "$2" "$3"
+}
+
+# get_ref REGISTRY REPO REF OUT -> prints CODE
+get_ref() {
+  local line
+  if [ -n "$FIXTURES" ]; then
+    line="$(fx_lookup manifests.tsv "$1" "$2" "$3")"
+    if [ -z "$line" ]; then
+      : > "$4"
+      printf '404\n'
+    else
+      printf '%s\n' "$line" > "$4"
+      printf '200\n'
+    fi
+    return 0
+  fi
+  reg_get "$1" "$2" "$3" "$4"
+}
+
+# platforms FILE -> one os/arch[/variant] per line, the attestations left out
+platforms() {
+  jq -r '[ .manifests[]? | .platform | select(. != null and .os != "unknown")
+           | .os + "/" + .architecture + (if .variant then "/" + .variant else "" end) ]
+         | unique | .[]' "$1"
+}
+
+# act WORDS... -> one action line on stdout
+act() {
+  printf '%s\n' "$*"
+}
+
+# retry_write CMD... -> run a registry write with a deadline and retries
+retry_write() {
+  local n=0 rc pause="$PAUSE"
+  while :; do
+    n=$((n + 1))
+    rc=0
+    timeout -k 5 600 "$@" || rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    if [ "$n" -ge "$TRIES" ]; then
+      warn "the write failed $n times, the last with exit $rc: $*"
+      return 1
+    fi
+    warn "the write exited $rc, try $((n + 1)) of $TRIES in ${pause}s"
+    sleep "$pause"
+    pause=$((pause * 2))
+  done
+}
+
+read -r t_reg t_repo <<< "$(split_image "$TARGET_IMAGE")"
+read -r c_reg c_repo <<< "$(split_image "$CARRY_IMAGE")"
+
+#---------------------------------------------------------------------------#
+# 1. The tag list and the present latest of the target.
+#---------------------------------------------------------------------------#
+# ⛔ A list that cannot be read stops the publish. Read as empty, it would move
+# every pinned tag.
+read_tags "$t_reg" "$t_repo" "$work/existing" || die "the tag list of $TARGET_IMAGE cannot be read" \
+  "without it each pinned tag would be made again, on another image" \
+  "reproduce: scripts/registry-tags $t_reg $t_repo"
+note "$TARGET_IMAGE has $(awk 'END { print NR + 0 }' "$work/existing") tag(s)"
+
+: > "$work/prev-platforms"
+code="$(get_ref "$t_reg" "$t_repo" latest "$work/prev-latest.json")" || code=000
+prev_code="$code"
+case "$code" in
+  200) platforms "$work/prev-latest.json" > "$work/prev-platforms" ;;
+  404) note "$TARGET_IMAGE has no latest yet" ;;
+  *) die "reading $TARGET_IMAGE:latest answered HTTP $code" \
+    "without it the publish cannot keep the platforms of latest" \
+    "reproduce: curl -sSI https://$t_reg/v2/$t_repo/manifests/latest" ;;
+esac
+
+#---------------------------------------------------------------------------#
+# 2. The source of each port.
+#---------------------------------------------------------------------------#
+ports_list="$("$PORTS" list)"
+
+# The digest files must name ports, and only ports.
+for f in "$digest_dir"/*; do
+  [ -e "$f" ] || continue
+  b="$(basename "$f")"
+  [[ "$b" =~ ^digest-([a-z0-9]+)\.json$ ]] || die "$f is not a digest-<arch>.json file"
+  grep -qxF -- "${BASH_REMATCH[1]}" <<< "$ports_list" || die "$f names ${BASH_REMATCH[1]}, which is not a port"
+done
+
+# carried_digest ARCH ALIAS -> the digest, empty when absent; dies when unknown
+carried_digest() {
+  local arch="$1" alias="$2" n=0 code digest pause="$PAUSE" h_reg h_repo
+  while :; do
+    n=$((n + 1))
+    read -r code digest <<< "$(head_ref "$c_reg" "$c_repo" "$alias")"
+    case "$code" in
+      200)
+        [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "$CARRY_IMAGE:$alias answered 200 with no digest"
+        printf '%s\n' "$digest"
+        return 0
+        ;;
+      404) return 0 ;;
+    esac
+    warn "$CARRY_IMAGE:$alias answered HTTP ${code:-none}, try $n of $TRIES"
+    [ "$n" -lt "$TRIES" ] || break
+    [ -n "$FIXTURES" ] || sleep "$pause"
+    pause=$((pause * 2))
+  done
+  if [ -n "$HUB_IMAGE" ]; then
+    read -r h_reg h_repo <<< "$(split_image "$HUB_IMAGE")"
+    read -r code digest <<< "$(head_ref "$h_reg" "$h_repo" "$alias")"
+    if [ "$code" = 200 ] && [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      warn "$arch: the digest of $alias comes from $HUB_IMAGE, because GHCR did not answer"
+      printf '%s\n' "$digest"
+      return 0
+    fi
+    warn "$HUB_IMAGE:$alias answered HTTP ${code:-none}"
+  fi
+  die "the carried image of $arch is unknown: $CARRY_IMAGE:$alias did not answer" \
+    "⛔ read as absent, latest would lose $arch" \
+    "reproduce: curl -sSI https://$c_reg/v2/$c_repo/manifests/$alias"
+}
+
+: > "$work/sources"
+fresh=""
+carried=""
+absent=""
+while IFS= read -r arch; do
+  [ -n "$arch" ] || continue
+  platform="$("$PORTS" get "$arch" platform)"
+  first="$("$PORTS" aliases "$arch" | awk 'NR == 1')"
+  f="$digest_dir/digest-$arch.json"
+  if [ -f "$f" ]; then
+    jq -e . "$f" > /dev/null || die "$f is not JSON"
+    got_arch="$(jq -r '.arch // empty' "$f")"
+    got_platform="$(jq -r '.platform // empty' "$f")"
+    digest="$(jq -r '.digest // empty' "$f")"
+    anchor="$(jq -r '.anchor // empty' "$f")"
+    [ "$got_arch" = "$arch" ] || die "$f says arch '$got_arch'"
+    [ "$got_platform" = "$platform" ] || die "$f says platform '$got_platform'; ports/$arch.conf says '$platform'"
+    [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "$f has no valid digest: '$digest'"
+    # The characters of a tag (valid_tag in scripts/tag-names): no + and no :.
+    [[ "$anchor" =~ ^[A-Za-z0-9._-]+$ ]] || die "$f has an anchor that no tag can carry: '$anchor'" \
+      "reproduce: scripts/check-anchor-floor $arch '$anchor'"
+    ref="$TARGET_IMAGE@$digest"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$arch" fresh "$ref" "$platform" "$anchor" >> "$work/sources"
+    fresh="$fresh $arch"
+    act "source $arch fresh $ref"
+    continue
+  fi
+  digest="$(carried_digest "$arch" "$first")"
+  if [ -n "$digest" ]; then
+    ref="$CARRY_IMAGE@$digest"
+    printf '%s\t%s\t%s\t%s\t-\n' "$arch" carried "$ref" "$platform" >> "$work/sources"
+    carried="$carried $arch"
+    act "source $arch carried $ref"
+  else
+    absent="$absent $arch"
+    act "absent $arch"
+    warn "$arch did not build in this run and $CARRY_IMAGE has no $first, so latest has no $platform"
+  fi
+done <<< "$ports_list"
+fresh="${fresh# }"
+carried="${carried# }"
+absent="${absent# }"
+
+output() {
+  if [ "$dry" -eq 1 ]; then
+    printf 'output %s=%s\n' "$1" "$2"
+  elif [ -n "${GITHUB_OUTPUT:-}" ]; then
+    printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"
+  fi
+}
+output fresh "$fresh"
+output carried "$carried"
+output absent "$absent"
+
+if [ -z "$fresh$carried" ]; then
+  note "no port has an image, so no tag moves"
+  exit 0
+fi
+mapfile -t srcs < <(awk -F'\t' '{ print $3 }' "$work/sources")
+
+#---------------------------------------------------------------------------#
+# 3. The manifests that latest must hold: the children of each source.
+#---------------------------------------------------------------------------#
+# A dry plan with a fresh port does not need them: it writes nothing.
+if [ "$dry" -eq 0 ] || [ -z "$fresh" ]; then
+  : > "$work/want-manifests"
+  for s in "${srcs[@]}"; do
+    read -r s_reg s_repo <<< "$(split_image "${s%@*}")"
+    code="$(get_ref "$s_reg" "$s_repo" "${s##*@}" "$work/src.json")" || code=000
+    [ "$code" = 200 ] || die "reading the source $s answered HTTP $code" \
+      "without it latest cannot be checked; no tag was written" \
+      "reproduce: docker buildx imagetools inspect $s --raw"
+    if jq -e 'has("manifests")' "$work/src.json" > /dev/null; then
+      jq -r '.manifests[].digest' "$work/src.json" >> "$work/want-manifests"
+    else
+      printf '%s\n' "${s##*@}" >> "$work/want-manifests"
+    fi
+  done
+  LC_ALL=C sort -u "$work/want-manifests" > "$work/want-sorted"
+fi
+
+#---------------------------------------------------------------------------#
+# 4. With no fresh port, latest moves only when it does not hold the image of
+#    each port, as after a failed index write.
+#---------------------------------------------------------------------------#
+dated=1
+if [ -z "$fresh" ]; then
+  : > "$work/prev-manifests"
+  if [ "$prev_code" = 200 ]; then
+    jq -r '.manifests[]?.digest' "$work/prev-latest.json" | LC_ALL=C sort -u > "$work/prev-manifests"
+  fi
+  if cmp -s "$work/prev-manifests" "$work/want-sorted"; then
+    note "no port built in this run, and latest holds the image of each port, so no tag moves"
+    exit 0
+  fi
+  warn "no port built in this run, and latest does not hold the image of each port, so latest is made again:" \
+    "$(LC_ALL=C comm -13 "$work/prev-manifests" "$work/want-sorted" | awk 'END { print NR + 0 }') manifest(s) missing," \
+    "$(LC_ALL=C comm -23 "$work/prev-manifests" "$work/want-sorted" | awk 'END { print NR + 0 }') extra"
+  dated=0
+  while IFS=$'\t' read -r arch kind ref platform anchor; do
+    first="$("$PORTS" aliases "$arch" | awk 'NR == 1')"
+    read -r code got <<< "$(head_ref "$c_reg" "$c_repo" "$first-v$VERSION" || printf '000 \n')"
+    if [ "$code" = 200 ] && [ "$got" = "${ref##*@}" ]; then
+      dated=1
+    fi
+  done < "$work/sources"
+  [ "$dated" -eq 1 ] || note "no source was built on $VERSION, so v$VERSION is not made"
+fi
+
+#---------------------------------------------------------------------------#
+# 5. Before any write: the new latest keeps every platform of the present
+#    latest, and scripts/tag-names takes every tag.
+#---------------------------------------------------------------------------#
+awk -F'\t' '{ print $4 }' "$work/sources" | LC_ALL=C sort -u > "$work/new-platforms"
+lost="$(LC_ALL=C comm -23 <(LC_ALL=C sort -u "$work/prev-platforms") "$work/new-platforms" | tr '\n' ' ')"
+if [ -n "${lost// /}" ]; then
+  die "the new latest would lose: $lost" \
+    "the present latest has them, and no fresh or carried source gives them" \
+    "no tag was written" \
+    "reproduce: scripts/publish-ghcr --dry-plan $digest_dir"
+fi
+
+: > "$work/written"
+while IFS=$'\t' read -r arch kind ref platform anchor; do
+  [ "$kind" = fresh ] || continue
+  "$TAGS" --existing "$work/existing" arch "$arch" "$VERSION" "$anchor" "$TARGET_IMAGE" > "$work/tags-$arch" ||
+    die "scripts/tag-names refused the tags of $arch, anchor '$anchor'" "no tag was written" \
+      "reproduce: scripts/tag-names arch $arch $VERSION '$anchor' $TARGET_IMAGE"
+  # The rolling tags are always printed, so an empty list is a fault.
+  [ -s "$work/tags-$arch" ] || die "scripts/tag-names printed no tag for $arch" "no tag was written"
+  awk -v r="$ref" '{ print $0 "\t" r }' "$work/tags-$arch" >> "$work/written"
+done < "$work/sources"
+
+"$TAGS" --existing "$work/existing" index "$VERSION" "$TARGET_IMAGE" > "$work/index-all" ||
+  die "scripts/tag-names refused the index tags" "no tag was written" \
+    "reproduce: scripts/tag-names index $VERSION $TARGET_IMAGE"
+if [ "$dated" -eq 1 ]; then
+  cp "$work/index-all" "$work/index-tags"
+else
+  awk -v v="$TARGET_IMAGE:v$VERSION" '$0 != v' "$work/index-all" > "$work/index-tags"
+fi
+[ -s "$work/index-tags" ] || die "scripts/tag-names printed no index tag" "no tag was written"
+
+#---------------------------------------------------------------------------#
+# 6. The tags of each fresh port.
+#---------------------------------------------------------------------------#
+while IFS=$'\t' read -r arch kind ref platform anchor; do
+  [ "$kind" = fresh ] || continue
+  act "tag $ref $(tr '\n' ' ' < "$work/tags-$arch" | sed 's/ $//')"
+  if [ "$dry" -eq 0 ]; then
+    args=()
+    while IFS= read -r t; do
+      args+=(-t "$t")
+    done < "$work/tags-$arch"
+    retry_write docker buildx imagetools create "${args[@]}" "$ref" || die "tagging $arch failed" \
+      "the tags of each port before it are written; latest did not move" \
+      "reproduce: docker buildx imagetools create ${args[*]} $ref"
+  fi
+done < "$work/sources"
+
+#---------------------------------------------------------------------------#
+# 7. The index: latest, and v<VERSION> when it does not exist. Last.
+#---------------------------------------------------------------------------#
+act "index $(tr '\n' ' ' < "$work/index-tags")from ${srcs[*]}"
+if [ "$dry" -eq 1 ]; then
+  note "dry plan: nothing was written"
+  exit 0
+fi
+args=()
+while IFS= read -r t; do
+  args+=(-t "$t")
+done < "$work/index-tags"
+retry_write docker buildx imagetools create "${args[@]}" "${srcs[@]}" || die "making the index failed" \
+  "every port tag above is written; the next run makes latest again from the first alias of each port" \
+  "reproduce: docker buildx imagetools create ${args[*]} ${srcs[*]}"
+
+#---------------------------------------------------------------------------#
+# 8. Read back what was written.
+#---------------------------------------------------------------------------#
+faults=0
+fault() {
+  echo "$PROG: verify: $*" >&2
+  faults=$((faults + 1))
+}
+
+# verify -> faults is the count of tags that do not read back as written
+verify() {
+  local tagref src t want code got latest_digest lost
+  faults=0
+  # Each port tag has the digest of its source.
+  while IFS=$'\t' read -r tagref src; do
+    t="${tagref##*:}"
+    want="${src##*@}"
+    read -r code got <<< "$(head_ref "$t_reg" "$t_repo" "$t")"
+    if [ "$code" != 200 ] || [ "$got" != "$want" ]; then
+      fault "$TARGET_IMAGE:$t answered HTTP $code with '$got'; want $want"
+    fi
+  done < "$work/written"
+
+  # latest holds exactly the manifests of the sources, and every platform of
+  # the previous latest.
+  code="$(get_ref "$t_reg" "$t_repo" latest "$work/latest.json")" || code=000
+  if [ "$code" != 200 ]; then
+    fault "$TARGET_IMAGE:latest answered HTTP $code after the write"
+    return 0
+  fi
+  jq -r '.manifests[]?.digest' "$work/latest.json" | LC_ALL=C sort -u > "$work/got-manifests"
+  if ! cmp -s "$work/got-manifests" "$work/want-sorted"; then
+    fault "latest does not hold exactly the manifests of the sources;" \
+      "missing: $(LC_ALL=C comm -13 "$work/got-manifests" "$work/want-sorted" | tr '\n' ' ');" \
+      "extra: $(LC_ALL=C comm -23 "$work/got-manifests" "$work/want-sorted" | tr '\n' ' ')"
+  fi
+  platforms "$work/latest.json" | LC_ALL=C sort -u > "$work/got-platforms"
+  lost="$(LC_ALL=C comm -23 <(LC_ALL=C sort -u "$work/prev-platforms") "$work/got-platforms" | tr '\n' ' ')"
+  [ -z "${lost// /}" ] || fault "latest lost platforms of the previous latest: $lost"
+  latest_digest="sha256:$(sha256sum "$work/latest.json" | awk '{ print $1 }')"
+  read -r code got <<< "$(head_ref "$t_reg" "$t_repo" latest)"
+  [ "$got" = "$latest_digest" ] || fault "latest answered '$got' to HEAD and $latest_digest to GET"
+  # v<VERSION>, when this run made it, is the same index.
+  if grep -qxF -- "$TARGET_IMAGE:v$VERSION" "$work/index-tags"; then
+    read -r code got <<< "$(head_ref "$t_reg" "$t_repo" "v$VERSION")"
+    [ "$got" = "$latest_digest" ] || fault "v$VERSION answered HTTP $code with '$got'; latest is $latest_digest"
+  fi
+}
+
+# A registry can answer a read with the old manifest for a short time after a
+# write. So a fault is read again before it counts.
+n=0
+pause="$PAUSE"
+while :; do
+  n=$((n + 1))
+  verify
+  [ "$faults" -gt 0 ] || break
+  if [ "$n" -ge "$TRIES" ]; then
+    die "$faults tag(s) did not read back as written, after $n reads" \
+      "reproduce: docker buildx imagetools inspect $TARGET_IMAGE:latest --raw"
+  fi
+  warn "$faults tag(s) did not read back as written; read $((n + 1)) of $TRIES in ${pause}s"
+  sleep "$pause"
+  pause=$((pause * 2))
+done
+# ⛔ Only here: scripts/report-build clears build-<arch> for these ports.
+output published "$fresh"
+note "published: fresh '$fresh', carried '$carried', absent '$absent'"

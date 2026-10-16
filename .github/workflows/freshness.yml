@@ -1,0 +1,692 @@
+name: Freshness
+
+# Compare each pin of the tree with its upstream, one time each week. Each
+# lasting problem is an issue (scripts/track-issue):
+#
+#   job               issue                    what it compares
+#   image-pins        image-pins-stale         each "# tag:" image pin with its tag
+#   keyring           keyring-<pin>            each keyring pin with the database
+#                                              of its port; a new package goes into
+#                                              a pull request
+#   pacman-static     pacman-static-sources    each source of the static pacman
+#                                              with its newest release
+#                     pacman-static-pin        the pinned pacman commit with the
+#                                              pacman of each port
+#   tools             tools-drift              each tool of scripts/install-tools
+#                                              with its newest release
+#   pacman-oci        pacman-oci-drift         the vendored pacman-oci with its
+#                                              source
+#
+# ⭐ Renovate moves the image pins, action pins and runner labels. image-pins
+# reports a pin only when it is behind its tag for more than 14 days. The
+# days count from the first run that saw it behind (the artifact
+# image-pins-seen). The
+# tool pins of scripts/install-tools, meson too, have a sha256: the job tools
+# reports them.
+# pacman-static.yml builds the static pacman each week on its own schedule;
+# scripts/watch-schedules reports when it fails.
+
+on:
+  schedule:
+    - cron: "45 4 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: freshness
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  image-pins:
+    name: Image pins against their tags
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # ⭐ The record of the pins seen behind (scripts/check-image-pins
+      # --seen) is the artifact image-pins-seen of the newest run on the
+      # default branch of this repository. ⛔ An artifact of a run on another
+      # branch, or of a run from a fork, is not read: a pull request can
+      # upload an artifact with that name. A read that fails stops the job,
+      # so no record from today replaces the record.
+      - name: Read the record of the pins seen behind
+        id: seen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/seen"
+          base="$(timeout -k 5 60 gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)"
+          timeout -k 5 120 gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?name=image-pins-seen&per_page=100" \
+            > "$RUNNER_TEMP/artifacts.json"
+          run="$(jq -s -r --arg b "$base" '[.[].artifacts[]
+            | select(.expired == false and .workflow_run.head_branch == $b
+                and .workflow_run.head_repository_id == .workflow_run.repository_id)]
+            | sort_by(.created_at) | last | .workflow_run.id // empty' "$RUNNER_TEMP/artifacts.json")"
+          if [ -z "$run" ]; then
+            echo "::notice::no artifact image-pins-seen from the branch $base: each pin that is behind counts from today"
+          else
+            timeout -k 5 120 gh run download "$run" --repo "$GITHUB_REPOSITORY" \
+              --name image-pins-seen --dir "$RUNNER_TEMP/seen"
+            echo "the record of run $run:"
+            cat "$RUNNER_TEMP/seen/image-pins-seen.txt"
+          fi
+
+      # 0: no pin is behind for more than 14 days. 3: one is. 1: a pin has no
+      # marker or a registry did not answer; the run is red.
+      - name: Compare each image pin with its tag
+        id: pins
+        run: |
+          rc=0
+          scripts/check-image-pins --max-age 14 --seen "$RUNNER_TEMP/seen/image-pins-seen.txt" \
+            > "$RUNNER_TEMP/pins.txt" || rc=$?
+          cat "$RUNNER_TEMP/pins.txt"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          case "$rc" in
+            0 | 3) ;;
+            *)
+              echo "::error::scripts/check-image-pins could not check every pin (exit $rc)"
+              exit 1
+              ;;
+          esac
+
+      # The record goes to the next run. When the check stops early, the
+      # record that it read goes on as it is.
+      - name: Keep the record of the pins seen behind
+        if: ${{ !cancelled() && steps.pins.outputs.rc != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image-pins-seen
+          path: ${{ runner.temp }}/seen/image-pins-seen.txt
+          retention-days: 90
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Raise or clear image-pins-stale
+        if: ${{ !cancelled() && steps.pins.outputs.rc != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RC: ${{ steps.pins.outputs.rc }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          case "$RC" in
+            3)
+              # shellcheck disable=SC2016 # Markdown backticks, not command substitution
+              {
+                printf 'An image pin is behind its tag for more than 14 days. Renovate did not move it.\n\n'
+                printf 'The days count from the first weekly run that saw the pin behind (the artifact `image-pins-seen`).\n\n'
+                printf '```\n'
+                cat "$RUNNER_TEMP/pins.txt"
+                printf '```\n\n'
+                printf 'Look for an open Renovate pull request for the pin, or move it by hand: `scripts/check-image-pins --apply`.\n\n'
+                printf 'reproduce: `scripts/check-image-pins --max-age 14`\n\nSeen in: %s\n' "$run_url"
+              } > "$RUNNER_TEMP/pins.md"
+              scripts/track-issue raise image-pins-stale "pins: an image pin is behind its tag for more than 14 days" "$RUNNER_TEMP/pins.md"
+              ;;
+            0)
+              scripts/track-issue clear image-pins-stale "No image pin is behind its tag for more than 14 days: $run_url"
+              ;;
+            *)
+              echo "the pin check did not finish; the issue stays as it is"
+              ;;
+          esac
+
+  keyring-list:
+    name: List the keyring pins
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      pins: ${{ steps.list.outputs.pins }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # ⭐ The matrix is the pin files. A new pin comes under this check with
+      # no edit here.
+      - name: List bootstrap/keyrings/*.pin
+        id: list
+        run: |
+          shopt -s nullglob
+          files=(bootstrap/keyrings/*.pin)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no bootstrap/keyrings/*.pin"
+            exit 1
+          fi
+          printf '%s\n' "${files[@]}" > "$RUNNER_TEMP/pins.txt"
+          json="$(jq -R -c '{pin: ., keyring: (split("/") | last | rtrimstr(".pin"))}' "$RUNNER_TEMP/pins.txt" | jq -s -c .)"
+          echo "$json"
+          echo "pins=$json" >> "$GITHUB_OUTPUT"
+
+  keyring:
+    name: Keyring ${{ matrix.keyring }}
+    needs: keyring-list
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: write
+      contents: write
+      issues: write
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.keyring-list.outputs.pins) }}
+    steps:
+      # This job pushes the branch freshness/keyring-<pin>, so the checkout
+      # keeps its credentials.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # 0 current, 3 behind, 4 gone, 5 bytes changed, 6 unreachable,
+      # 7 not signed by a trusted key. scripts/check-keyring-pin writes the
+      # measured values to the step outputs.
+      - name: Compare the pin with the database of its port
+        id: check
+        env:
+          PIN: ${{ matrix.pin }}
+        run: |
+          rc=0
+          scripts/check-keyring-pin "$PIN" > "$RUNNER_TEMP/check.txt" || rc=$?
+          cat "$RUNNER_TEMP/check.txt"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          case "$rc" in
+            0 | 3 | 4 | 5 | 6 | 7) ;;
+            *)
+              echo "::error::scripts/check-keyring-pin $PIN could not run (exit $rc)"
+              exit 1
+              ;;
+          esac
+
+      # These results need a person: other bytes (5), no answer (6), no
+      # trusted signer (7), and a new package with another set of
+      # fingerprints. So do usable keys that run out within a year.
+      - name: Raise or clear keyring-<pin>
+        if: ${{ !cancelled() && steps.check.outputs.rc != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RC: ${{ steps.check.outputs.rc }}
+          PIN: ${{ matrix.pin }}
+          KEYRING: ${{ matrix.keyring }}
+          TRUSTED_SET: ${{ steps.check.outputs.trusted_set }}
+          RUNS_OUT: ${{ steps.check.outputs.runs_out }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          case "$RC" in
+            0 | 3 | 4 | 5 | 6 | 7) ;;
+            *)
+              echo "the check did not finish; the issue stays as it is"
+              exit 0
+              ;;
+          esac
+          : > "$RUNNER_TEMP/reasons.txt"
+          case "$RC" in
+            5) echo "The pinned package is served with other bytes." >> "$RUNNER_TEMP/reasons.txt" ;;
+            6) echo "No server answered, so the pin was not compared." >> "$RUNNER_TEMP/reasons.txt" ;;
+            7) echo "A newer package exists, and no key that the pin trusts signed it." >> "$RUNNER_TEMP/reasons.txt" ;;
+          esac
+          if [ "$TRUSTED_SET" = changed ]; then
+            echo "A newer package trusts another set of fingerprints. Check the new keys before the merge." >> "$RUNNER_TEMP/reasons.txt"
+          fi
+          if [ "$RUNS_OUT" = yes ]; then
+            echo "No usable trusted key, or every usable trusted key expires within 1 year." >> "$RUNNER_TEMP/reasons.txt"
+          fi
+          if [ -s "$RUNNER_TEMP/reasons.txt" ]; then
+            # shellcheck disable=SC2016 # Markdown backticks, not command substitution
+            {
+              printf 'The keyring pin `%s` needs a person.\n\n' "$PIN"
+              sed 's/^/- /' "$RUNNER_TEMP/reasons.txt"
+              printf '\n`scripts/check-keyring-pin %s` exited %s:\n\n```\n' "$PIN" "$RC"
+              cat "$RUNNER_TEMP/check.txt"
+              printf '```\n\nThe build reads the package in the tree, and verifies it against the pin.\n\n'
+              printf 'reproduce: `scripts/check-keyring-pin %s`\n\nSeen in: %s\n' "$PIN" "$run_url"
+            } > "$RUNNER_TEMP/issue.md"
+            scripts/track-issue raise "keyring-$KEYRING" "keyring: the $KEYRING pin needs a person" "$RUNNER_TEMP/issue.md"
+          else
+            scripts/track-issue clear "keyring-$KEYRING" "scripts/check-keyring-pin exited $RC, and nothing needs a person: $run_url"
+          fi
+
+      # ⭐ A current pin needs no pull request. A pull request from an earlier
+      # run is closed.
+      - name: Withdraw the proposal for a current pin
+        if: ${{ steps.check.outputs.rc == '0' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEYRING: ${{ matrix.keyring }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          scripts/propose-change --withdraw "freshness/keyring-$KEYRING" \
+            "Withdrawn: the pin on the default branch is current. $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+      - name: Write the new package into the pin
+        id: apply
+        if: ${{ steps.check.outputs.rc == '3' || steps.check.outputs.rc == '4' }}
+        env:
+          PIN: ${{ matrix.pin }}
+        run: |
+          rc=0
+          scripts/check-keyring-pin --apply "$PIN" > "$RUNNER_TEMP/apply.txt" || rc=$?
+          cat "$RUNNER_TEMP/apply.txt"
+          case "$rc" in
+            3 | 4) ;;
+            *)
+              echo "::error::--apply exited $rc, not a bump; nothing is proposed"
+              exit 1
+              ;;
+          esac
+          git status --short
+
+      # The same fingerprints, or new ones: the pull request carries the
+      # measurement, and a person merges it. With new fingerprints the issue
+      # above also asks for a person.
+      - name: Propose the new pin
+        if: ${{ steps.apply.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEYRING: ${{ matrix.keyring }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RC: ${{ steps.check.outputs.rc }}
+          OLD_PACKAGE: ${{ steps.apply.outputs.old_package }}
+          OLD_SHA: ${{ steps.apply.outputs.old_sha256 }}
+          NEW_PACKAGE: ${{ steps.apply.outputs.new_package }}
+          NEW_SHA: ${{ steps.apply.outputs.new_sha256 }}
+          NEW_SIZE: ${{ steps.apply.outputs.new_size }}
+          SERVED_FROM: ${{ steps.apply.outputs.served_from }}
+          PINNED_HTTP: ${{ steps.apply.outputs.pinned_http }}
+          TRUSTED_SET: ${{ steps.apply.outputs.trusted_set }}
+          TRUSTED_ADDED: ${{ steps.apply.outputs.trusted_added }}
+          TRUSTED_REMOVED: ${{ steps.apply.outputs.trusted_removed }}
+          EXPIRED: ${{ steps.apply.outputs.expired_now }}
+          SOON: ${{ steps.apply.outputs.expiring_soon }}
+        run: |
+          # shellcheck disable=SC2016 # Markdown backticks, not command substitution
+          {
+            printf '## What moved\n\n'
+            printf 'The `%s` keyring has a newer package. The trusted set is **%s**.\n\n' "$KEYRING" "$TRUSTED_SET"
+            printf '| | pin before | pin after |\n| --- | --- | --- |\n'
+            printf '| package | `%s` | `%s` |\n' "$OLD_PACKAGE" "$NEW_PACKAGE"
+            printf '| sha256 | `%s` | `%s` |\n\n' "$OLD_SHA" "$NEW_SHA"
+            printf '| measurement | value |\n| --- | --- |\n'
+            printf '| database | `%s` |\n' "$SERVED_FROM"
+            printf '| check exit status | %s (3: the old package is served, 4: it is not) |\n' "$RC"
+            printf '| old package, HTTP | %s |\n' "$PINNED_HTTP"
+            printf '| new package, bytes | %s |\n' "$NEW_SIZE"
+            printf '| fingerprints added | `%s` |\n' "$TRUSTED_ADDED"
+            printf '| fingerprints removed | `%s` |\n' "$TRUSTED_REMOVED"
+            printf '| expired today | `%s` |\n' "$EXPIRED"
+            printf '| expire within 1 year | `%s` |\n\n' "$SOON"
+            printf '`scripts/check-keyring-pin` read every value from the package, and verified\n'
+            printf 'that a key of the old pin signed the new package.\n\n'
+            printf '## Before the merge\n\n'
+            printf -- '- CI runs on this branch and builds with the new pin.\n'
+            printf -- '- With a changed trusted set, check each new fingerprint against a second source (a keyserver, the website of the port).\n'
+            printf -- '- ⚠ One server gave the database. A server in the middle of a sync can give an older one.\n'
+          } > "$RUNNER_TEMP/body.md"
+          scripts/propose-change "freshness/keyring-$KEYRING" "keyring: pin $NEW_PACKAGE" \
+            "$RUNNER_TEMP/body.md" bootstrap/keyrings
+
+  pacman-static:
+    name: Static pacman pin against upstream
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The anchor of a port is <describe>-<pkgrel>. Only <describe> names a
+      # commit, so pkgrel is not compared. ⭐ A port that no server answers for
+      # is skipped. Drift is a port that answered with another commit.
+      - name: Compare the pinned commit with the pacman of each port
+        id: anchor
+        run: |
+          pin=bootstrap/pacman-static/sources.pin
+          awk '$1 == "describe" { print $2 }' "$pin" > "$RUNNER_TEMP/describe.txt"
+          describe="$(awk 'NR == 1' "$RUNNER_TEMP/describe.txt")"
+          if [ -z "$describe" ]; then
+            echo "::error::$pin has no describe line"
+            exit 1
+          fi
+          scripts/ports list > "$RUNNER_TEMP/arches.txt"
+          rows="$RUNNER_TEMP/anchor-rows.md"
+          : > "$rows"
+          compared=0
+          drift=""
+          skipped=""
+          while read -r arch; do
+            rc=0
+            anchor="$(scripts/resolve-anchor "$arch" < /dev/null 2> "$RUNNER_TEMP/resolve-$arch.err")" || rc=$?
+            if [ "$rc" -ne 0 ] || [ -z "$anchor" ]; then
+              skipped="$skipped $arch"
+              printf '| %s | - | no server answered |\n' "$arch" >> "$rows"
+              sed 's/^/  /' "$RUNNER_TEMP/resolve-$arch.err"
+              continue
+            fi
+            compared=$((compared + 1))
+            if [ "${anchor%-*}" = "$describe" ]; then
+              printf '| %s | %s | same |\n' "$arch" "$anchor" >> "$rows"
+            else
+              drift="$drift $arch"
+              printf '| %s | %s | **another commit** |\n' "$arch" "$anchor" >> "$rows"
+            fi
+          done < "$RUNNER_TEMP/arches.txt"
+          {
+            echo "describe=$describe"
+            echo "compared=$compared"
+            echo "drift=${drift# }"
+            echo "skipped=${skipped# }"
+          } >> "$GITHUB_OUTPUT"
+          cat "$rows"
+          if [ "$compared" -eq 0 ]; then
+            echo "::error::no port could be compared: no server answered for any port"
+            exit 1
+          fi
+
+      # GitHub release assets: the newest release of the repository. A
+      # directory listing (sourceware.org, gnupg.org): the newest
+      # <name>-<version>.tar.* file. ⚠ openssl follows its long term support
+      # line, so only releases of the pinned major.minor count. zig: the
+      # newest x.y.z of ziglang.org/download/index.json.
+      - name: Compare each pinned source with its newest release
+        id: sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pin=bootstrap/pacman-static/sources.pin
+          rows="$RUNNER_TEMP/source-rows.md"
+          : > "$rows"
+          behind=""
+          unmeasured=""
+
+          # version_of TEXT -> the first a.b[.c] in TEXT, "_" read as "."
+          version_of() {
+            printf '%s\n' "$1" | awk '{ s = $0; gsub(/_/, ".", s); if (match(s, /[0-9]+([.][0-9]+)+/)) print substr(s, RSTART, RLENGTH) }'
+          }
+
+          # judge NAME PINNED UPSTREAM
+          judge() {
+            local newest
+            if [ -z "$3" ]; then
+              unmeasured="$unmeasured $1"
+              printf '| %s | %s | not measured |\n' "$1" "$2" >> "$rows"
+              return 0
+            fi
+            newest="$(printf '%s\n%s\n' "$2" "$3" | sort -V | awk 'END { print }')"
+            if [ "$3" != "$2" ] && [ "$newest" = "$3" ]; then
+              behind="$behind $1($2->$3)"
+              printf '| %s | %s | **%s** |\n' "$1" "$2" "$3" >> "$rows"
+            else
+              printf '| %s | %s | current (%s) |\n' "$1" "$2" "$3" >> "$rows"
+            fi
+          }
+
+          awk '$1 == "source" { print $2, $3, $4 }' "$pin" > "$RUNNER_TEMP/sources.txt"
+          while read -r name version url; do
+            up=""
+            rc=0
+            case "$url" in
+              https://github.com/*/releases/download/*)
+                repo="$(printf '%s\n' "$url" | awk -F/ '{ print $4 "/" $5 }')"
+                if [ "$name" = openssl ]; then
+                  series="${version%.*}"
+                  gh api "repos/$repo/releases?per_page=100" < /dev/null > "$RUNNER_TEMP/rel.json" || rc=$?
+                  if [ "$rc" -eq 0 ]; then
+                    tag="$(jq -r --arg s "openssl-$series." '[.[] | select(.draft | not) | select(.prerelease | not) | .tag_name | select(startswith($s))] | first // empty' "$RUNNER_TEMP/rel.json")"
+                    up="$(version_of "$tag")"
+                  fi
+                else
+                  gh api "repos/$repo/releases/latest" < /dev/null > "$RUNNER_TEMP/rel.json" || rc=$?
+                  if [ "$rc" -eq 0 ]; then
+                    up="$(version_of "$(jq -r '.tag_name // empty' "$RUNNER_TEMP/rel.json")")"
+                  fi
+                fi
+                ;;
+              https://*)
+                dir="${url%/*}/"
+                curl -sSfL --connect-timeout 20 --max-time 120 -o "$RUNNER_TEMP/list.html" "$dir" < /dev/null || rc=$?
+                if [ "$rc" -eq 0 ]; then
+                  up="$(awk -v n="$name" '
+                    { line = $0
+                      while (match(line, n "-[0-9][0-9.]*[.]tar[.](gz|bz2|xz|zst)")) {
+                        v = substr(line, RSTART + length(n) + 1, RLENGTH - length(n) - 1)
+                        sub(/[.]tar[.][a-z0-9]+$/, "", v)
+                        print v
+                        line = substr(line, RSTART + RLENGTH)
+                      } }' "$RUNNER_TEMP/list.html" | sort -V | awk 'END { print }')"
+                fi
+                ;;
+            esac
+            [ "$rc" -eq 0 ] || echo "$name: the upstream read ended $rc"
+            judge "$name" "$version" "$up"
+          done < "$RUNNER_TEMP/sources.txt"
+
+          awk '$1 == "zig" { print $2 }' "$pin" | sort -u > "$RUNNER_TEMP/zig.txt"
+          while read -r zv; do
+            up=""
+            rc=0
+            curl -sSfL --connect-timeout 20 --max-time 120 -o "$RUNNER_TEMP/zig.json" \
+              https://ziglang.org/download/index.json < /dev/null || rc=$?
+            if [ "$rc" -eq 0 ]; then
+              up="$(jq -r 'keys[] | select(test("^[0-9]+[.][0-9]+[.][0-9]+$"))' "$RUNNER_TEMP/zig.json" | sort -V | awk 'END { print }')"
+            fi
+            judge zig "$zv" "$up"
+          done < "$RUNNER_TEMP/zig.txt"
+
+          {
+            echo "behind=${behind# }"
+            echo "unmeasured=${unmeasured# }"
+          } >> "$GITHUB_OUTPUT"
+          cat "$rows"
+
+      - name: Raise or clear pacman-static-sources and pacman-static-pin
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCES: ${{ steps.sources.outcome }}
+          BEHIND: ${{ steps.sources.outputs.behind }}
+          UNMEASURED: ${{ steps.sources.outputs.unmeasured }}
+          ANCHOR: ${{ steps.anchor.outcome }}
+          DESCRIBE: ${{ steps.anchor.outputs.describe }}
+          DRIFT: ${{ steps.anchor.outputs.drift }}
+          SKIPPED: ${{ steps.anchor.outputs.skipped }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ "$SOURCES" = success ]; then
+            if [ -n "$BEHIND" ] || [ -n "$UNMEASURED" ]; then
+              # shellcheck disable=SC2016 # Markdown backticks, not command substitution
+              {
+                printf 'A source of the static pacman is behind its newest release, or was not measured.\n\n'
+                printf '| source | pinned | upstream |\n| --- | --- | --- |\n'
+                cat "$RUNNER_TEMP/source-rows.md"
+                printf '\nbehind: `%s`\n\nnot measured: `%s`\n\n' "${BEHIND:-none}" "${UNMEASURED:-none}"
+                printf 'Measure the sha256 of a new tarball from a host that you trust, then edit `bootstrap/pacman-static/sources.pin`:\n\n'
+                printf '```bash\ncurl -sSfL --connect-timeout 20 --max-time 300 -o f URL && sha256sum f\n```\n\n'
+                printf 'Seen in: %s\n' "$run_url"
+              } > "$RUNNER_TEMP/sources.md"
+              scripts/track-issue raise pacman-static-sources "pacman-static: a pinned source is behind upstream" "$RUNNER_TEMP/sources.md"
+            else
+              scripts/track-issue clear pacman-static-sources "Every pinned source is at its newest release: $run_url"
+            fi
+          else
+            echo "the source comparison did not finish; pacman-static-sources stays as it is"
+          fi
+          if [ "$ANCHOR" = success ]; then
+            if [ -n "$DRIFT" ]; then
+              # shellcheck disable=SC2016 # Markdown backticks, not command substitution
+              {
+                printf 'The pinned pacman commit `%s` is not the pacman of these ports: `%s`.\n\n' "$DESCRIBE" "$DRIFT"
+                printf 'The release binary is then not the pacman of each published image.\n\n'
+                printf '| port | anchor | result |\n| --- | --- | --- |\n'
+                cat "$RUNNER_TEMP/anchor-rows.md"
+                printf '\nNot compared (no server answered): `%s`\n\n' "${SKIPPED:-none}"
+                printf 'Pin the commit that the anchor names in `bootstrap/pacman-static/sources.pin`.\n\n'
+                printf 'reproduce: `scripts/resolve-anchor <arch>`\n\nSeen in: %s\n' "$run_url"
+              } > "$RUNNER_TEMP/pin.md"
+              scripts/track-issue raise pacman-static-pin "pacman-static: the source pin is not the published pacman" "$RUNNER_TEMP/pin.md"
+            else
+              scripts/track-issue clear pacman-static-pin "Each port that answered publishes the pinned pacman commit: $run_url"
+            fi
+          else
+            echo "the anchor comparison did not finish; pacman-static-pin stays as it is"
+          fi
+
+  tools:
+    name: Pinned tools against upstream
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # scripts/install-tools --pins prints one line per tool:
+      # <name> <version> <owner/repo of its GitHub releases> <tag>.
+      - name: Compare each pinned tool with its newest release
+        id: tools
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          scripts/install-tools --pins > "$RUNNER_TEMP/tools.txt"
+          if [ ! -s "$RUNNER_TEMP/tools.txt" ]; then
+            echo "::error::scripts/install-tools --pins printed no tool"
+            exit 1
+          fi
+          rows="$RUNNER_TEMP/tool-rows.md"
+          : > "$rows"
+          behind=""
+          while read -r name version repo _; do
+            [ -n "$name" ] || continue
+            gh api "repos/$repo/releases/latest" < /dev/null > "$RUNNER_TEMP/rel.json"
+            tag="$(jq -r '.tag_name // empty' "$RUNNER_TEMP/rel.json")"
+            up="$(printf '%s\n' "$tag" | awk '{ if (match($0, /[0-9]+([.][0-9]+)+/)) print substr($0, RSTART, RLENGTH) }')"
+            pinned="$(printf '%s\n' "$version" | awk '{ if (match($0, /[0-9]+([.][0-9]+)+/)) print substr($0, RSTART, RLENGTH) }')"
+            newest="$(printf '%s\n%s\n' "$pinned" "$up" | sort -V | awk 'END { print }')"
+            if [ -n "$up" ] && [ "$up" != "$pinned" ] && [ "$newest" = "$up" ]; then
+              behind="$behind $name($pinned->$up)"
+              printf '| %s | %s | **%s** | %s |\n' "$name" "$pinned" "$up" "$repo" >> "$rows"
+            else
+              printf '| %s | %s | %s | %s |\n' "$name" "$pinned" "${up:-not measured}" "$repo" >> "$rows"
+            fi
+          done < "$RUNNER_TEMP/tools.txt"
+          echo "behind=${behind# }" >> "$GITHUB_OUTPUT"
+          cat "$rows"
+
+      - name: Raise or clear tools-drift
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEHIND: ${{ steps.tools.outputs.behind }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ -n "$BEHIND" ]; then
+            # shellcheck disable=SC2016 # Markdown backticks, not command substitution
+            {
+              printf 'A tool pinned in `scripts/install-tools` is behind its newest release: `%s`.\n\n' "$BEHIND"
+              printf '| tool | pinned | newest | releases |\n| --- | --- | --- | --- |\n'
+              cat "$RUNNER_TEMP/tool-rows.md"
+              printf '\nRead the sha256 of each new asset from the release checksum list, and write the version and the sums into `scripts/install-tools`.\n\n'
+              printf 'reproduce: `scripts/install-tools --pins`\n\nSeen in: %s\n' "$run_url"
+            } > "$RUNNER_TEMP/tools.md"
+            scripts/track-issue raise tools-drift "tools: a pinned tool is behind its newest release" "$RUNNER_TEMP/tools.md"
+          else
+            scripts/track-issue clear tools-drift "Every pinned tool is at its newest release: $run_url"
+          fi
+
+  pacman-oci:
+    name: Vendored pacman-oci against its source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # bootstrap/pacman-oci.pin: source = https://github.com/OWNER/REPO/blob/COMMIT/PATH
+      # and sha256 = <hex>. The copy on the default branch of OWNER/REPO is
+      # compared with sha256.
+      - name: Compare the vendored copy with its source
+        id: oci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pin=bootstrap/pacman-oci.pin
+          # shellcheck source=scripts/lib.sh
+          . scripts/lib.sh
+          src="$(conf_get "$pin" source)"
+          want="$(conf_get "$pin" sha256)"
+          case "$src" in
+            https://github.com/*/*/blob/*/*) ;;
+            *)
+              echo "::error::$pin: source is not a GitHub blob URL: $src"
+              exit 1
+              ;;
+          esac
+          rest="${src#https://github.com/}"
+          repo="$(printf '%s\n' "$rest" | cut -d/ -f1-2)"
+          path="$(printf '%s\n' "$rest" | cut -d/ -f5-)"
+          gh api -H 'Accept: application/vnd.github.raw+json' "repos/$repo/contents/$path" > "$RUNNER_TEMP/upstream"
+          got="$(sha256sum "$RUNNER_TEMP/upstream" | awk '{ print $1 }')"
+          gh api "repos/$repo/commits?path=$path&per_page=1" > "$RUNNER_TEMP/commits.json"
+          head="$(jq -r '.[0].sha // empty' "$RUNNER_TEMP/commits.json")"
+          echo "pinned: $want ($src)"
+          echo "source: $got ($repo $path, newest commit $head)"
+          {
+            echo "repo=$repo"
+            echo "path=$path"
+            echo "head=$head"
+            echo "got=$got"
+            echo "want=$want"
+            if [ "$got" = "$want" ]; then echo "drift=no"; else echo "drift=yes"; fi
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Raise or clear pacman-oci-drift
+        if: ${{ !cancelled() && steps.oci.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRIFT: ${{ steps.oci.outputs.drift }}
+          REPO: ${{ steps.oci.outputs.repo }}
+          SRC_PATH: ${{ steps.oci.outputs.path }}
+          HEAD_SHA: ${{ steps.oci.outputs.head }}
+          GOT: ${{ steps.oci.outputs.got }}
+          WANT: ${{ steps.oci.outputs.want }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ "$DRIFT" = yes ]; then
+            # shellcheck disable=SC2016 # Markdown backticks, not command substitution
+            {
+              printf 'The vendored `bootstrap/any/usr/local/bin/pacman-oci` is not the copy on the default branch of `%s`.\n\n' "$REPO"
+              printf '| | sha256 |\n| --- | --- |\n| pin | `%s` |\n| source | `%s` |\n\n' "$WANT" "$GOT"
+              printf 'The newest commit that changed `%s` is `%s`. Copy the file at that commit byte for byte, then write its blob URL and sha256 into `bootstrap/pacman-oci.pin`.\n\n' "$SRC_PATH" "$HEAD_SHA"
+              printf 'Seen in: %s\n' "$run_url"
+            } > "$RUNNER_TEMP/oci.md"
+            scripts/track-issue raise pacman-oci-drift "pacman-oci: the vendored copy differs from its source" "$RUNNER_TEMP/oci.md"
+          else
+            scripts/track-issue clear pacman-oci-drift "The vendored pacman-oci is the copy of its source: $run_url"
+          fi

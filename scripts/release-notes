@@ -1,318 +1,310 @@
 #!/usr/bin/env bash
 #
-# Write a release body from the evidence files beside the assets, and write the
-# checksum file the release carries.
+# Check the asset directory of a release, write its SHA256SUMS, and print the
+# release body.
 #
-#   scripts/release-notes <asset-dir> <tag>
+#   scripts/release-notes ASSET_DIR TAG [META_DIR]
+#       Check ASSET_DIR, write ASSET_DIR/SHA256SUMS, print the body on stdout.
+#   scripts/release-notes --next-tag
+#       Read git tag names on stdin. Print the next patch tag after the newest
+#       vX.Y.Z tag, or v0.1.0 when there is none.
 #
-# ⛔ Generated, never hand written. A body somebody types is a second record of
-# what the release contains, and it goes stale on the first bump while still
-# reading as authoritative. Everything below is read out of the evidence files
-# the build jobs wrote next to each asset.
+# META_DIR holds the notes of the rootfs jobs of release.yml:
+#   absent-ARCH.json   {"arch", "reason"}: the port has no published image
+#   rootfs-ARCH.json   {"arch", "image", "digest", "evidence"}: evidence is
+#                      "status-branch" or "regenerated"
 #
-# ⛔ It refuses to write a body for an asset with no evidence file, for an
-# evidence file whose binary was never run, and for a rootfs whose evidence
-# records no packages. A release asset nobody exercised is not evidence.
+# Environment:
+#   RELEASE_ARCHES     the ports that the release covers, separated by spaces.
+#                      Default: scripts/ports list.
+#   GITHUB_REPOSITORY  OWNER/REPO for the download URL in the body.
 #
-# Five asset families, and each is checked for the thing that makes it useless
-# if it is wrong:
+# Rules:
+#   - Each port has pacman-static-ARCH and its evidence file. The evidence
+#     passes scripts/build-pacman-static --check-evidence.
+#   - Each port has rootfs-ARCH.tar.gz, rootfs-ARCH.json, bootstrap-set-ARCH.txt
+#     and oci-ARCH.tar.gz, or META_DIR/absent-ARCH.json and none of the four.
+#   - manifest.json is present and has the schema docker-archlinux/manifest/1.
+#   - The directory holds no other file.
+#   - All binaries come from one pacman commit.
 #
-#   pacman-static-<arch>       ran under its emulator and reported a version
-#   rootfs-<arch>.tar.gz       its evidence records packages and an anchor
-#   bootstrap-set-<arch>.txt   present for every architecture that has a rootfs
-#   oci-<arch>.tar.gz          present for every architecture that has a rootfs
-#   manifest.json              valid JSON carrying this repository's schema name
+# ⛔ The body is made from the files only. It names no version, date or port
+# that the files do not give.
 #
-# The body goes to stdout. SHA256SUMS is written into the asset directory,
-# because the release carries it as an asset of its own.
+# Exit status: 0 done, 1 a rule is broken, 2 usage.
+
+# The body is markdown. Its backticks are text, not command substitutions.
+# shellcheck disable=SC2016
 set -euo pipefail
 
-die() {
-  echo "release-notes: $1" >&2
-  shift
-  while [ "$#" -gt 0 ]; do
-    echo "  $1" >&2
-    shift
-  done
-  exit 1
+PROG=release-notes
+# shellcheck source=scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+  sed -n '3,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  exit 2
 }
+
+#---------------------------------------------------------------------------#
+# --next-tag
+#---------------------------------------------------------------------------#
+if [ "${1:-}" = --next-tag ]; then
+  [ "$#" -eq 1 ] || usage
+  awk '
+    { sub(/\r$/, "") }
+    /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/ {
+      split(substr($0, 2), v, ".")
+      if (!seen || v[1] + 0 > a || (v[1] + 0 == a && (v[2] + 0 > b || (v[2] + 0 == b && v[3] + 0 > c)))) {
+        a = v[1] + 0; b = v[2] + 0; c = v[3] + 0; seen = 1
+      }
+    }
+    END {
+      if (seen) printf "v%d.%d.%d\n", a, b, c + 1
+      else print "v0.1.0"
+    }'
+  exit 0
+fi
 
 dir="${1:-}"
 tag="${2:-}"
-[ -n "$dir" ] || die "usage: release-notes <asset-dir> <tag>"
-[ -n "$tag" ] || die "usage: release-notes <asset-dir> <tag>"
-[ -d "$dir" ] || die "no asset directory at $dir" \
-  "the release job downloads every build job's artifact into one directory" \
-  "check it with: ls -1 $dir"
+meta="${3:-}"
+[ -n "$dir" ] && [ -n "$tag" ] && [ "$#" -le 3 ] || usage
+[ -d "$dir" ] || die "no asset directory at $dir" "reproduce: ls -l $dir"
+[ -z "$meta" ] || [ -d "$meta" ] || die "no meta directory at $meta" "reproduce: ls -l $meta"
+need jq sha256sum
 
-need() {
-  command -v "$1" > /dev/null || die "$1 is required"
-}
-need jq
-need sha256sum
+arches="${RELEASE_ARCHES:-$("$REPO_ROOT/scripts/ports" list | tr '\n' ' ')}"
+# shellcheck disable=SC2086 # one port per word
+set -- $arches
+[ "$#" -gt 0 ] || die "RELEASE_ARCHES names no port" "reproduce: scripts/ports list"
+repo="${GITHUB_REPOSITORY:-pkgforge-dev/docker-archlinux}"
 
-# human_size BYTES -> a MiB figure, one decimal
 human_size() {
   awk -v b="$1" 'BEGIN { printf "%.1f MiB", b / 1048576 }'
 }
 
 #---------------------------------------------------------------------------#
-# The static pacman binaries.
+# The rules
 #---------------------------------------------------------------------------#
-binaries="$(find "$dir" -maxdepth 1 -type f -name 'pacman-static-*' ! -name '*.json' | LC_ALL=C sort)"
-[ -n "$binaries" ] || die "no pacman-static-* binary in $dir" \
-  "the release would be published with nothing in it" \
-  "check it with: ls -1 $dir"
+faults=""
+fault() { faults="$faults|$1"; }
+expected="SHA256SUMS manifest.json"
+present=""
+left_out=""
 
-# Every binary needs its evidence, and every evidence needs its binary. A pair
-# that is half present is a partial upload, and the release must not paper over
-# one.
-missing=""
-while IFS= read -r bin; do
-  [ -n "$bin" ] || continue
-  [ -f "$bin.json" ] || missing="$missing $(basename "$bin")"
-done <<< "$binaries"
-[ -z "$missing" ] || die "these binaries arrived with no evidence file:$missing" \
-  "scripts/build-pacman-static writes both, so one without the other is a lost upload" \
-  "check it with: ls -1 $dir"
+for a in "$@"; do
+  for f in "pacman-static-$a" "pacman-static-$a.json"; do
+    expected="$expected $f"
+    [ -f "$dir/$f" ] || fault "$f is missing"
+  done
+  if [ -f "$dir/pacman-static-$a.json" ]; then
+    rc=0
+    check_out="$("$REPO_ROOT/scripts/build-pacman-static" --check-evidence "$dir/pacman-static-$a.json" 2>&1)" || rc=$?
+    [ "$rc" -eq 0 ] || fault "pacman-static-$a.json is not release evidence: $(printf '%s' "$check_out" | awk 'NR > 1 && !/reproduce:/ { sub(/^ +/, ""); printf "%s; ", $0 }')"
+  fi
 
-orphans="$(find "$dir" -maxdepth 1 -type f -name 'pacman-static-*.json' \
-  | LC_ALL=C sort \
-  | awk -v d="$dir" '{ b = $0; sub(/\.json$/, "", b); if (system("test -f " b) != 0) print b }')"
-[ -z "$orphans" ] || die "these evidence files arrived with no binary: $(printf '%s' "$orphans" | tr '\n' ' ')" \
-  "check it with: ls -1 $dir"
+  rootfs_files="rootfs-$a.tar.gz rootfs-$a.json bootstrap-set-$a.txt oci-$a.tar.gz"
+  expected="$expected $rootfs_files"
+  if [ -n "$meta" ] && [ -f "$meta/absent-$a.json" ]; then
+    for f in $rootfs_files; do
+      [ ! -e "$dir/$f" ] || fault "$f is present, and $meta/absent-$a.json says the port has no image"
+    done
+    left_out="$left_out $a"
+  else
+    for f in $rootfs_files; do
+      [ -f "$dir/$f" ] || fault "$f is missing, and no $meta/absent-$a.json says why"
+    done
+    present="$present $a"
+  fi
+done
 
-#---------------------------------------------------------------------------#
-# The rootfs archives.
-#
-# ⚠ Optional as a family. A release cut before release.yml existed carries only
-# the binaries, and this has to describe what is there rather than fail on what
-# is not. ⛔ But an archive present without its evidence is a lost upload and is
-# refused, which is the same rule the binaries get.
-#---------------------------------------------------------------------------#
-roots="$(find "$dir" -maxdepth 1 -type f -name 'rootfs-*.tar.gz' | LC_ALL=C sort)"
-root_missing=""
-while IFS= read -r r; do
-  [ -n "$r" ] || continue
-  a="$(basename "$r")"; a="${a#rootfs-}"; a="${a%.tar.gz}"
-  [ -f "$dir/rootfs-$a.json" ] || root_missing="$root_missing rootfs-$a.json"
-  [ -f "$dir/bootstrap-set-$a.txt" ] || root_missing="$root_missing bootstrap-set-$a.txt"
-  [ -f "$dir/oci-$a.tar.gz" ] || root_missing="$root_missing oci-$a.tar.gz"
-done <<< "$roots"
-[ -z "$root_missing" ] || die "a rootfs archive arrived without its companions:$root_missing" \
-  "each architecture publishes an archive, its evidence, its package set and an OCI archive" \
-  "check it with: ls -1 $dir"
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  case " $expected " in
+    *" $f "*) ;;
+    *) fault "$f is not an asset of a port in RELEASE_ARCHES ($*)" ;;
+  esac
+done <<< "$(find "$dir" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)"
 
-#---------------------------------------------------------------------------#
-# SHA256SUMS, over everything the release carries.
-#
-# ⚠ Relative names, so the file reads the way sha256sum -c expects beside the
-# assets it names. -print0 and xargs -0 rather than an unquoted expansion, which
-# would split on whitespace in a name. ⛔ SHA256SUMS itself is excluded: a
-# checksum file that lists itself cannot verify.
-#---------------------------------------------------------------------------#
-( cd "$dir" && find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -printf '%f\0' \
-    | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS )
+if [ -f "$dir/manifest.json" ]; then
+  schema="$(jq -r '.schema // "-"' "$dir/manifest.json")"
+  [ "$schema" = "docker-archlinux/manifest/1" ] \
+    || fault "manifest.json has the schema $schema, scripts/gen-manifest writes docker-archlinux/manifest/1"
+else
+  fault "manifest.json is missing"
+fi
 
-summed="$(awk 'NF { n++ } END { print n + 0 }' "$dir/SHA256SUMS")"
-[ "$summed" -gt 0 ] || die "SHA256SUMS came out empty" \
-  "check it with: ls -1 $dir"
+if [ -n "$faults" ]; then
+  echo "$PROG: the assets in $dir break the release rules:" >&2
+  printf '%s\n' "${faults#|}" | tr '|' '\n' | sed 's/^/  /' >&2
+  echo "  ports: $*" >&2
+  echo "  reproduce: ls -1 $dir${meta:+ $meta}" >&2
+  exit 1
+fi
 
-count="$(awk 'NF { n++ } END { print n + 0 }' <<< "$binaries")"
-root_count="$(awk 'NF { n++ } END { print n + 0 }' <<< "$roots")"
-
-# The pacman commit is one value for the whole release. Two different ones would
-# mean the matrix did not build from one source, which is worse than a failure
-# because every asset looks correct on its own.
-commits="$(while IFS= read -r bin; do
-  [ -n "$bin" ] || continue
-  jq -r .pacman_commit "$bin.json"
-done <<< "$binaries" | LC_ALL=C sort -u)"
+commits="$(for a in "$@"; do jq -r .pacman_commit "$dir/pacman-static-$a.json"; done | LC_ALL=C sort -u)"
 n_commits="$(awk 'NF { n++ } END { print n + 0 }' <<< "$commits")"
-[ "$n_commits" = "1" ] || die "the assets were built from $n_commits different pacman commits" \
-  "$(printf '%s' "$commits" | tr '\n' ' ')" \
-  "one release is one source, or the binaries in it are not comparable" \
-  "check it with: jq -r .pacman_commit $dir/pacman-static-*.json"
-
-first_ev="$(printf '%s\n' "$binaries" | awk 'NR == 1').json"
-describe="$(jq -r .pacman_describe_pinned "$first_ev")"
-signed_tag="$(jq -r '.pacman_signed_tag // "-"' "$first_ev")"
-tag_signer="$(jq -r '.pacman_tag_signer // "-"' "$first_ev")"
+[ "$n_commits" = 1 ] || die "the binaries come from $n_commits pacman commits: $(printf '%s' "$commits" | tr '\n' ' ')" \
+  "one release is one source" \
+  "reproduce: jq -r .pacman_commit $dir/pacman-static-*.json"
 
 #---------------------------------------------------------------------------#
-# The body.
-#
-# ⛔ The static prose goes through quoted heredocs, so nothing in it is a shell
-# expansion and the backticks stay literal. A printf of the same text reads as
-# an attempted command substitution to a linter, and is one editing slip away
-# from being one.
+# SHA256SUMS: every asset, by its plain file name, sorted. ⛔ Not itself: a
+# checksum file that names itself cannot pass its own check.
 #---------------------------------------------------------------------------#
-printf '## %s\n' "$tag"
-cat <<'INTRO'
+sums="$(mktemp)"
+(cd "$dir" && find . -mindepth 1 -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' \
+  | LC_ALL=C sort -z | xargs -0 sha256sum) > "$sums"
+chmod 644 "$sums"
+mv -f "$sums" "$dir/SHA256SUMS"
+summed="$(awk 'NF { n++ } END { print n + 0 }' "$dir/SHA256SUMS")"
+[ "$summed" -gt 0 ] || die "SHA256SUMS is empty" "reproduce: ls -1 $dir"
 
-Everything this repository produces that is not a container tag: a static
-pacman, a root filesystem, a resolved package set and a loadable image archive
-for every architecture, plus one index of every published tag.
+# sum_of NAME -> the first 16 hex digits of the SHA256SUMS line of NAME
+sum_of() {
+  awk -v n="$1" '{ f = $2; sub(/^[*]/, "", f) } f == n && !done { print substr($1, 1, 16); done = 1 }' "$dir/SHA256SUMS"
+}
 
-⚠ This is a version of the tooling and the assets. It is not an image version.
-Images are tagged by date, `v2026.08.28` shape, and that namespace is separate.
-
-INTRO
+first="$1"
+ev0="$dir/pacman-static-$first.json"
+commit="$commits"
+describe="$(jq -r '.pacman_describe_pinned // "-"' "$ev0")"
+signed_tag="$(jq -r '.pacman_signed_tag // "-"' "$ev0")"
+tag_signer="$(jq -r '.pacman_tag_signer // "-"' "$ev0")"
+# The describe value is TAG.rN.gHASH: N commits after the tag.
+after="$(printf '%s' "$describe" | awk -F. '{ for (i = 1; i <= NF; i++) if ($i ~ /^r[0-9]+$/) n = substr($i, 2) } END { print n + 0 }')"
+# Each present port whose anchor is not the describe value: "ARCH (NAME VERSION)".
+other_anchor=""
 
 #---------------------------------------------------------------------------#
-if [ "$root_count" -gt 0 ]; then
-  cat <<'ROOTS'
+# The body
+#---------------------------------------------------------------------------#
+printf '## %s\n\n' "$tag"
+printf 'The release assets of `%s` for these ports: %s.\n\n' "$repo" "$*"
+printf '⚠ %s is a version of the tooling and the assets. Images have date tags in a separate namespace.\n\n' "$tag"
+
+if [ -n "$present" ]; then
+  cat << 'ROOTS'
 ### Root filesystems
 
-`rootfs-<arch>.tar.gz` is the image filesystem as one gzipped tar. It needs no
-container runtime: untar it and chroot into it, or `podman import` it.
+`rootfs-<arch>.tar.gz` is the filesystem of the published image, as one gzip tar archive. Extract it and chroot into it, or import it with `podman import`.
 
-`oci-<arch>.tar.gz` is the same image with its metadata, for a host with a
-runtime and no network:
+`oci-<arch>.tar.gz` is the same image with its metadata. Load it with `podman load` on a host with no network.
 
-```bash
-podman load < oci-amd64.tar.gz
-```
+`bootstrap-set-<arch>.txt` is the resolved package set: `name version sha256`, one line for each package.
 
-`bootstrap-set-<arch>.txt` is the resolved package set as `name version sha256`,
-so the same root can be rebuilt without any of this repository's tooling.
+`rootfs-<arch>.json` is the evidence file of the image.
 
 ROOTS
-
-  printf '| architecture | packages | anchor | rootfs | image | sha256 |\n'
-  printf '| --- | --- | --- | --- | --- | --- |\n'
-  while IFS= read -r r; do
-    [ -n "$r" ] || continue
-    a="$(basename "$r")"; a="${a#rootfs-}"; a="${a%.tar.gz}"
+  printf '| port | packages | anchor | evidence | rootfs | image | sha256 |\n'
+  printf '| --- | --- | --- | --- | --- | --- | --- |\n'
+  regenerated=""
+  for a in $present; do
     ev="$dir/rootfs-$a.json"
     pkgs="$(jq -r '.package_count' "$ev")"
-    [ "$pkgs" -gt 0 ] || die "the evidence for rootfs-$a records no packages" \
-      "an empty root is not a release asset" \
-      "check it with: jq .package_count $ev"
+    [ "$pkgs" -gt 0 ] || die "rootfs-$a.json records no packages" "reproduce: jq .package_count $ev"
     anchor="$(jq -r '.anchor.name + " " + .anchor.version' "$ev")"
-    # ⚠ sha256sum writes the name with a leading * in binary mode and with none
-    # in text mode, and a ./ prefix survives some find invocations. All three are
-    # stripped before the comparison, because a lookup that silently misses
-    # prints a dash where a checksum belongs and nothing says it missed.
-    sum="$(awk -v n="rootfs-$a.tar.gz" '
-      { f = $2; sub(/^[*]/, "", f); sub(/^[.][/]/, "", f)
-        if (f == n) { print substr($1, 1, 16); exit } }' "$dir/SHA256SUMS")"
-    [ -n "$sum" ] || die "no SHA256SUMS entry for rootfs-$a.tar.gz" \
-      "the checksum file was written from this directory, so a miss is a name mismatch" \
-      "check it with: cat $dir/SHA256SUMS"
-    printf '| %s | %s | %s | %s | %s | %s |\n' \
-      "$a" "$pkgs" "$anchor" \
-      "$(human_size "$(stat -c %s "$r")")" \
-      "$(human_size "$(stat -c %s "$dir/oci-$a.tar.gz")")" \
-      "${sum:--}"
-  done <<< "$roots"
+    # The anchor version is the describe value and a pkgrel: VALUE-N.
+    anchor_version="$(jq -r '.anchor.version // "-"' "$ev")"
+    [ "${anchor_version%-*}" = "$describe" ] || other_anchor="${other_anchor:+$other_anchor, }$a ($anchor)"
+    source="-"
+    if [ -n "$meta" ] && [ -f "$meta/rootfs-$a.json" ]; then
+      source="$(jq -r '.evidence // "-"' "$meta/rootfs-$a.json")"
+    fi
+    case "$source" in
+      regenerated) regenerated="$regenerated $a" ;;
+    esac
+    sum="$(sum_of "rootfs-$a.tar.gz")"
+    [ -n "$sum" ] || die "SHA256SUMS has no line for rootfs-$a.tar.gz" "reproduce: cat $dir/SHA256SUMS"
+    printf '| %s | %s | %s | %s | %s | %s | %s |\n' \
+      "$a" "$pkgs" "$anchor" "$source" \
+      "$(human_size "$(stat -c %s "$dir/rootfs-$a.tar.gz")")" \
+      "$(human_size "$(stat -c %s "$dir/oci-$a.tar.gz")")" "$sum"
+  done
+  printf '\n'
+  printf 'The evidence column: `status-branch` is the evidence file of the build of the published digest. `regenerated` is an evidence file made again for this release.\n\n'
+  if [ -n "$regenerated" ]; then
+    printf '⚠ No build evidence for the published digest of:%s. The release job made the evidence again from the current repository databases, without the database snapshot of the build. The source commit and the build time in each such file are the labels of its image.\n\n' "$regenerated"
+  fi
+fi
+
+if [ -n "$left_out" ]; then
+  printf '### Ports left out\n\n'
+  printf 'These ports have no published image, so the release has no root filesystem for them.\n\n'
+  printf '| port | reason |\n| --- | --- |\n'
+  for a in $left_out; do
+    printf '| %s | %s |\n' "$a" "$(jq -r '.reason // "-"' "$meta/absent-$a.json")"
+  done
   printf '\n'
 fi
 
-#---------------------------------------------------------------------------#
-if [ -f "$dir/manifest.json" ]; then
-  schema="$(jq -r '.schema // "-"' "$dir/manifest.json")"
-  [ "$schema" = "docker-archlinux/manifest/1" ] || die "manifest.json carries schema $schema" \
-    "scripts/gen-manifest writes docker-archlinux/manifest/1" \
-    "check it with: jq .schema $dir/manifest.json"
-  mtags="$(jq -r '.tag_count' "$dir/manifest.json")"
-  mres="$(jq -r '.resolved_count' "$dir/manifest.json")"
-  mimg="$(jq -r '.image' "$dir/manifest.json")"
+mtags="$(jq -r '.tag_count' "$dir/manifest.json")"
+mres="$(jq -r '.resolved_count' "$dir/manifest.json")"
+mimg="$(jq -r '.image' "$dir/manifest.json")"
+printf '### Every published tag\n\n'
+printf '`manifest.json` lists each tag of `%s` with its digest, its platforms and its anchor, as the registry gave them: %s tags, %s with a digest. The newest release always has it at this URL:\n\n' \
+  "$mimg" "$mtags" "$mres"
+printf '```bash\n'
+printf 'curl -sSfL --connect-timeout 15 --max-time 120 \\\n'
+printf '  https://github.com/%s/releases/latest/download/manifest.json \\\n' "$repo"
+printf '  | jq -r %s\n' "'.tags[] | select(.anchor) | \"\\(.tag) \\(.digest)\"'"
+printf '```\n\n'
 
-  cat <<'MANIFEST'
-### Every published tag
-
-`manifest.json` lists every tag on the registry with its digest, its platforms
-and its anchor version, read from the registry rather than from what a build
-believed it pushed. It has a stable URL that does not change when a tag does:
-
-```bash
-curl -sSfL --connect-timeout 15 --max-time 120 \
-  https://github.com/pkgforge-dev/docker-archlinux/releases/latest/download/manifest.json \
-  | jq -r '.tags[] | select(.anchor) | "\(.tag) \(.digest)"'
-```
-
-MANIFEST
-  # The backticks are markdown for the release body, not a command substitution.
-  # shellcheck disable=SC2016
-  printf '%s tags on `%s`, %s resolved to a digest.\n\n' "$mtags" "$mimg" "$mres"
-fi
-
-#---------------------------------------------------------------------------#
-cat <<'PACMAN'
-### Static pacman
-
-A statically linked pacman for every architecture this repository builds, built
-from source. No dynamic loader is named, so each binary runs on a system whose
-libc is missing or broken.
-
-PACMAN
-
-printf 'Built from pacman %s, which is %s: the same commit the images in this\n' \
-  "$commits" "$describe"
-printf 'release are built from, so the binary and the image agree by construction.\n'
-if [ "$signed_tag" != "-" ] && [ "$tag_signer" != "-" ] && [ "$tag_signer" != "NOT VERIFIED" ]; then
-  printf 'Upstream %s is signed by %s, and that signature was checked before the\n' \
-    "$signed_tag" "$tag_signer"
-  printf 'build started. ⚠ It covers the release point, not the nine commits after it.\n'
+printf '### Static pacman\n\n'
+printf 'One statically linked pacman for each port. The binary names no dynamic loader, so it runs on a system with no libc or a broken libc.\n\n'
+printf 'The source is pacman commit `%s`, describe `%s`.' "$commit" "$describe"
+# ⛔ The claim only when each image of the release has that pacman. The
+# anchors come from the files. The pin can be older than the pacman of a port.
+if [ -n "$present" ] && [ -z "$other_anchor" ]; then
+  printf ' The anchor tags of the images end in the same describe value.'
 fi
 printf '\n'
+if [ -n "$other_anchor" ]; then
+  printf '⚠ These images have another pacman than the static binaries: %s.\n' "$other_anchor"
+fi
+if [ "$signed_tag" != "-" ] && [ "$tag_signer" != "-" ]; then
+  printf 'The build checked the signature of the tag `%s`: %s signed it.' "$signed_tag" "$tag_signer"
+  if [ "$after" -gt 0 ]; then
+    printf ' ⚠ The signature covers the tagged commit. The pinned commit is %s commits after it, and the commit sha covers those.' "$after"
+  fi
+  printf '\n'
+fi
+printf '\n| asset | machine | size | ran as | sha256 |\n| --- | --- | --- | --- | --- |\n'
+for a in "$@"; do
+  jq -r --arg n "pacman-static-$a" \
+    '"| \($n) | \(.elf_machine) | \(.size) | \(.reported_version) | \(.sha256[0:16]) |"' \
+    "$dir/pacman-static-$a.json"
+done
+printf '\n'
 
-printf '| asset | machine | size | reported | sha256 |\n'
-printf '| --- | --- | --- | --- | --- |\n'
-while IFS= read -r bin; do
-  [ -n "$bin" ] || continue
-  jq -r '"| " + (input_filename | sub(".*/"; "") | sub("[.]json$"; "")) + " | "
-         + .elf_machine + " | " + (.size | tostring) + " | "
-         + .reported_version + " | " + .sha256[0:16] + " |"' "$bin.json"
-done <<< "$binaries"
-
-cat <<'TAILA'
-
-### Verify
+printf '### Check the assets\n\n'
+printf 'Set ARCH to a port of this release.\n\n'
+printf '```bash\n'
+printf 'ARCH=%s\n' "$first"
+printf 'sha256sum -c SHA256SUMS\n'
+printf 'readelf -lW "pacman-static-$ARCH" | awk %s\n' "'/INTERP/ { n++ } END { print n + 0 }'"
+printf '```\n\n'
+printf 'The INTERP count of a static binary is 0.\n\n'
+cat << 'TAIL'
+### Build the static pacman
 
 ```bash
-sha256sum -c SHA256SUMS
-readelf -lW pacman-static-amd64 | awk '/INTERP/ { n++ } END { print n + 0 }'
+scripts/build-pacman-static "$ARCH"
 ```
 
-The INTERP count must be 0. That is what static means.
-
-### Build it yourself
-
-```bash
-scripts/build-pacman-static amd64
-```
-
-Every input is pinned by sha256 or by commit in
-bootstrap/pacman-static/sources.pin. Nothing else is fetched.
-
-### Bootstrapping with it
-
-docs/bootstrap-with-pacman-static.md builds an Arch root on a host with no
-pacman, no libalpm and no Arch keyring, and ends with an image that passes this
-repository's image suite.
-
-⚠ That is what the guide is for, not a measurement. Its commands are parsed by
-`tests/static/80-docs-claims.sh` and nothing has executed them end to end.
+`bootstrap/pacman-static/sources.pin` pins each input by sha256 or by commit. docs/bootstrap-with-pacman-static.md builds an Arch root with the binary on a host that has no pacman.
 
 ### Source
 
-The binary is pacman, which is GPL-2.0-or-later however it was built.
-bootstrap/pacman-static/sources.pin names every input by URL and sha256, so the
-exact sources are recoverable from the pin alone.
+pacman is GPL-2.0-or-later. The release does not carry the source tarballs. `bootstrap/pacman-static/sources.pin` names each input by URL and sha256. `scripts/build-pacman-static --fetch` downloads each one and checks its sha256.
 
-TAILA
+TAIL
 
-printf -- '- Static pacman binaries: %s. Every one was executed under its architecture\n' "$count"
-printf '  emulator before it was uploaded, and the release job refuses one that was not.\n'
-if [ "$root_count" -gt 0 ]; then
-  printf -- '- Root filesystems: %s. Each came from an image that passed this repository\n' "$root_count"
-  printf '  image suite in the same job that exported it.\n'
-fi
-printf -- '- Files covered by SHA256SUMS: %s.\n' "$summed"
-cat <<'TAILB'
-
-⚠ Every non x86_64 measurement in this release is a qemu-user measurement: no
-target kernel and no target page size.
-TAILB
+printf -- '- Static pacman binaries: %s. Each ran under the emulator of its port before the upload.\n' "$#"
+n_present="$(printf '%s\n' "$present" | awk '{ n += NF } END { print n + 0 }')"
+printf -- '- Root filesystems: %s. Each image passed the image suite in the job that exported it.\n' "$n_present"
+printf -- '- Files in SHA256SUMS: %s.\n\n' "$summed"
+printf '⚠ A binary for an architecture other than the runner ran under qemu-user: no target kernel and no target page size.\n'

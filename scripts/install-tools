@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+#
+# Install pinned tools into a directory. Check each download against its
+# sha256 before use.
+#
+#   scripts/install-tools DIR [TOOL ...]
+#   scripts/install-tools --pins
+#
+# TOOL is shellcheck, actionlint, jq, yq or meson. With no TOOL, install the
+# first four. yq is the mikefarah yq. Each of the four is a static binary for
+# x86_64 or aarch64 Linux. meson is a python program and needs python3 when
+# it runs.
+#
+# --pins prints one line per tool: "TOOL VERSION OWNER/REPO TAG". The
+# freshness check reads it.
+#
+# Downloads stay in DIR/.cache. Each run hashes a kept file again before use,
+# and downloads it again when the hash is not the pin. A second run with the
+# same DIR downloads nothing. A cache that changed does no harm.
+#
+# Each download tries its URLs in order, and each URL gets 3 tries.
+# ⚠ For shellcheck, actionlint, jq and yq the second URL is the same release
+# asset through api.github.com. It helps when github.com fails, not when
+# the GitHub release storage fails. meson has PyPI as its second source.
+#
+# To move a pin, read the asset id and the sha256 of each asset in one call:
+#   gh api repos/OWNER/REPO/releases/tags/TAG --jq '.assets[] | [.id, .name, .digest] | @tsv'
+#
+# Exit status: 0 all installed, 1 could not, 2 usage.
+set -euo pipefail
+
+PROG=install-tools
+# shellcheck source=scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+HTTP_MAX_TIME="${HTTP_MAX_TIME:-300}"
+
+SHELLCHECK_VERSION=0.11.0
+SHELLCHECK_SHA256_X86_64=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+SHELLCHECK_ASSET_X86_64=279056942
+SHELLCHECK_SHA256_AARCH64=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588
+SHELLCHECK_ASSET_AARCH64=279056934
+
+ACTIONLINT_VERSION=1.7.12
+ACTIONLINT_SHA256_AMD64=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+ACTIONLINT_ASSET_AMD64=384924896
+ACTIONLINT_SHA256_ARM64=325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
+ACTIONLINT_ASSET_ARM64=384924897
+
+JQ_VERSION=1.8.2
+JQ_SHA256_AMD64=b1c22172dd303f3be49e935aa56aa48a8b7a46e0bc838b4997d3bb451495870f
+JQ_ASSET_AMD64=453012752
+JQ_SHA256_ARM64=8b85c817833814ddca00a144c33705546355afccf0cf39b188f3cdb48b852309
+JQ_ASSET_ARM64=453012756
+
+YQ_VERSION=4.54.1
+YQ_SHA256_AMD64=8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f
+YQ_ASSET_AMD64=597222595
+YQ_SHA256_ARM64=189088da0c6429ec5178dfaab1a114805f6cab0b61b165ab236efedf1d57a71b
+YQ_ASSET_ARM64=597222603
+
+# The source archive. The GitHub release asset and the PyPI file are the
+# same bytes.
+MESON_VERSION=1.10.1
+MESON_SHA256=c42296f12db316a4515b9375a5df330f2e751ccdd4f608430d41d7d6210e4317
+
+ALL_TOOLS="shellcheck actionlint jq yq meson"
+DEFAULT_TOOLS="shellcheck actionlint jq yq"
+
+usage() {
+  echo "usage: scripts/install-tools DIR [TOOL ...]" >&2
+  echo "       scripts/install-tools --pins" >&2
+  echo "  TOOL: $ALL_TOOLS (default: $DEFAULT_TOOLS)" >&2
+  exit 2
+}
+
+if [ "${1:-}" = --pins ]; then
+  [ "$#" -eq 1 ] || usage
+  printf '%s\n' \
+    "shellcheck $SHELLCHECK_VERSION koalaman/shellcheck v$SHELLCHECK_VERSION" \
+    "actionlint $ACTIONLINT_VERSION rhysd/actionlint v$ACTIONLINT_VERSION" \
+    "jq $JQ_VERSION jqlang/jq jq-$JQ_VERSION" \
+    "yq $YQ_VERSION mikefarah/yq v$YQ_VERSION" \
+    "meson $MESON_VERSION mesonbuild/meson $MESON_VERSION"
+  exit 0
+fi
+
+dest="${1:-}"
+[ -n "$dest" ] || usage
+case "$dest" in
+  -*) usage ;;
+esac
+shift
+tools="${*:-$DEFAULT_TOOLS}"
+for t in $tools; do
+  case " $ALL_TOOLS " in
+    *" $t "*) ;;
+    *)
+      echo "$PROG: no pinned tool named '$t'" >&2
+      usage
+      ;;
+  esac
+done
+
+host="$(uname -m)"
+case "$host" in
+  x86_64)
+    sc_arch=x86_64 sc_sum="$SHELLCHECK_SHA256_X86_64" sc_asset="$SHELLCHECK_ASSET_X86_64"
+    al_arch=amd64 al_sum="$ACTIONLINT_SHA256_AMD64" al_asset="$ACTIONLINT_ASSET_AMD64"
+    jq_arch=amd64 jq_sum="$JQ_SHA256_AMD64" jq_asset="$JQ_ASSET_AMD64"
+    yq_arch=amd64 yq_sum="$YQ_SHA256_AMD64" yq_asset="$YQ_ASSET_AMD64"
+    ;;
+  aarch64 | arm64)
+    sc_arch=aarch64 sc_sum="$SHELLCHECK_SHA256_AARCH64" sc_asset="$SHELLCHECK_ASSET_AARCH64"
+    al_arch=arm64 al_sum="$ACTIONLINT_SHA256_ARM64" al_asset="$ACTIONLINT_ASSET_ARM64"
+    jq_arch=arm64 jq_sum="$JQ_SHA256_ARM64" jq_asset="$JQ_ASSET_ARM64"
+    yq_arch=arm64 yq_sum="$YQ_SHA256_ARM64" yq_asset="$YQ_ASSET_ARM64"
+    ;;
+  *) die "no pinned tools for $host" "pinned: x86_64 and aarch64 Linux" "reproduce: uname -m" ;;
+esac
+
+need curl sha256sum tar install mktemp
+for t in $tools; do
+  case "$t" in
+    shellcheck) need xz ;;
+    actionlint | meson) need gzip ;;
+  esac
+done
+
+mkdir -p "$dest/.cache"
+cache="$(cd "$dest/.cache" && pwd)"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+sum_of() {
+  sha256sum "$1" | awk '{ print $1 }'
+}
+
+# fetch NAME SHA256 URL [URL ...]: put the file NAME with the pinned SHA256
+# into the cache. A kept file with the pinned hash is used as it is. Each URL
+# is tried in turn; a URL that fails or gives other bytes is reported.
+fetch() {
+  local name="$1" want="$2" url code got part tried=()
+  shift 2
+  if [ -f "$cache/$name" ]; then
+    got="$(sum_of "$cache/$name")"
+    if [ "$got" = "$want" ]; then
+      note "$name: kept file has the pinned sha256"
+      return 0
+    fi
+    warn "$name: kept file has sha256 $got, pinned $want; downloading it again"
+    rm -f "$cache/$name"
+  fi
+  part="$(mktemp "$cache/.$name.XXXXXX")"
+  for url in "$@"; do
+    code=""
+    case "$url" in
+      https://api.github.com/*)
+        code="$(http_get "$url" "$part" -H 'Accept: application/octet-stream')" || code=000
+        ;;
+      *)
+        code="$(http_get "$url" "$part")" || code=000
+        ;;
+    esac
+    if [ "$code" != 200 ]; then
+      warn "$name: $url answered HTTP $code"
+      tried+=("HTTP $code: $url")
+      continue
+    fi
+    got="$(sum_of "$part")"
+    if [ "$got" = "$want" ]; then
+      mv "$part" "$cache/$name"
+      note "$name: downloaded from $url, sha256 checked"
+      return 0
+    fi
+    warn "$name: $url gave sha256 $got, pinned $want"
+    tried+=("sha256 $got: $url")
+  done
+  rm -f "$part"
+  die "no source gave $name with sha256 $want" "${tried[@]}" \
+    "reproduce: curl -fsSL --connect-timeout 20 --max-time 300 '$1' | sha256sum"
+}
+
+# gh_urls OWNER/REPO TAG FILE ASSET_ID: the two URLs of one release asset.
+gh_urls() {
+  printf '%s\n' "https://github.com/$1/releases/download/$2/$3" \
+    "https://api.github.com/repos/$1/releases/assets/$4"
+}
+
+install_shellcheck() {
+  local f="shellcheck-v$SHELLCHECK_VERSION.linux.$sc_arch.tar.xz" urls
+  mapfile -t urls < <(gh_urls koalaman/shellcheck "v$SHELLCHECK_VERSION" "$f" "$sc_asset")
+  fetch "$f" "$sc_sum" "${urls[@]}"
+  tar -xJf "$cache/$f" -C "$work" "shellcheck-v$SHELLCHECK_VERSION/shellcheck"
+  install -m 0755 "$work/shellcheck-v$SHELLCHECK_VERSION/shellcheck" "$dest/shellcheck"
+  "$dest/shellcheck" --version | awk '/^version:/ { print "shellcheck " $2 }'
+}
+
+install_actionlint() {
+  local f="actionlint_${ACTIONLINT_VERSION}_linux_$al_arch.tar.gz" urls
+  mapfile -t urls < <(gh_urls rhysd/actionlint "v$ACTIONLINT_VERSION" "$f" "$al_asset")
+  fetch "$f" "$al_sum" "${urls[@]}"
+  tar -xzf "$cache/$f" -C "$work" actionlint
+  install -m 0755 "$work/actionlint" "$dest/actionlint"
+  "$dest/actionlint" -version | awk 'NR == 1 { print "actionlint " $1 }'
+}
+
+install_jq() {
+  local f="jq-linux-$jq_arch" urls
+  mapfile -t urls < <(gh_urls jqlang/jq "jq-$JQ_VERSION" "$f" "$jq_asset")
+  fetch "$f" "$jq_sum" "${urls[@]}"
+  install -m 0755 "$cache/$f" "$dest/jq"
+  "$dest/jq" --version
+}
+
+install_yq() {
+  local f="yq_linux_$yq_arch" urls
+  mapfile -t urls < <(gh_urls mikefarah/yq "v$YQ_VERSION" "$f" "$yq_asset")
+  fetch "$f" "$yq_sum" "${urls[@]}"
+  install -m 0755 "$cache/$f" "$dest/yq"
+  "$dest/yq" --version
+}
+
+# meson runs from its source tree: meson.py puts its own directory first on
+# sys.path. The launcher in DIR names python3 -I, so PYTHONPATH and the user
+# site cannot change which meson runs.
+install_meson() {
+  local f="meson-$MESON_VERSION.tar.gz" root
+  fetch "$f" "$MESON_SHA256" \
+    "https://github.com/mesonbuild/meson/releases/download/$MESON_VERSION/$f" \
+    "https://files.pythonhosted.org/packages/source/m/meson/$f"
+  root="$(cd "$dest" && pwd)/.meson"
+  rm -rf "$root"
+  mkdir -p "$root"
+  tar -xzf "$cache/$f" -C "$root"
+  [ -f "$root/meson-$MESON_VERSION/meson.py" ] ||
+    die "$f has no meson-$MESON_VERSION/meson.py" "reproduce: tar -tzf $cache/$f"
+  # shellcheck disable=SC2016 # "$@" is for the launcher, not for this script
+  printf '#!/bin/sh\nexec python3 -I "%s" "$@"\n' "$root/meson-$MESON_VERSION/meson.py" > "$dest/meson"
+  chmod 0755 "$dest/meson"
+  printf 'meson %s\n' "$("$dest/meson" --version)"
+}
+
+for t in $tools; do
+  "install_$t"
+done

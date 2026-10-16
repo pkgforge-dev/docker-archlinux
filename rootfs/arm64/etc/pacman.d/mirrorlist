@@ -1,23 +1,22 @@
 ##
-## Arch mirror list for arm64, Architecture = aarch64
-## Generated on 2026-10-15 by scripts/gen-mirrorlist
-## Every server below answered 200 for core.db when it was written.
-## The first 2 servers are anchors and are not ranked.
+## Mirror list for arm64, Architecture = aarch64.
+## Generated on 2026-10-16 by scripts/gen-mirrorlist.
+## The first 2 servers are the anchors of mirrors/arm64.anchors, in that order.
+## The other servers answered for core.db, the fastest connection first.
 ##
 
 Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo
 Server = http://mirror.archlinuxarm.org/$arch/$repo
 
-## Ranked by connection time, fastest first.
-Server = http://hu.mirror.archlinuxarm.org/$arch/$repo
-Server = http://de4.mirror.archlinuxarm.org/$arch/$repo
-Server = http://fr.mirror.archlinuxarm.org/$arch/$repo
-Server = http://tw.mirror.archlinuxarm.org/$arch/$repo
-Server = http://de.mirror.archlinuxarm.org/$arch/$repo
-Server = http://gr.mirror.archlinuxarm.org/$arch/$repo
-Server = https://de3.mirror.archlinuxarm.org/$arch/$repo
-Server = http://nj.us.mirror.archlinuxarm.org/$arch/$repo
-Server = https://fl.us.mirror.archlinuxarm.org/$arch/$repo
 Server = https://ca.us.mirror.archlinuxarm.org/$arch/$repo
+Server = http://de4.mirror.archlinuxarm.org/$arch/$repo
+Server = https://de3.mirror.archlinuxarm.org/$arch/$repo
+Server = https://fl.us.mirror.archlinuxarm.org/$arch/$repo
+Server = http://gr.mirror.archlinuxarm.org/$arch/$repo
+Server = http://de.mirror.archlinuxarm.org/$arch/$repo
+Server = http://fr.mirror.archlinuxarm.org/$arch/$repo
+Server = http://nj.us.mirror.archlinuxarm.org/$arch/$repo
+Server = http://hu.mirror.archlinuxarm.org/$arch/$repo
 Server = http://tw2.mirror.archlinuxarm.org/$arch/$repo
 Server = http://dk.mirror.archlinuxarm.org/$arch/$repo
+Server = http://tw.mirror.archlinuxarm.org/$arch/$repo

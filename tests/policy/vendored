@@ -1,0 +1,6 @@
+# Files copied byte for byte from another repository, one path per line.
+#
+# Their text belongs to the source repository, so the path and name checks
+# of tests/static/99-docs-paths.sh do not read them. Each line must name a
+# file in the tree.
+bootstrap/any/usr/local/bin/pacman-oci

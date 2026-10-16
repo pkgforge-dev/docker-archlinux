@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+#
+# Compare two pacman package versions, as pacman's vercmp does.
+#
+#   scripts/vercmp A B
+#
+# Prints -1 when A is older than B, 0 when they are equal, 1 when A is newer.
+#
+# A version is [epoch:]version[-release]. This is a port of alpm_pkg_vercmp
+# and rpmvercmp from pacman's lib/libalpm/version.c:
+#   - A missing epoch is 0. The epochs compare first, then the versions.
+#   - The releases compare only when both versions have one.
+#   - A segment is a run of digits or a run of letters. Other characters
+#     separate segments. A numeric segment is newer than an alpha segment.
+#   - Leading zeros do not count. The longer number is newer.
+#   - When the separator runs differ in length, the longer run is newer.
+#   - At the end, a remaining alpha segment is older than nothing. Any other
+#     remaining segment is newer than nothing.
+# tests/static/61-vercmp.sh checks every vector of pacman's own test list.
+#
+# Exit status: 0 compared, 2 usage.
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+  echo "usage: vercmp A B" >&2
+  exit 2
+fi
+
+# The C locale makes the character classes and the string order ASCII. The
+# versions go through the environment, because awk -v reads escape sequences.
+VERCMP_A="$1" VERCMP_B="$2" LC_ALL=C awk '
+  function isdigit(c) { return c ~ /^[0-9]$/ }
+  function isalpha(c) { return c ~ /^[A-Za-z]$/ }
+  function isalnum(c) { return c ~ /^[A-Za-z0-9]$/ }
+
+  # parse_evr S: sets EP (epoch), VE (version), RE (release), HASREL.
+  function parse_evr(s,    i, n, c, rest, j, last) {
+    n = length(s)
+    i = 1
+    while (i <= n && isdigit(substr(s, i, 1))) i++
+    if (i <= n && substr(s, i, 1) == ":") {
+      EP = substr(s, 1, i - 1)
+      if (EP == "") EP = "0"
+      rest = substr(s, i + 1)
+    } else {
+      EP = "0"
+      rest = s
+      i = 0
+    }
+    # The release starts after the last dash that follows the epoch digits.
+    last = 0
+    for (j = 1; j <= length(rest); j++) {
+      if (substr(rest, j, 1) == "-") last = j
+    }
+    if (last > 0) {
+      VE = substr(rest, 1, last - 1)
+      RE = substr(rest, last + 1)
+      HASREL = 1
+    } else {
+      VE = rest
+      RE = ""
+      HASREL = 0
+    }
+  }
+
+  # rpmvercmp X Y -> -1, 0 or 1
+  function rpmvercmp(x, y,    p1, p2, o1, o2, n1, n2, isnum, s1, s2, e1, e2, c1, c2) {
+    if ((x "") == (y "")) return 0
+    n1 = length(x)
+    n2 = length(y)
+    p1 = 1
+    p2 = 1
+    o1 = 1
+    o2 = 1
+    while (o1 <= n1 && o2 <= n2) {
+      while (o1 <= n1 && !isalnum(substr(x, o1, 1))) o1++
+      while (o2 <= n2 && !isalnum(substr(y, o2, 1))) o2++
+      if (!(o1 <= n1 && o2 <= n2)) break
+      # Separator runs of different length end the comparison.
+      if ((o1 - p1) != (o2 - p2)) return ((o1 - p1) < (o2 - p2)) ? -1 : 1
+      p1 = o1
+      p2 = o2
+      if (isdigit(substr(x, p1, 1))) {
+        while (p1 <= n1 && isdigit(substr(x, p1, 1))) p1++
+        while (p2 <= n2 && isdigit(substr(y, p2, 1))) p2++
+        isnum = 1
+      } else {
+        while (p1 <= n1 && isalpha(substr(x, p1, 1))) p1++
+        while (p2 <= n2 && isalpha(substr(y, p2, 1))) p2++
+        isnum = 0
+      }
+      s1 = substr(x, o1, p1 - o1)
+      s2 = substr(y, o2, p2 - o2)
+      if (s1 == "") return -1
+      # One numeric segment against one alpha segment: numeric is newer.
+      if (s2 == "") return isnum ? 1 : -1
+      if (isnum) {
+        sub(/^0+/, "", s1)
+        sub(/^0+/, "", s2)
+        if (length(s1) > length(s2)) return 1
+        if (length(s2) > length(s1)) return -1
+      }
+      # String order. The concatenation keeps awk from a numeric compare.
+      if ((s1 "") < (s2 "")) return -1
+      if ((s1 "") > (s2 "")) return 1
+      o1 = p1
+      o2 = p2
+    }
+    if (o1 > n1 && o2 > n2) return 0
+    c1 = (o1 <= n1) ? substr(x, o1, 1) : ""
+    c2 = (o2 <= n2) ? substr(y, o2, 1) : ""
+    if ((c1 == "" && !isalpha(c2)) || isalpha(c1)) return -1
+    return 1
+  }
+
+  BEGIN {
+    a = ENVIRON["VERCMP_A"]
+    b = ENVIRON["VERCMP_B"]
+    if ((a "") == (b "")) { print 0; exit }
+    parse_evr(a); e1 = EP; v1 = VE; r1 = RE; h1 = HASREL
+    parse_evr(b); e2 = EP; v2 = VE; r2 = RE; h2 = HASREL
+    ret = rpmvercmp(e1, e2)
+    if (ret == 0) {
+      ret = rpmvercmp(v1, v2)
+      if (ret == 0 && h1 && h2) ret = rpmvercmp(r1, r2)
+    }
+    print ret
+  }'

@@ -1,0 +1,26 @@
+# The inputs of the image, for the image job of .github/workflows/ci.yml.
+#
+# A diff that changes one of these paths builds and tests the image. A line
+# that ends in / is a directory; any other line is one file. A change under
+# rootfs/ARCH/, bootstrap/ARCH/, mirrors/ARCH.* or ports/ARCH.conf builds only
+# that port. A change to any other input builds every port.
+#
+# tests/static/51-workflow-policy.sh checks that each line names a path in
+# the tree, that each COPY source of the Dockerfile is here, and that each
+# script the image job runs is here.
+Dockerfile
+bootstrap/
+rootfs/
+ports/
+mirrors/
+scripts/lib.sh
+scripts/ports
+scripts/binfmt-register
+scripts/pick-base-image
+scripts/gen-evidence
+scripts/install-tools
+tests/run.sh
+tests/lib/
+tests/image/
+tests/policy/image-inputs
+.github/workflows/ci.yml

@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+#
+# Keep every schedule enabled, check that every schedule fires, and keep the
+# issues schedules-stopped and failing-<stem> in step with the result.
+#
+#   scripts/watch-schedules
+#
+# The script runs scripts/keep-schedules-enabled, then
+# scripts/check-schedules-fired, each to the end, and prints what each said.
+#
+#   schedules-stopped  raised when check-schedules-fired finds a stopped
+#                      schedule (its exit 3), or keep-schedules-enabled names a
+#                      workflow that a person disabled. Cleared when both ran,
+#                      every schedule fires, and no workflow is disabled by a
+#                      person.
+#   failing-<stem>     raised when the newest 3 completed scheduled runs of
+#                      the workflow <stem>.yml failed. Cleared when its newest
+#                      completed scheduled run succeeded. Left as it is for
+#                      any other mix.
+#
+# ⛔ A schedule that stops makes no run that can fail. A red step reaches only
+# the person who reads the run, so the script also raises an issue.
+#
+# ⚠ A failing workflow raises its issue and does not make this script fail.
+# The workflows that run this script are scheduled too. A red watcher run
+# would count as a failure of the watcher, and every watcher would then
+# report the others.
+#
+# Environment: GH_TOKEN with actions: write and issues: write,
+# GITHUB_REPOSITORY (owner/name). GITHUB_SERVER_URL and GITHUB_RUN_ID name the
+# run in the issue body. SCHEDULES_TODAY goes to check-schedules-fired (a test
+# seam).
+#
+# Exit status:
+#   0  every schedule fires (a workflow disabled by a person, or a failing
+#      workflow, raises its issue and is not a failure here)
+#   3  a schedule stopped, and schedules-stopped is raised. Each caller
+#      takes 3 as handled: a red run counts as a failure of the caller.
+#   1  a check could not run
+set -euo pipefail
+
+PROG=watch-schedules
+# shellcheck source=scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+[ "$#" -eq 0 ] || die "usage: scripts/watch-schedules"
+slug="${GITHUB_REPOSITORY:-}"
+case "$slug" in
+  */*) ;;
+  *) die "GITHUB_REPOSITORY is not owner/name: ${slug:-<unset>}" ;;
+esac
+run_url="${GITHUB_SERVER_URL:-https://github.com}/$slug/actions/runs/${GITHUB_RUN_ID:-0}"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+rc_keep=0
+"$REPO_ROOT/scripts/keep-schedules-enabled" > "$work/keep.out" 2>&1 || rc_keep=$?
+cat "$work/keep.out"
+rc_fired=0
+"$REPO_ROOT/scripts/check-schedules-fired" "$work/results" > "$work/fired.out" 2>&1 || rc_fired=$?
+cat "$work/fired.out"
+
+awk '$1 == "manual"' "$work/keep.out" > "$work/manual.txt"
+manual="$(awk 'END { print NR + 0 }' "$work/manual.txt")"
+could_not=0
+if [ "$rc_keep" -ne 0 ]; then
+  warn "scripts/keep-schedules-enabled could not run (exit $rc_keep); reproduce: GH_TOKEN=... scripts/keep-schedules-enabled"
+  could_not=1
+fi
+case "$rc_fired" in
+  0 | 3) ;;
+  *)
+    warn "scripts/check-schedules-fired could not run (exit $rc_fired); reproduce: GH_TOKEN=... scripts/check-schedules-fired"
+    could_not=1
+    ;;
+esac
+
+#---------------------------------------------------------------------------#
+# schedules-stopped
+#---------------------------------------------------------------------------#
+if [ "$rc_fired" -eq 3 ] || [ "$manual" -gt 0 ]; then
+  # shellcheck disable=SC2016 # Markdown backticks, not command substitution
+  {
+    if [ "$rc_fired" -eq 3 ]; then
+      printf 'A schedule stopped. A schedule that stops makes no run, so no run of it fails.\n\n'
+    fi
+    if [ "$manual" -gt 0 ]; then
+      printf 'A person disabled %s workflow(s). The schedule of a disabled workflow does not fire.\n\n' "$manual"
+    fi
+    printf '`scripts/check-schedules-fired` (exit %s):\n\n```\n' "$rc_fired"
+    sed -n 1,60p "$work/fired.out"
+    printf '```\n\n`scripts/keep-schedules-enabled` (exit %s):\n\n```\n' "$rc_keep"
+    sed -n 1,60p "$work/keep.out"
+    printf '```\n\n'
+    printf 'GitHub stops the schedules of a repository after 60 days with no activity. Enable a workflow in the Actions tab, or with `gh workflow enable FILE`. Start a run by hand to see the result now: `gh workflow run watchdog.yml`.\n\n'
+    printf 'reproduce:\n\n```bash\nscripts/check-schedules-fired\ngh api repos/%s/actions/workflows --jq '"'"'.workflows[] | "\\(.path) \\(.state)"'"'"'\n```\n\n' "$slug"
+    printf 'Seen in: %s\n\nThis issue closes when every schedule fires and no workflow is disabled by a person.\n' "$run_url"
+  } > "$work/body.md"
+  "$REPO_ROOT/scripts/track-issue" raise schedules-stopped "A schedule stopped" "$work/body.md"
+elif [ "$could_not" -eq 0 ]; then
+  "$REPO_ROOT/scripts/track-issue" clear schedules-stopped "Every schedule fires, and no workflow is disabled by a person: $run_url"
+fi
+
+#---------------------------------------------------------------------------#
+# failing-<stem>, one issue for each scheduled workflow
+#---------------------------------------------------------------------------#
+failing=0
+for f in "$work/results"/*.result; do
+  [ -e "$f" ] || continue
+  stem="$(basename "$f" .result)"
+  result="$(awk 'NR == 1 { print $1 }' "$f")"
+  case "$result" in
+    failing)
+      failing=$((failing + 1))
+      # shellcheck disable=SC2016 # Markdown backticks, not command substitution
+      {
+        printf 'The newest 3 completed scheduled runs of `%s` failed.\n\n' "$stem"
+        printf '| started | conclusion | run |\n| --- | --- | --- |\n'
+        awk '{ printf "| %s | %s | %s |\n", $1, $2, $3 }' "$work/results/$stem.runs"
+        printf '\nOpen the newest run and read the first failed step.\n\n'
+        printf 'reproduce: `gh run list --workflow %s.yml --event schedule --limit 3`\n\n' "$stem"
+        printf 'Seen in: %s\n\nThis issue closes when a scheduled run of `%s` succeeds.\n' "$run_url" "$stem"
+      } > "$work/failing-$stem.md"
+      "$REPO_ROOT/scripts/track-issue" raise "failing-$stem" "$stem: the scheduled runs fail" "$work/failing-$stem.md"
+      ;;
+    passing)
+      "$REPO_ROOT/scripts/track-issue" clear "failing-$stem" "A scheduled run of \`$stem\` succeeded: $run_url"
+      ;;
+    *) ;;
+  esac
+done
+[ "$failing" -eq 0 ] || note "$failing workflow(s) fail on schedule; each has its issue failing-<stem>"
+
+if [ "$could_not" -eq 1 ]; then
+  exit 1
+fi
+if [ "$rc_fired" -eq 3 ]; then
+  exit 3
+fi
+exit 0

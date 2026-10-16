@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+#
+# A stand-in for gh, for the tests of check-status-record and
+# check-status-site, and of scripts/track-issue under them. It makes no
+# network request.
+#
+#   PATH=<dir holding this file as gh>:$PATH FAKE_GH_DIR=DIR scripts/...
+#
+# Each answer comes from FAKE_GH_DIR:
+#   GET   repos/O/R/issues?...                    open.json, or [] when absent
+#   GET   repos/O/R/issues/N                      the issue N of open.json
+#   GET   repos/O/R/labels/L                      {}
+#   GET   repos/O/R/contents/status.json?...      status.json; absent: HTTP 404
+#   POST  repos/O/R/labels                        {}
+#   POST  repos/O/R/issues                        {"number": 101}
+#   PATCH repos/O/R/issues/N                      {}
+#   POST  repos/O/R/issues/N/comments             {}
+#   POST  repos/O/R/issues/N/labels               []
+# --jq EXPR is applied to the answer. Any other call fails and says so.
+#
+# FAKE_GH_DIR/calls.log gets one line for each call that changes something:
+#   open KEY        a new issue whose body carries <!-- track: KEY -->
+#   update N KEY    issue N, its body written again
+#   close N         issue N closed
+#   comment N       a comment on issue N
+#   edit N          issue N changed in another way (title, labels)
+# The body of each open and update goes to FAKE_GH_DIR/body-KEY.md.
+set -euo pipefail
+
+dir="${FAKE_GH_DIR:?FAKE_GH_DIR is not set}"
+if [ "${1:-}" != api ]; then
+  echo "fake-gh: only gh api is answered, not: gh $*" >&2
+  exit 1
+fi
+shift
+method=""
+path=""
+jq_expr=""
+body=""
+state=""
+fields=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -X | --method) method="$2"; shift 2 ;;
+    --jq | -q) jq_expr="$2"; shift 2 ;;
+    -H | --header) shift 2 ;;
+    --input)
+      body="$(jq -r '.body // empty' "$2")"
+      state="$(jq -r '.state // empty' "$2")"
+      fields=1
+      shift 2
+      ;;
+    -f | -F | --raw-field | --field)
+      case "$2" in
+        body=*) body="${2#body=}" ;;
+        state=*) state="${2#state=}" ;;
+      esac
+      fields=1
+      shift 2
+      ;;
+    -*) shift ;;
+    *) path="${1#/}"; shift ;;
+  esac
+done
+# gh posts when fields are given and no method is named.
+if [ -z "$method" ]; then
+  method=GET
+  [ "$fields" -eq 0 ] || method=POST
+fi
+
+answer() {
+  if [ -n "$jq_expr" ]; then
+    jq -r "$jq_expr"
+  else
+    cat
+  fi
+}
+
+key_of() {
+  printf '%s\n' "$1" | sed -n 's/^.*<!-- track: \([a-z0-9._-]*\) -->.*$/\1/p' | awk 'NR == 1'
+}
+
+log() {
+  printf '%s\n' "$*" >> "$dir/calls.log"
+}
+
+route="${path%%\?*}"
+case "$method $route" in
+  "GET repos/"*/*/issues)
+    if [ -f "$dir/open.json" ]; then answer < "$dir/open.json"; else printf '[]\n' | answer; fi
+    ;;
+  "GET repos/"*/*/issues/[0-9]*)
+    n="${route##*/}"
+    jq --argjson n "$n" '(.[] | select(.number == $n)) // {number: $n, state: "closed"}' "$dir/open.json" | answer
+    ;;
+  "GET repos/"*/*/labels/*) printf '{}\n' | answer ;;
+  "GET repos/"*/*/contents/status.json)
+    if [ -f "$dir/status.json" ]; then
+      answer < "$dir/status.json"
+    else
+      echo "gh: Not Found (HTTP 404)" >&2
+      exit 1
+    fi
+    ;;
+  "POST repos/"*/*/issues)
+    k="$(key_of "$body")"
+    log "open $k"
+    printf '%s\n' "$body" > "$dir/body-$k.md"
+    printf '{"number": 101}\n' | answer
+    ;;
+  "PATCH repos/"*/*/issues/[0-9]*)
+    n="${route##*/}"
+    if [ "$state" = closed ]; then
+      log "close $n"
+    elif [ -n "$body" ]; then
+      k="$(key_of "$body")"
+      log "update $n $k"
+      printf '%s\n' "$body" > "$dir/body-$k.md"
+    else
+      log "edit $n"
+    fi
+    printf '{}\n' | answer
+    ;;
+  "POST repos/"*/*/issues/[0-9]*/comments)
+    n="${route%/comments}"
+    log "comment ${n##*/}"
+    printf '{}\n' | answer
+    ;;
+  "POST repos/"*/*/issues/[0-9]*/labels)
+    n="${route%/labels}"
+    log "edit ${n##*/}"
+    printf '[]\n' | answer
+    ;;
+  "POST repos/"*/*/labels) printf '{}\n' | answer ;;
+  *)
+    echo "fake-gh: no answer for: $method $path" >&2
+    exit 1
+    ;;
+esac

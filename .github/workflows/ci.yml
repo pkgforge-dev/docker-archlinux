@@ -1,77 +1,485 @@
+# The checks of each pull request and of each push to main.
+#
+#   static   tests/run.sh -j 4 static: the tree, with no network
+#   lint     shellcheck, actionlint and py_compile over the tracked files
+#   network  tests/run.sh network: live reads of mirrors and registries
+#   changes  find the ports whose image inputs the diff changes
+#            (tests/policy/image-inputs) and make their matrix (scripts/ports)
+#   image    per port: build, push to a registry on the runner, write the
+#            evidence, run tests/run.sh image
+#   check    the verdict of static, lint, changes and image
+#
+# ⛔ Keep two names. bot-merge.yml starts on the workflow name "CI". Branch
+# protection requires the check "Static suite and linters", the name of the
+# check job. tests/static/99-docs-paths.sh checks both.
+#
+# ⚠ check does not need network. A failed network job shows in the run, and
+# blocks no merge: branch protection and bot-merge.yml read the check, not
+# the conclusion of the run.
+#
+# Tools come from scripts/install-tools: pinned versions, sha256 checked,
+# kept in actions/cache under a key made from the script's hash.
 name: CI
 
-# What gates a pull request.
-#
-# The build workflow only runs on a schedule or a dispatch, because it pushes
-# images. This runs on every pull request and pushes nothing, so it is the check
-# branch protection can require without a pull request being able to reach the
-# registry credentials.
-#
-# It is deliberately the same suite the build job runs before building, plus the
-# two linters, so a pull request cannot be green here and red there.
 on:
   pull_request:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
+
+permissions: {}
+
+# One group per pull request: a newer push cancels the older run. Every other
+# run has a group of its own (its run id), so no commit on main loses its
+# verdict to a newer push.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
     shell: bash
 
-permissions:
-  contents: read
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+env:
+  # A test that needs a missing tool fails, not skips.
+  TESTS_REQUIRE_TOOLS: 1
 
 jobs:
-  check:
-    name: Static suite and linters
-    runs-on: ubuntu-latest
+  static:
+    name: Static suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      - name: Restore the tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/tools
+          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-tools') }}
+
+      - name: Install the tools
+        run: |
+          scripts/install-tools "$RUNNER_TEMP/tools"
+          echo "$RUNNER_TEMP/tools" >> "$GITHUB_PATH"
+
+      # The runner checks itself first, with bash and no runner. A runner
+      # that hides a failure would hide this one too.
+      - name: Check the test runner
+        run: REPO_ROOT="$PWD" bash tests/static/05-harness.sh
+
       - name: Static suite
-        run: tests/run.sh static
+        run: tests/run.sh -j 4 static
+
+  lint:
+    name: Linters
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore the tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/tools
+          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-tools') }}
+
+      - name: Install the tools
+        run: |
+          scripts/install-tools "$RUNNER_TEMP/tools"
+          echo "$RUNNER_TEMP/tools" >> "$GITHUB_PATH"
+
+      # Sort the tracked files by their #! line. A .sh file with no #! line
+      # is bash, except under tests/fixtures: there a file with no #! line
+      # is data.
+      - name: Find the files to lint
+        run: |
+          : > "$RUNNER_TEMP/bash.list"
+          : > "$RUNNER_TEMP/sh.list"
+          : > "$RUNNER_TEMP/python.list"
+          while IFS= read -r -d '' f; do
+            [ -f "$f" ] || continue
+            first=""
+            if [ "$(head -c 2 "$f")" = '#!' ]; then
+              first="$(head -n 1 "$f")"
+            fi
+            case "$first" in
+              *python*) list='python' ;;
+              *bash*) list='bash' ;;
+              '#!/bin/sh'* | '#!/usr/bin/env sh'*) list='sh' ;;
+              '')
+                case "$f" in
+                  tests/fixtures/*) continue ;;
+                  *.sh) list='bash' ;;
+                  *) continue ;;
+                esac
+                ;;
+              *) continue ;;
+            esac
+            printf '%s\0' "$f" >> "$RUNNER_TEMP/$list.list"
+          done < <(git ls-files -z)
+          for list in bash sh python; do
+            echo "$list: $(tr -cd '\0' < "$RUNNER_TEMP/$list.list" | wc -c) files"
+          done
 
       - name: shellcheck
         run: |
-          set -euo pipefail
-          # Pinned by digest. A linter that silently changes what it accepts is
-          # the same class of problem as an unpinned base image.
-          # tag: stable
-          docker run --rm -v "$PWD:/mnt:ro" -w /mnt \
-            docker.io/koalaman/shellcheck@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d \
-            --shell=bash --external-sources \
-            tests/run.sh tests/lib/harness.sh tests/static/*.sh tests/image/*.sh \
-            scripts/* bootstrap/any/usr/local/bin/* examples/*.sh
-          # What ships inside the image, checked as sh rather than bash. It runs
-          # from a pacman hook in a consumer's container, where the only thing
-          # guaranteed is /bin/sh, so a bashism here is a defect the bash pass
-          # above would accept.
-          # tag: stable
-          docker run --rm -v "$PWD:/mnt:ro" -w /mnt \
-            docker.io/koalaman/shellcheck@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d \
-            --shell=sh rootfs/any/usr/local/lib/docker-archlinux/*
+          mapfile -d '' -t bash_files < "$RUNNER_TEMP/bash.list"
+          mapfile -d '' -t sh_files < "$RUNNER_TEMP/sh.list"
+          if [ "${#bash_files[@]}" -eq 0 ]; then
+            echo "::error::no bash file found, so shellcheck checked nothing. Reproduce: git ls-files '*.sh' scripts"
+            exit 1
+          fi
+          shellcheck --version
+          shellcheck --external-sources --shell=bash "${bash_files[@]}"
+          if [ "${#sh_files[@]}" -gt 0 ]; then
+            shellcheck --external-sources --shell=sh "${sh_files[@]}"
+          fi
+          echo "shellcheck: ${#bash_files[@]} bash files, ${#sh_files[@]} sh files"
 
+      # actionlint runs the shellcheck on PATH over each run: block.
       - name: actionlint
         run: |
-          set -euo pipefail
-          # -verbose names each file it reads. Exiting 0 without that line means
-          # it found no workflows, which is a pass that proves nothing.
-          #
-          # ⛔ 2>&1 is load-bearing. actionlint writes its findings to stdout and
-          # every -verbose line to stderr. Capturing stdout alone left the file
-          # empty on a clean run, so the guard below failed on every run and this
-          # job, which is the required status check, could never go green.
-          # tag: latest
-          docker run --rm -v "$PWD:/repo:ro" -w /repo \
-            docker.io/rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
-            -verbose 2>&1 | tee /tmp/actionlint.txt
-          grep -q 'Linting .github/workflows/' /tmp/actionlint.txt
+          shopt -s nullglob
+          workflows=(.github/workflows/*.yml .github/workflows/*.yaml)
+          if [ "${#workflows[@]}" -eq 0 ]; then
+            echo "::error::no workflow found, so actionlint checked nothing. Reproduce: ls .github/workflows"
+            exit 1
+          fi
+          actionlint -version
+          actionlint "${workflows[@]}"
+          echo "actionlint: ${#workflows[@]} workflows"
+
+      - name: py_compile
+        run: |
+          mapfile -d '' -t py_files < "$RUNNER_TEMP/python.list"
+          if [ "${#py_files[@]}" -eq 0 ]; then
+            echo "py_compile: no python file in the tree"
+            exit 0
+          fi
+          python3 --version
+          python3 -I -X pycache_prefix="$RUNNER_TEMP/pycache" -m py_compile "${py_files[@]}"
+          echo "py_compile: ${#py_files[@]} files"
+
+  network:
+    name: Network suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore the tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/tools
+          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-tools') }}
+
+      - name: Install the tools
+        run: |
+          scripts/install-tools "$RUNNER_TEMP/tools"
+          echo "$RUNNER_TEMP/tools" >> "$GITHUB_PATH"
+
+      - name: Network suite
+        run: tests/run.sh -j 4 network
+
+  changes:
+    name: Image inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      matrix: ${{ steps.decide.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Restore the tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/tools
+          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-tools') }}
+
+      - name: Install the tools
+        run: |
+          scripts/install-tools "$RUNNER_TEMP/tools"
+          echo "$RUNNER_TEMP/tools" >> "$GITHUB_PATH"
+
+      # build=true when the diff from BASE changes a path in
+      # tests/policy/image-inputs. A port's own path builds that port; any
+      # other input builds every port. A dispatch, or a BASE that is not in
+      # the clone, builds every port. With build=false the matrix is [] and
+      # the image job is skipped. tests/static/51-workflow-policy.sh runs
+      # this block against fixture commits.
+      - name: Decide
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -u
+          arches="$(scripts/ports list)"
+          inputs=()
+          while IFS= read -r line; do
+            case "$line" in
+              '' | '#'*) continue ;;
+            esac
+            inputs+=("$line")
+          done < tests/policy/image-inputs
+          # is_input PATH: PATH is under an entry of tests/policy/image-inputs.
+          is_input() {
+            local p
+            for p in "${inputs[@]}"; do
+              case "$p" in
+                */) [ "${1#"$p"}" = "$1" ] || return 0 ;;
+                *) [ "$1" != "$p" ] || return 0 ;;
+              esac
+            done
+            return 1
+          }
+          # port_of PATH: the port that owns PATH, or nothing for a shared input.
+          port_of() {
+            local a
+            for a in $arches; do
+              case "$1" in
+                rootfs/"$a"/* | bootstrap/"$a"/* | mirrors/"$a".* | ports/"$a".conf)
+                  printf '%s\n' "$a"
+                  return 0
+                  ;;
+              esac
+            done
+          }
+          all=0
+          picked=" "
+          why=""
+          zero=0000000000000000000000000000000000000000
+          case "$EVENT" in
+            pull_request | push)
+              if [ -z "$BASE" ] || [ "$BASE" = "$zero" ] || ! git cat-file -e "$BASE^{commit}"; then
+                all=1
+                why="the base commit '$BASE' is not in the clone"
+              else
+                # --no-renames: a rename gives its old path and its new path,
+                # so a file that leaves a port builds that port. -z: no path
+                # is quoted.
+                git diff --no-renames --name-only -z "$BASE" HEAD > "$RUNNER_TEMP/changed"
+                while IFS= read -r -d '' path; do
+                  [ -n "$path" ] || continue
+                  is_input "$path" || continue
+                  a="$(port_of "$path")"
+                  if [ -z "$a" ]; then
+                    all=1
+                    why="$path is an input of every port"
+                  else
+                    case "$picked" in
+                      *" $a "*) ;;
+                      *) picked="$picked$a " ;;
+                    esac
+                  fi
+                done < "$RUNNER_TEMP/changed"
+              fi
+              ;;
+            *)
+              all=1
+              why="a $EVENT run builds every port"
+              ;;
+          esac
+          # The picked ports, in the order of scripts/ports list.
+          ordered=""
+          for a in $arches; do
+            case "$picked" in
+              *" $a "*) ordered="$ordered $a" ;;
+            esac
+          done
+          if [ "$all" -eq 1 ]; then
+            build=true
+            matrix="$(scripts/ports matrix)"
+          elif [ -n "$ordered" ]; then
+            build=true
+            why="the diff changes the inputs of:$ordered"
+            # shellcheck disable=SC2086 # one port per word
+            matrix="$(scripts/ports matrix $ordered)"
+          else
+            build=false
+            why="the diff changes no image input"
+            matrix='[]'
+          fi
+          echo "build=$build: $why"
+          {
+            echo "build=$build"
+            echo "matrix=$matrix"
+          } >> "$GITHUB_OUTPUT"
+
+  image:
+    name: Image ${{ matrix.arch }}
+    needs: changes
+    if: needs.changes.outputs.build == 'true' && needs.changes.outputs.matrix != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.matrix) }}
+    env:
+      ARCH: ${{ matrix.arch }}
+      PLATFORM: ${{ matrix.platform }}
+      CONTAINER_RUNTIME: docker
+      SOURCE_COMMIT: ${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore the tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/tools
+          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-tools') }}
+
+      - name: Install the tools
+        run: |
+          scripts/install-tools "$RUNNER_TEMP/tools"
+          echo "$RUNNER_TEMP/tools" >> "$GITHUB_PATH"
+
+      # A registry on this runner gives the image a digest, the same as a
+      # push by digest in build-deploy.yml. Nothing leaves the runner.
+      - name: Start a registry on this runner
+        env:
+          # tag: 3
+          REGISTRY_IMAGE: docker.io/library/registry:3@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
+        run: |
+          digest="${REGISTRY_IMAGE#*@}"
+          started=0
+          for src in "$REGISTRY_IMAGE" "mirror.gcr.io/library/registry@$digest"; do
+            rc=0
+            timeout -k 5 300 docker pull "$src" || rc=$?
+            if [ "$rc" -eq 0 ]; then
+              docker run -d --name registry -p 127.0.0.1:5000:5000 "$src"
+              started=1
+              break
+            fi
+            echo "::warning::could not pull $src (exit $rc)"
+          done
+          if [ "$started" -ne 1 ]; then
+            echo "::error::no source gave the registry image $digest. Reproduce: docker pull $REGISTRY_IMAGE"
+            exit 1
+          fi
+
+      - name: Register the emulator
+        run: scripts/binfmt-register "$ARCH"
+
+      # The same digest as the Dockerfile default, from the first registry
+      # that serves it: docker.io, then mirror.gcr.io, then public.ecr.aws.
+      - name: Pick the base image registry
+        id: base
+        run: |
+          ref="$(scripts/pick-base-image)"
+          echo "base_image=$ref" >> "$GITHUB_OUTPUT"
+
+      # The other build args keep the Dockerfile defaults.
+      - name: Build
+        env:
+          BASE_IMAGE: ${{ steps.base.outputs.base_image }}
+        run: |
+          version="$(date -u +'%Y.%m.%d')"
+          build_date="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          ref="localhost:5000/archlinux-ci:$ARCH"
+          args=(--platform "$PLATFORM"
+            --build-arg "IMAGE_VERSION=$version"
+            --build-arg "SOURCE_COMMIT=$SOURCE_COMMIT"
+            --build-arg "BUILD_DATE=$build_date"
+            --build-arg "BASE_IMAGE=$BASE_IMAGE")
+          docker buildx build "${args[@]}" --load -t "$ref" .
+          docker push "$ref"
+          image="$(docker image inspect "$ref" --format '{{ index .RepoDigests 0 }}')"
+          case "$image" in
+            localhost:5000/*@sha256:*) ;;
+            *)
+              echo "::error::the pushed image has no digest: '$image'. Reproduce: docker image inspect $ref"
+              exit 1
+              ;;
+          esac
+          docker buildx build "${args[@]}" --target dbsnapshot \
+            --output "type=local,dest=$RUNNER_TEMP/dbsnapshot" .
+          echo "image $image, version $version"
+          {
+            echo "IMAGE=$image"
+            echo "BUILD_DATE=$build_date"
+          } >> "$GITHUB_ENV"
+
+      - name: Write the evidence
+        run: |
+          DB_SNAPSHOT="$RUNNER_TEMP/dbsnapshot" \
+            scripts/gen-evidence "$ARCH" "$IMAGE" "$PLATFORM" "$RUNNER_TEMP/evidence.json"
+
+      - name: Image suite
+        run: EVIDENCE="$RUNNER_TEMP/evidence.json" tests/run.sh image
+
+  # ⛔ The one required check. It needs every job that gates a merge. A
+  # skipped image job passes: the diff changed no image input.
+  check:
+    name: Static suite and linters
+    needs: [static, lint, changes, image]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Take the verdict
+        env:
+          RESULTS: >-
+            static=${{ needs.static.result }}
+            lint=${{ needs.lint.result }}
+            changes=${{ needs.changes.result }}
+            image=${{ needs.image.result }}
+          MAY_SKIP: image
+        run: |
+          bad=""
+          n=0
+          for pair in $RESULTS; do
+            n=$((n + 1))
+            job="${pair%%=*}"
+            result="${pair#*=}"
+            echo "$job: $result"
+            case "$result" in
+              success) ;;
+              skipped)
+                case " $MAY_SKIP " in
+                  *" $job "*) ;;
+                  *) bad="$bad $job=$result" ;;
+                esac
+                ;;
+              *) bad="$bad $job=$result" ;;
+            esac
+          done
+          if [ "$n" -eq 0 ]; then
+            echo "::error::no job result to judge. Reproduce: read the env of this step"
+            exit 1
+          fi
+          if [ -n "$bad" ]; then
+            echo "::error::a needed job did not pass:$bad"
+            exit 1
+          fi
+          echo "every needed job passed"

@@ -1,0 +1,1155 @@
+#!/usr/bin/env bash
+#
+# Measure the published images for the status site.
+#
+#   scripts/status-collect OUT
+#
+# The ports come from scripts/ports. For each port:
+#   ghcr      the rolling tag of its first alias on GHCR: the digest, the
+#             labels of the image config (org.opencontainers.image.created,
+#             .version, .revision), the compressed size (the sum of the layer
+#             sizes of the image manifest), the digest of each alias
+#   hub       the digest of each alias on Docker Hub, by HEAD only, so the
+#             reads do not count against the Docker Hub pull limit
+#   tags      the tag count per family on each registry, and the newest
+#             <alias>-v<date> tag
+#   build     the newest job named "Build <arch>" in the newest runs of
+#             build-deploy.yml: conclusion, start, end, duration
+#   evidence  package count, package bytes, installed bytes and anchor, from
+#             the evidence file of the published image
+#   mirror    for each repo of the port, the target <pacman_arch>-<repo> of
+#             the mirror-archlinux status.json: current, lag_seconds,
+#             age_seconds, coverage.ratio_files
+# And once: the platforms of the index tag latest, and the parity of the
+# registries. The parity is the share of GHCR tags that Docker Hub carries.
+# A rolling tag (latest and each alias) counts with the same digest. A pinned
+# tag counts when it exists.
+#
+# ⛔ A run of build-deploy.yml counts only when it is a run of this
+# repository on the default branch, started by schedule, workflow_dispatch or
+# push. A pull request from a fork also makes runs and artifacts here. A dry
+# run does not count either: it pushes to the scratch image. Its run name ends
+# in "(dry run)", or it skips the job DRY_RUN_JOB below.
+#
+# Read first, when they exist. The caller copies them from the branch status:
+#   OUT/history.jsonl           the lines of the earlier runs
+#   OUT/evidence/<arch>.json    the stored evidence of each port
+#   OUT/evidence/<arch>.digest  the image digest that this evidence describes
+#
+# Evidence: the stored file stays when its digest is the published digest.
+# Else the evidence-<arch> artifacts of the newest runs are read, newest
+# first, at most 3, until one describes the published image. With no match,
+# the stored file stays, or the newest artifact when nothing is stored, and
+# evidence.matches is false.
+#
+# Writes:
+#   OUT/status.json             schema 1, below
+#   OUT/history.jsonl           one line added per run, the last
+#                               STATUS_HISTORY_LINES lines kept
+#   OUT/evidence/<arch>.json    the evidence of each port, and its digest in
+#   OUT/evidence/<arch>.digest  <arch>.digest; release.yml reads both
+#
+# status.json, schema 1. Times are ISO 8601 UTC, sizes are bytes, durations
+# are seconds, a ratio is 0 to 1. null is "not read": the page says unknown,
+# never 0.
+#   schema, generated, generated_epoch, source, site_url
+#   images      {ghcr, hub}: the two image names
+#   interval    {workflow, gap_days, tolerance_days}, from scripts/cron-tolerance
+#   budget      {seconds, used, exhausted}
+#   latest      {state, error, digest, platforms[], missing[], extra[],
+#               hub_digest, hub_match}; missing names the port platforms that
+#               latest does not carry
+#   registries  {ghcr {image, read, error, tags}, hub {...}, parity,
+#               rolling {total, same, differs[], unknown}, pinned {total,
+#               present, missing, missing_names[] (first 20)}, index {tags,
+#               same, unknown, ratio}, drift_runs}. index counts the tags of
+#               no port (latest, v<date>). drift_runs counts the runs in a
+#               row, this one included, with parity below 1. A run with
+#               parity null keeps the count.
+#   builds      {workflow, read, error, default_branch, runs, newest_run}; runs
+#               and newest_run name only the runs that count
+#   mirror      {url, read, error, generated}
+#   summary     {ports, published, unread, absent, with_evidence, builds_known,
+#               builds_passed}
+#   ports[]     {arch, platform, pacman_arch, distribution, homepage,
+#               aliases[], repos[],
+#     ghcr      {state published|absent|error, error, ref, digest,
+#               image_digest, created, version, revision, size, layers,
+#               rolling {alias: digest}, tags {rolling, dated, anchor, total},
+#               newest_dated},
+#     hub       {state, error, match, rolling {alias: digest}, tags {...},
+#               newest_dated}; match is true when every alias has the GHCR
+#               digest, false when one differs or is absent, else null,
+#     parity    {tags, same, unknown, ratio}: the GHCR tags of the port,
+#               how many Docker Hub carries by the parity rule, and how many
+#               rolling tags did not read; same and ratio are null when one
+#               did not read,
+#     age_seconds        now minus ghcr.created,
+#     in_latest          latest carries the platform of the port,
+#     latest_current     latest carries the image the first alias names,
+#     evidence  {source stored|artifact, run_id, digest, matches, packages,
+#               bytes, installed_bytes, anchor, built, source_commit,
+#               version_id, error},
+#     build     {result, started, completed, duration_seconds, run_id,
+#               run_url, job_url, event, head_sha} or null; result is the
+#               job conclusion, or its status while it runs,
+#     builds[]  {result, started, duration_seconds, run_id, job_id}, the jobs
+#               of the runs read, newest first,
+#     mirror    {read, current, lag_seconds, targets[] {target, repo, found,
+#               current, lag_seconds, age_seconds, ratio_files, state}}}
+#
+# history.jsonl, one object per line:
+#   {"t": generated, "p": parity, "dr": drift_runs, "x": {"<arch>": {"a":
+#    age, "s": compressed bytes, "i": installed bytes, "n": packages, "k": 1
+#    when s, i and n are carried, "b": [job_id, result, started epoch,
+#    duration] or null, "l": the largest mirror lag}}}
+# A port with no size or no evidence in this run keeps s, i and n from the
+# last line that has them, with "k": 1.
+#
+# ⛔ The whole collect ends within STATUS_BUDGET seconds (default 600), below
+# the 30 minutes of the build job. Each network read runs under
+# timeout -k 5 within what is left. A read that does not fit is "unknown",
+# and budget.exhausted is true.
+#
+# Environment:
+#   GITHUB_REPOSITORY      owner/name; required
+#   GH_TOKEN               for gh (actions: read)
+#   GHCR_IMAGE, HUB_IMAGE  default: the env of build-deploy.yml
+#   MIRROR_STATUS_URL      default https://<owner>.github.io/mirror-archlinux/status.json
+#   STATUS_SITE_URL        default https://<owner>.github.io/<name>/
+#   STATUS_BUDGET          default 600 (seconds)
+#   STATUS_RUNS            the newest build-deploy.yml runs of this repository
+#                          to read, dry runs included, default 40
+#   STATUS_HISTORY_LINES   default 2000
+#   STATUS_ARTIFACTS       1 (default) reads evidence artifacts; 0 reads none,
+#                          and only the stored evidence counts (a local run)
+#   STATUS_FIXTURE_DIR     tests only: every network read comes from files
+#                          there (registry/, gh/, artifacts/, mirror-status.json)
+#   STATUS_NOW             tests only: the clock, in seconds
+#
+#   scripts/status-collect --lib FUNC ARG...
+# runs one function of scripts/lib.sh (reg_token, reg_head, reg_get,
+# reg_blob, reg_tags, http_get). The collect calls itself this way, so that
+# timeout can stop the read.
+#
+# Exit status: 0 measured (a value that cannot be read is a measurement, and
+# is in status.json), 1 the collect itself could not run.
+set -euo pipefail
+
+PROG=status-collect
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SELF="$ROOT/scripts/status-collect"
+# shellcheck source=scripts/lib.sh
+. "$ROOT/scripts/lib.sh"
+
+if [ "${1:-}" = --lib ]; then
+  shift
+  case "${1:-}" in
+    reg_token | reg_head | reg_get | reg_blob | reg_tags | http_get) ;;
+    *) die "--lib takes reg_token, reg_head, reg_get, reg_blob, reg_tags or http_get, not '${1:-}'" ;;
+  esac
+  rc=0
+  "$@" || rc=$?
+  exit "$rc"
+fi
+
+need jq awk sha256sum timeout sort
+
+out="${1:-}"
+[ "$#" -eq 1 ] && [ -n "$out" ] || die "usage: scripts/status-collect OUT"
+slug="${GITHUB_REPOSITORY:-}"
+case "$slug" in
+  ?*/?*) ;;
+  *) die "GITHUB_REPOSITORY is not owner/name: '${slug}'" "set it, for example GITHUB_REPOSITORY=pkgforge-dev/docker-archlinux" ;;
+esac
+owner="${slug%%/*}"
+name="${slug#*/}"
+mkdir -p "$out/evidence"
+
+BUDGET="${STATUS_BUDGET:-600}"
+[[ "$BUDGET" =~ ^[1-9][0-9]*$ ]] || die "STATUS_BUDGET must be a positive integer, not '$BUDGET'"
+RUNS="${STATUS_RUNS:-40}"
+[[ "$RUNS" =~ ^[1-9][0-9]*$ ]] && [ "$RUNS" -le 100 ] || die "STATUS_RUNS must be 1 to 100, not '$RUNS'"
+HISTORY_LINES="${STATUS_HISTORY_LINES:-2000}"
+[[ "$HISTORY_LINES" =~ ^[1-9][0-9]*$ ]] || die "STATUS_HISTORY_LINES must be a positive integer, not '$HISTORY_LINES'"
+ARTIFACTS="${STATUS_ARTIFACTS:-1}"
+case "$ARTIFACTS" in
+  0 | 1) ;;
+  *) die "STATUS_ARTIFACTS must be 0 or 1, not '$ARTIFACTS'" ;;
+esac
+FX="${STATUS_FIXTURE_DIR:-}"
+if [ -n "$FX" ] && [ ! -d "$FX" ]; then
+  die "STATUS_FIXTURE_DIR is not a directory: $FX"
+fi
+[ -n "$FX" ] || need curl
+
+BUILD_WF=build-deploy.yml
+WF_FILE="$ROOT/.github/workflows/$BUILD_WF"
+# One read of lib.sh: at most 2 tries of 30 s each.
+export HTTP_MAX_TIME=30 HTTP_TRIES=2 HTTP_CONNECT_TIMEOUT=10
+
+start=$SECONDS
+deadline=$((SECONDS + BUDGET))
+if [ -n "${STATUS_NOW:-}" ]; then
+  now="$STATUS_NOW"
+else
+  now="$(date -u +%s)"
+fi
+[[ "$now" =~ ^[0-9]+$ ]] || die "the clock reads '$now', not seconds"
+generated="$(jq -nr --argjson t "$now" '$t | todate')"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/p" "$work/ev"
+
+#---------------------------------------------------------------------------#
+# Names
+#---------------------------------------------------------------------------#
+# wf_env KEY -> the value of KEY in the top level env of build-deploy.yml, with
+# ${{ github.repository_owner }} replaced by the owner. Nothing when absent.
+wf_env() {
+  [ -f "$WF_FILE" ] || return 0
+  awk -v k="$1" '
+    /^[^[:space:]#]/ { top = ($0 ~ /^env:[[:space:]]*$/) ; next }
+    top && $0 ~ "^  " k ":" {
+      v = substr($0, index($0, ":") + 1)
+      sub(/[[:space:]]+#.*$/, "", v)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^["\047]|["\047]$/, "", v)
+      print v
+    }' "$WF_FILE" | awk 'END { print }' | sed "s|\${{ *github.repository_owner *}}|$owner|g"
+}
+
+GHCR_IMAGE="${GHCR_IMAGE:-$(wf_env GHCR_IMAGE)}"
+HUB_IMAGE="${HUB_IMAGE:-$(wf_env HUB_IMAGE)}"
+[ -n "$GHCR_IMAGE" ] || die "GHCR_IMAGE is not set, and $WF_FILE names none in its env"
+[ -n "$HUB_IMAGE" ] || die "HUB_IMAGE is not set, and $WF_FILE names none in its env"
+
+# split_image IMAGE -> "REGISTRY REPO". A name with no registry is on Docker Hub.
+split_image() {
+  local img="$1" first="${1%%/*}"
+  case "$first" in
+    *.* | *:* | localhost) printf '%s %s\n' "$first" "$(printf '%s' "${img#*/}" | tr '[:upper:]' '[:lower:]')" ;;
+    *) printf 'docker.io %s\n' "$(printf '%s' "$img" | tr '[:upper:]' '[:lower:]')" ;;
+  esac
+}
+read -r ghcr_reg ghcr_repo <<< "$(split_image "$GHCR_IMAGE")"
+read -r hub_reg hub_repo <<< "$(split_image "$HUB_IMAGE")"
+MIRROR_URL="${MIRROR_STATUS_URL:-https://$owner.github.io/mirror-archlinux/status.json}"
+SOURCE_URL="${GITHUB_SERVER_URL:-https://github.com}/$slug"
+SITE_URL="${STATUS_SITE_URL:-https://$owner.github.io/$name/}"
+
+#---------------------------------------------------------------------------#
+# Network reads, within the budget
+#---------------------------------------------------------------------------#
+# net MOST CMD...: CMD under timeout -k 5, for at most MOST seconds and at
+# most what is left of the budget. Returns 124 at once when less than 5 s is
+# left, and marks the budget exhausted.
+net() {
+  local most="$1" left t
+  shift
+  left=$((deadline - SECONDS))
+  if [ "$left" -lt 5 ]; then
+    : > "$work/exhausted"
+    return 124
+  fi
+  t="$most"
+  [ "$t" -le "$left" ] || t="$left"
+  timeout -k 5 "$t" "$@"
+}
+
+# fx_time: a fixture read keeps the budget too, so a test can run it out.
+# Status 1 when less than 5 s is left.
+fx_time() {
+  if [ $((deadline - SECONDS)) -lt 5 ]; then
+    : > "$work/exhausted"
+    return 1
+  fi
+}
+
+# fx_ref REF -> the fixture file name of REF: sha256:HEX is sha256-HEX
+fx_ref() {
+  case "$1" in
+    sha256:*) printf 'sha256-%s\n' "${1#sha256:}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+# r_token REG REPO -> a pull token; status as reg_token
+r_token() {
+  if [ -n "$FX" ]; then
+    fx_time || return 124
+    local d="$FX/registry/$1/$2"
+    [ -d "$d" ] || return 1
+    [ ! -f "$d/hidden" ] || return 3
+    printf 'fixture\n'
+    return 0
+  fi
+  net 60 "$SELF" --lib reg_token "$1" "$2"
+}
+
+# r_tags REG REPO OUT -> status 0 the whole list, 1 not read
+r_tags() {
+  if [ -n "$FX" ]; then
+    fx_time || return 124
+    : > "$3"
+    [ -f "$FX/registry/$1/$2/tags" ] || return 1
+    cp "$FX/registry/$1/$2/tags" "$3"
+    return 0
+  fi
+  net 120 "$SELF" --lib reg_tags "$1" "$2" "$3"
+}
+
+# r_head REG REPO REF TOKEN -> "CODE DIGEST"
+r_head() {
+  if [ -n "$FX" ]; then
+    fx_time || return 124
+    local f
+    f="$FX/registry/$1/$2/manifests/$(fx_ref "$3")"
+    if [ -f "$f.code" ]; then
+      printf '%s \n' "$(cat "$f.code")"
+    elif [ -f "$f" ]; then
+      printf '200 sha256:%s\n' "$(sha256sum < "$f" | awk '{ print $1 }')"
+    else
+      printf '404 \n'
+    fi
+    return 0
+  fi
+  net 70 "$SELF" --lib reg_head "$1" "$2" "$3" "$4"
+}
+
+# r_get REG REPO REF OUT TOKEN -> the HTTP code
+r_get() {
+  if [ -n "$FX" ]; then
+    fx_time || return 124
+    local f
+    f="$FX/registry/$1/$2/manifests/$(fx_ref "$3")"
+    if [ -f "$f.code" ]; then
+      cat "$f.code"
+    elif [ -f "$f" ]; then
+      cp "$f" "$4"
+      printf '200\n'
+    else
+      printf '404\n'
+    fi
+    return 0
+  fi
+  net 70 "$SELF" --lib reg_get "$1" "$2" "$3" "$4" "$5"
+}
+
+# r_blob REG REPO DIGEST OUT TOKEN -> the HTTP code; status 1 on a digest
+# that does not match
+r_blob() {
+  if [ -n "$FX" ]; then
+    fx_time || return 124
+    local f="$FX/registry/$1/$2/blobs/${3#sha256:}"
+    if [ ! -f "$f" ]; then
+      printf '404\n'
+      return 0
+    fi
+    cp "$f" "$4"
+    [ "sha256:$(sha256sum < "$4" | awk '{ print $1 }')" = "$3" ] || return 1
+    printf '200\n'
+    return 0
+  fi
+  net 70 "$SELF" --lib reg_blob "$1" "$2" "$3" "$4" "$5"
+}
+
+# gh_api PATH OUT -> status 0 read, 4 not found (HTTP 404), 1 not read
+#
+# Fixture file: gh/<PATH after repos/OWNER/NAME, query cut, / as _>.json,
+# and gh/repo.json for the repository itself.
+gh_api() {
+  local path="$1" o="$2" rc=0 f
+  if [ -n "$FX" ]; then
+    fx_time || return 124
+    f="${path%%\?*}"
+    f="${f#"repos/$slug"}"
+    f="${f#/}"
+    f="${f//\//_}"
+    [ -n "$f" ] || f=repo
+    [ -f "$FX/gh/$f.json" ] || return 4
+    cp "$FX/gh/$f.json" "$o"
+    return 0
+  fi
+  if ! command -v gh > /dev/null; then
+    warn "gh is not on PATH, so the GitHub API is not read"
+    return 1
+  fi
+  net 60 gh api "$path" > "$o" 2> "$o.err" || rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  if grep -q 'HTTP 404' "$o.err"; then
+    return 4
+  fi
+  warn "gh api $path ended $rc: $(awk 'NR == 1' "$o.err")"
+  return 1
+}
+
+# gh_download RUN NAME DIR -> the files of artifact NAME of run RUN in DIR
+gh_download() {
+  if [ -n "$FX" ]; then
+    fx_time || return 124
+    [ -d "$FX/artifacts/$1/$2" ] || return 1
+    mkdir -p "$3"
+    cp -R "$FX/artifacts/$1/$2/." "$3/"
+    return 0
+  fi
+  command -v gh > /dev/null || return 1
+  net 120 gh run download "$1" --repo "$slug" --name "$2" --dir "$3"
+}
+
+# http_read URL OUT -> the HTTP code
+http_read() {
+  if [ -n "$FX" ]; then
+    fx_time || return 124
+    if [ -f "$FX/mirror-status.json" ]; then
+      cp "$FX/mirror-status.json" "$2"
+      printf '200\n'
+    else
+      printf '404\n'
+    fi
+    return 0
+  fi
+  net 70 "$SELF" --lib http_get "$1" "$2"
+}
+
+# why RC WHAT -> the error text of a read that ended RC
+why() {
+  case "$1" in
+    124 | 137) printf 'no time left of STATUS_BUDGET (%s s) for %s\n' "$BUDGET" "$2" ;;
+    *) printf 'no answer for %s (status %s)\n' "$2" "$1" ;;
+  esac
+}
+
+sha_of() {
+  printf 'sha256:%s\n' "$(sha256sum < "$1" | awk '{ print $1 }')"
+}
+
+#---------------------------------------------------------------------------#
+# The ports and the build interval
+#---------------------------------------------------------------------------#
+ports_json="$("$ROOT/scripts/ports" matrix | tr -d '\r')"
+mapfile -t arches < <(jq -r '.[].arch' <<< "$ports_json" | tr -d '\r')
+[ "${#arches[@]}" -gt 0 ] || die "scripts/ports lists no port" "reproduce: scripts/ports list"
+
+gap="" tolerance=""
+rc=0
+ct="$("$ROOT/scripts/cron-tolerance" "$WF_FILE" 2> "$work/ct.err")" || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$ct" =~ ^([0-9]+)\ ([0-9]+)$ ]]; then
+  gap="${BASH_REMATCH[1]}"
+  tolerance="${BASH_REMATCH[2]}"
+else
+  warn "the build interval is unknown: scripts/cron-tolerance ended $rc: $(awk 'NR == 1' "$work/ct.err")" \
+    "reproduce: scripts/cron-tolerance .github/workflows/$BUILD_WF"
+fi
+
+#---------------------------------------------------------------------------#
+# GHCR
+#---------------------------------------------------------------------------#
+ghcr_err=""
+ghcr_tok=""
+ghcr_ok=true
+ghcr_absent=false
+rc=0
+ghcr_tok="$(r_token "$ghcr_reg" "$ghcr_repo")" || rc=$?
+case "$rc" in
+  0) ;;
+  3) ghcr_absent=true ;;
+  *)
+    ghcr_ok=false
+    ghcr_err="$(why "$rc" "a pull token of $ghcr_reg/$ghcr_repo")"
+    ;;
+esac
+# A repository that is not there has no tag: the list is read, and empty.
+ghcr_tags_read="$ghcr_absent"
+if [ "$ghcr_ok" = true ] && [ "$ghcr_absent" = false ]; then
+  rc=0
+  r_tags "$ghcr_reg" "$ghcr_repo" "$work/ghcr.tags" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    ghcr_tags_read=true
+  else
+    ghcr_err="$(why "$rc" "the tag list of $ghcr_reg/$ghcr_repo")"
+  fi
+fi
+[ -f "$work/ghcr.tags" ] || : > "$work/ghcr.tags"
+[ -z "$ghcr_err" ] || warn "$ghcr_err"
+
+# head_all REG REPO TOKEN OK OUT.tsv TAG...: one line per tag, "TAG STATE
+# DIGEST": STATE ok (200), absent (404) or unknown
+head_all() {
+  local reg="$1" repo="$2" tok="$3" ok="$4" o="$5" t res code dg rc
+  shift 5
+  : > "$o"
+  for t in "$@"; do
+    if [ "$ok" != true ]; then
+      printf '%s\tunknown\t\n' "$t" >> "$o"
+      continue
+    fi
+    rc=0
+    res="$(r_head "$reg" "$repo" "$t" "$tok")" || rc=$?
+    read -r code dg <<< "$res"
+    if [ "$rc" -ne 0 ]; then
+      printf '%s\tunknown\t\n' "$t" >> "$o"
+    elif [ "${code:-}" = 200 ] && [ -n "${dg:-}" ]; then
+      printf '%s\tok\t%s\n' "$t" "$dg" >> "$o"
+    elif [ "${code:-}" = 404 ]; then
+      printf '%s\tabsent\t\n' "$t" >> "$o"
+    else
+      printf '%s\tunknown\t\n' "$t" >> "$o"
+    fi
+  done
+}
+
+mapfile -t all_aliases < <(jq -r '.[].aliases[]' <<< "$ports_json" | tr -d '\r')
+if [ "$ghcr_absent" = true ]; then
+  for t in latest "${all_aliases[@]}"; do printf '%s\tabsent\t\n' "$t"; done > "$work/ghcr.rolling.tsv"
+else
+  head_all "$ghcr_reg" "$ghcr_repo" "$ghcr_tok" "$ghcr_ok" "$work/ghcr.rolling.tsv" latest "${all_aliases[@]}"
+fi
+
+# The index latest on GHCR: its platforms
+latest_state=error
+latest_err=""
+latest_digest=""
+if [ "$ghcr_absent" = true ]; then
+  latest_state=absent
+elif [ "$ghcr_ok" = true ]; then
+  rc=0
+  code="$(r_get "$ghcr_reg" "$ghcr_repo" latest "$work/latest.json" "$ghcr_tok")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    latest_err="$(why "$rc" "$ghcr_repo:latest")"
+  elif [ "$code" = 404 ]; then
+    latest_state=absent
+  elif [ "$code" != 200 ]; then
+    latest_err="$ghcr_repo:latest answered HTTP $code"
+  elif ! jq -e '.manifests | type == "array"' "$work/latest.json" > "$work/jq.out" 2> "$work/jq.err"; then
+    latest_err="$ghcr_repo:latest is not an index"
+  else
+    latest_state=published
+    latest_digest="$(sha_of "$work/latest.json")"
+  fi
+else
+  latest_err="$ghcr_err"
+fi
+[ -f "$work/latest.json" ] || printf '{}\n' > "$work/latest.json"
+[ "$latest_state" != error ] || [ "$ghcr_ok" != true ] || warn "$latest_err"
+
+# PLATFORM -> the jq filter that selects an index entry of that platform
+plat_filter='def plat: "\(.platform.os)/\(.platform.architecture)\(if (.platform.variant // "") != "" then "/" + .platform.variant else "" end)";'
+
+# read_image ARCH PLATFORM REF DIR: the image of ARCH on GHCR, as DIR/ghcr.json
+read_image() {
+  local arch="$1" platform="$2" ref="$3" d="$4" rc code state=error err="" digest="" child=""
+  local created="" version="" revision="" size="" layers="" cfg=""
+  if [ "$ghcr_absent" = true ]; then
+    state=absent
+  elif [ "$ghcr_ok" != true ]; then
+    err="$ghcr_err"
+  else
+    rc=0
+    code="$(r_get "$ghcr_reg" "$ghcr_repo" "$ref" "$d/top.json" "$ghcr_tok")" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      err="$(why "$rc" "$ghcr_repo:$ref")"
+    elif [ "$code" = 404 ]; then
+      state=absent
+    elif [ "$code" != 200 ]; then
+      err="$ghcr_repo:$ref answered HTTP $code"
+    else
+      digest="$(sha_of "$d/top.json")"
+      cp "$d/top.json" "$d/image.json"
+      child="$digest"
+      if jq -e '.manifests | type == "array"' "$d/top.json" > "$d/jq.out" 2> "$d/jq.err"; then
+        child="$(jq -r --arg p "$platform" "$plat_filter"' [.manifests[] | select(plat == $p)] | .[0].digest // empty' "$d/top.json" | tr -d '\r')"
+        if [ -z "$child" ]; then
+          err="$ghcr_repo:$ref is an index with no $platform entry"
+        else
+          rc=0
+          code="$(r_get "$ghcr_reg" "$ghcr_repo" "$child" "$d/image.json" "$ghcr_tok")" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            err="$(why "$rc" "$ghcr_repo@$child")"
+          elif [ "$code" != 200 ]; then
+            err="$ghcr_repo@$child answered HTTP $code"
+          fi
+        fi
+      fi
+      if [ -z "$err" ]; then
+        if ! jq -e '(.layers | type == "array") and (.config.digest | type == "string")' "$d/image.json" > "$d/jq.out" 2> "$d/jq.err"; then
+          err="the image manifest of $ghcr_repo:$ref names no config and no layers"
+        else
+          state=published
+          read -r size layers <<< "$(jq -r '[(.layers | map(.size // 0) | add // 0), (.layers | length)] | map(tostring) | join(" ")' "$d/image.json" | tr -d '\r')"
+          cfg="$(jq -r '.config.digest' "$d/image.json" | tr -d '\r')"
+          rc=0
+          code="$(r_blob "$ghcr_reg" "$ghcr_repo" "$cfg" "$d/config.json" "$ghcr_tok")" || rc=$?
+          if [ "$rc" -ne 0 ] || [ "$code" != 200 ]; then
+            err="the config $cfg of $ghcr_repo:$ref did not read (status $rc, HTTP ${code:-none})"
+          else
+            read -r created version revision <<< "$(jq -r '
+              (.config.Labels // {}) as $l
+              | [($l["org.opencontainers.image.created"] // .created // ""),
+                 ($l["org.opencontainers.image.version"] // ""),
+                 ($l["org.opencontainers.image.revision"] // "")]
+              | map(if . == "" then "-" else . end) | join(" ")' "$d/config.json" | tr -d '\r')"
+            [ "$created" != - ] || created=""
+            [ "$version" != - ] || version=""
+            [ "$revision" != - ] || revision=""
+            # jq reads whole seconds only, so a fraction is cut.
+            if [[ "$created" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})([.][0-9]+)?(Z|[+-]00:00)$ ]]; then
+              created="${BASH_REMATCH[1]}Z"
+            elif [ -n "$created" ]; then
+              warn "$arch: the image names a created time '$created' that is not ISO 8601 UTC; the age is unknown"
+              created=""
+            fi
+          fi
+        fi
+      fi
+    fi
+  fi
+  [ -z "$err" ] || warn "$arch: $err"
+  jq -n --arg state "$state" --arg err "$err" --arg ref "$ref" --arg digest "$digest" --arg child "$child" \
+    --arg created "$created" --arg version "$version" --arg revision "$revision" \
+    --arg size "$size" --arg layers "$layers" '
+    def nul: if . == "" then null else . end;
+    def n: if . == "" then null else tonumber end;
+    {state: $state, error: ($err | nul), ref: $ref, digest: ($digest | nul),
+     image_digest: (if $state == "published" then ($child | nul) else null end),
+     created: ($created | nul), version: ($version | nul), revision: ($revision | nul),
+     size: (if $state == "published" then ($size | n) else null end),
+     layers: (if $state == "published" then ($layers | n) else null end)}' > "$d/ghcr.json"
+}
+
+for arch in "${arches[@]}"; do
+  d="$work/p/$arch"
+  mkdir -p "$d"
+  platform="$(jq -r --arg a "$arch" '.[] | select(.arch == $a) | .platform' <<< "$ports_json" | tr -d '\r')"
+  first="$(jq -r --arg a "$arch" '.[] | select(.arch == $a) | .aliases[0]' <<< "$ports_json" | tr -d '\r')"
+  read_image "$arch" "$platform" "$first" "$d"
+done
+
+#---------------------------------------------------------------------------#
+# Docker Hub: the tag list and HEAD of each rolling tag, nothing more
+#---------------------------------------------------------------------------#
+hub_err=""
+hub_ok=true
+hub_absent=false
+rc=0
+hub_tok="$(r_token "$hub_reg" "$hub_repo")" || rc=$?
+case "$rc" in
+  0) ;;
+  3) hub_absent=true ;;
+  *)
+    hub_ok=false
+    hub_err="$(why "$rc" "a pull token of $hub_reg/$hub_repo")"
+    ;;
+esac
+hub_tags_read="$hub_absent"
+if [ "$hub_ok" = true ] && [ "$hub_absent" = false ]; then
+  rc=0
+  r_tags "$hub_reg" "$hub_repo" "$work/hub.tags" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    hub_tags_read=true
+  else
+    hub_err="$(why "$rc" "the tag list of $hub_reg/$hub_repo")"
+  fi
+fi
+[ -f "$work/hub.tags" ] || : > "$work/hub.tags"
+[ -z "$hub_err" ] || warn "$hub_err"
+if [ "$hub_absent" = true ]; then
+  for t in latest "${all_aliases[@]}"; do printf '%s\tabsent\t\n' "$t"; done > "$work/hub.rolling.tsv"
+else
+  head_all "$hub_reg" "$hub_repo" "${hub_tok:-}" "$hub_ok" "$work/hub.rolling.tsv" latest "${all_aliases[@]}"
+fi
+
+#---------------------------------------------------------------------------#
+# Builds: the jobs "Build <arch>" of the newest runs of build-deploy.yml
+#---------------------------------------------------------------------------#
+# build-deploy.yml skips this job in a dry run, and runs it in each other run.
+# tests/static/76-status-collect.sh checks this against build-deploy.yml.
+DRY_RUN_JOB="Watch the schedules"
+builds_err=""
+builds_read=false
+default_branch=""
+printf '[]\n' > "$work/runs.json"
+: > "$work/jobs.jsonl"
+rc=0
+gh_api "repos/$slug" "$work/repo.json" || rc=$?
+if [ "$rc" -eq 0 ]; then
+  default_branch="$(jq -r '.default_branch // empty' "$work/repo.json" | tr -d '\r')"
+fi
+if [ -z "$default_branch" ]; then
+  builds_err="the default branch of $slug did not read (status $rc)"
+else
+  rc=0
+  # 100 runs: the runs of forks do not use up the STATUS_RUNS runs.
+  gh_api "repos/$slug/actions/workflows/$BUILD_WF/runs?branch=$default_branch&per_page=100&exclude_pull_requests=true" \
+    "$work/runs.raw" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    builds_err="the runs of $BUILD_WF did not read (status $rc)"
+  elif ! jq -c --arg slug "$slug" --arg branch "$default_branch" '
+      [.workflow_runs[]?
+       | select(.head_repository.full_name == $slug and .head_branch == $branch
+                and (.event == "schedule" or .event == "workflow_dispatch" or .event == "push"))
+       | {id, run_number, event, status, conclusion, created_at, html_url, head_sha,
+          dry: ((.display_title // "") | endswith("(dry run)"))}]' \
+    "$work/runs.raw" > "$work/runs.own" 2> "$work/jq.err"; then
+    builds_err="the runs of $BUILD_WF are not a run list: $(awk 'NR == 1' "$work/jq.err")"
+  else
+    builds_read=true
+    raw_n="$(jq '[.workflow_runs[]?] | length' "$work/runs.raw" | tr -d '\r')"
+    own_n="$(jq 'length' "$work/runs.own" | tr -d '\r')"
+    foreign=$((raw_n - own_n))
+    if [ "$foreign" -gt 0 ]; then
+      note "$foreign run(s) of $BUILD_WF on $default_branch are left out: not a run of $slug by schedule, workflow_dispatch or push"
+    fi
+    jq -c --argjson most "$RUNS" '.[:$most]' "$work/runs.own" > "$work/runs.most"
+    jq -r '.[] | select(.dry) | .id' "$work/runs.most" | tr -d '\r' > "$work/dry.ids"
+    mapfile -t run_ids < <(jq -r '.[] | select(.dry | not) | .id' "$work/runs.most" | tr -d '\r')
+    jobs_unread=0
+    for id in "${run_ids[@]}"; do
+      rc=0
+      gh_api "repos/$slug/actions/runs/$id/jobs?per_page=100&filter=latest" "$work/jobs-$id.json" || rc=$?
+      dry=false
+      if [ "$rc" -eq 0 ]; then
+        dry="$(jq -r --arg j "$DRY_RUN_JOB" 'any(.jobs[]?; .name == $j and .conclusion == "skipped")' \
+          "$work/jobs-$id.json" 2> "$work/jq.err" | tr -d '\r')" || rc=$?
+      fi
+      if [ "$rc" -ne 0 ]; then
+        jobs_unread=$((jobs_unread + 1))
+        continue
+      fi
+      if [ "$dry" = true ]; then
+        printf '%s\n' "$id" >> "$work/dry.ids"
+        continue
+      fi
+      jq -c --argjson run "$(jq -c --argjson id "$id" '.[] | select(.id == $id)' "$work/runs.most")" '
+        .jobs[]? | select(.name | test("^Build [a-z0-9]+$"))
+        | select(.conclusion != "skipped")
+        | {arch: (.name | ltrimstr("Build ")), job_id: .id,
+           result: (if .status == "completed" then .conclusion else .status end),
+           started: .started_at, completed: .completed_at,
+           duration_seconds: (if .status == "completed" and .started_at != null and .completed_at != null
+                              then (.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601) else null end),
+           run_id: $run.id, run_url: $run.html_url, job_url: .html_url, event: $run.event, head_sha: $run.head_sha}' \
+        "$work/jobs-$id.json" >> "$work/jobs.jsonl"
+    done
+    if [ "$jobs_unread" -gt 0 ]; then
+      builds_err="the jobs of $jobs_unread of ${#run_ids[@]} runs did not read"
+      warn "$builds_err"
+    fi
+    jq -R -s -c 'split("\n") | map(sub("\r$"; "") | select(. != "") | tonumber)' "$work/dry.ids" > "$work/dry.json"
+    jq -c --slurpfile dry "$work/dry.json" '[.[] | . as $r | select(any($dry[0][]; . == $r.id) | not) | del(.dry)]' \
+      "$work/runs.most" > "$work/runs.json"
+    dry_n="$(jq 'length' "$work/dry.json" | tr -d '\r')"
+    if [ "$dry_n" -gt 0 ]; then
+      note "$dry_n dry run(s) of $BUILD_WF are left out: run $(jq -r 'map(tostring) | join(", ")' "$work/dry.json" | tr -d '\r')"
+    fi
+  fi
+fi
+[ -z "$builds_err" ] || [ "$builds_read" = true ] || warn "$builds_err"
+
+#---------------------------------------------------------------------------#
+# Evidence
+#---------------------------------------------------------------------------#
+# ev_fields FILE ARCH -> the evidence facts as JSON, or nothing when FILE is
+# not the evidence of ARCH
+ev_fields() {
+  jq -c --arg a "$2" '
+    def n: if type == "number" then . else null end;
+    select(type == "object" and (.packages | type == "array")
+           and ((.docker_architecture // $a) == $a) and (.digest | type == "string"))
+    | {digest, packages: (.package_count // (.packages | length)),
+       bytes: ([.packages[].size | n | select(. != null)] | add),
+       installed_bytes: ([.packages[].installed_size | n | select(. != null)] | add),
+       anchor: (.anchor.version // null), built: (.built // null),
+       source_commit: (.source_commit // null), version_id: (.version_id // null)}' "$1" 2> "$work/ev.err"
+}
+
+# artifact_list RUN -> the names of the artifacts of RUN that have not
+# expired. Read once per run.
+artifact_list() {
+  local f="$work/ev/artifacts-$1.txt" rc=0
+  if [ ! -f "$f" ]; then
+    gh_api "repos/$slug/actions/runs/$1/artifacts?per_page=100" "$work/ev/artifacts-$1.json" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      jq -r '.artifacts[]? | select(.expired != true) | .name' "$work/ev/artifacts-$1.json" | tr -d '\r' > "$f"
+    else
+      : > "$f"
+    fi
+  fi
+  cat "$f"
+}
+
+# is_pub DIGEST: the digest names the published image of the port, as the
+# digest of its first alias or of the image manifest in it
+is_pub() {
+  [ -n "$1" ] && { [ "$1" = "$pub" ] || [ "$1" = "$pub_child" ]; }
+}
+
+for arch in "${arches[@]}"; do
+  d="$work/p/$arch"
+  pub="$(jq -r '.digest // empty' "$d/ghcr.json" | tr -d '\r')"
+  pub_child="$(jq -r '.image_digest // empty' "$d/ghcr.json" | tr -d '\r')"
+  stored="" stored_digest="" source="" run_id="" chosen="" matches=null ev_err=""
+  if [ -f "$out/evidence/$arch.json" ]; then
+    if ev_fields "$out/evidence/$arch.json" "$arch" > "$d/stored.ev" && [ -s "$d/stored.ev" ]; then
+      stored="$out/evidence/$arch.json"
+      stored_digest="$(jq -r .digest "$d/stored.ev" | tr -d '\r')"
+    else
+      warn "$arch: the stored evidence does not read, so it is left out: $(awk 'NR == 1' "$work/ev.err")" \
+        "reproduce: jq '{digest, package_count}' $out/evidence/$arch.json"
+    fi
+  fi
+  # With the published digest unknown, no artifact can be proved better than
+  # the stored file: keep it, or read the newest artifact when there is none.
+  limit=3
+  [ -n "$pub" ] || limit=1
+  if [ -n "$stored" ] && { [ -z "$pub" ] || is_pub "$stored_digest"; }; then
+    chosen="$stored"
+    source=stored
+  elif [ "$builds_read" = true ] && [ "$ARTIFACTS" = 1 ]; then
+    tries=0
+    newest=""
+    newest_run=""
+    while read -r rid; do
+      [ -n "$rid" ] || continue
+      [ "$tries" -lt "$limit" ] || break
+      artifact_list "$rid" > "$d/names.txt"
+      grep -qxF "evidence-$arch" "$d/names.txt" || continue
+      tries=$((tries + 1))
+      rm -rf "$d/dl"
+      rc=0
+      gh_download "$rid" "evidence-$arch" "$d/dl" || rc=$?
+      if [ "$rc" -ne 0 ]; then
+        ev_err="evidence-$arch of run $rid did not download (status $rc)"
+        warn "$arch: $ev_err"
+        continue
+      fi
+      f="$(find "$d/dl" -type f -name '*.json' | LC_ALL=C sort | awk 'NR == 1')"
+      if [ -z "$f" ] || ! ev_fields "$f" "$arch" > "$d/cand.ev" || [ ! -s "$d/cand.ev" ]; then
+        ev_err="evidence-$arch of run $rid holds no evidence of $arch"
+        warn "$arch: $ev_err"
+        continue
+      fi
+      cp "$f" "$work/ev/$arch-$rid.json"
+      if [ -z "$newest" ]; then
+        newest="$work/ev/$arch-$rid.json"
+        newest_run="$rid"
+      fi
+      if is_pub "$(jq -r .digest "$d/cand.ev" | tr -d '\r')"; then
+        chosen="$work/ev/$arch-$rid.json"
+        source=artifact
+        run_id="$rid"
+        break
+      fi
+    done < <(jq -r --arg a "$arch" 'select(.arch == $a and .result == "success") | .run_id' "$work/jobs.jsonl" | tr -d '\r')
+    if [ -z "$chosen" ]; then
+      if [ -n "$stored" ]; then
+        chosen="$stored"
+        source=stored
+      elif [ -n "$newest" ]; then
+        chosen="$newest"
+        source=artifact
+        run_id="$newest_run"
+      fi
+    fi
+  elif [ -n "$stored" ]; then
+    chosen="$stored"
+    source=stored
+  fi
+  if [ -n "$chosen" ]; then
+    ev_fields "$chosen" "$arch" > "$d/ev.json"
+    if [ -z "$pub" ]; then
+      matches=null
+    elif is_pub "$(jq -r .digest "$d/ev.json" | tr -d '\r')"; then
+      matches=true
+    else
+      matches=false
+    fi
+    if [ "$chosen" != "$out/evidence/$arch.json" ]; then
+      cp "$chosen" "$out/evidence/$arch.json.new"
+      mv -f "$out/evidence/$arch.json.new" "$out/evidence/$arch.json"
+    fi
+    jq -r .digest "$d/ev.json" | tr -d '\r' > "$out/evidence/$arch.digest"
+    jq -c --arg source "$source" --arg run "$run_id" --argjson matches "$matches" --arg err "$ev_err" \
+      '. + {source: $source, run_id: (if $run == "" then null else ($run | tonumber) end),
+            matches: $matches, error: (if $err == "" then null else $err end)}' "$d/ev.json" > "$d/evidence.json"
+  else
+    jq -nc --arg err "$ev_err" '{source: null, run_id: null, digest: null, matches: null, packages: null,
+      bytes: null, installed_bytes: null, anchor: null, built: null, source_commit: null, version_id: null,
+      error: (if $err == "" then null else $err end)}' > "$d/evidence.json"
+  fi
+done
+
+#---------------------------------------------------------------------------#
+# mirror-archlinux status.json
+#---------------------------------------------------------------------------#
+mirror_err=""
+mirror_read=false
+printf '{}\n' > "$work/mirror.json"
+rc=0
+code="$(http_read "$MIRROR_URL" "$work/mirror.raw")" || rc=$?
+if [ "$rc" -ne 0 ]; then
+  mirror_err="$(why "$rc" "$MIRROR_URL")"
+elif [ "$code" != 200 ]; then
+  mirror_err="$MIRROR_URL answered HTTP $code"
+elif ! jq -e '.schema == 1 and (.targets | type == "array")' "$work/mirror.raw" > "$work/jq.out" 2> "$work/jq.err"; then
+  mirror_err="$MIRROR_URL is not a schema 1 status record"
+else
+  mirror_read=true
+  cp "$work/mirror.raw" "$work/mirror.json"
+fi
+[ -z "$mirror_err" ] || warn "$mirror_err"
+
+#---------------------------------------------------------------------------#
+# The previous run: drift count and the last known sizes
+#---------------------------------------------------------------------------#
+prev_dr=0
+known='{}'
+if [ -s "$out/history.jsonl" ]; then
+  rc=0
+  known="$(jq -c -n -R '
+    reduce (inputs | try fromjson catch "bad") as $l ({x: {}, dr: 0, bad: 0};
+      if ($l | type) != "object" then .bad += 1
+      else .dr = (if ($l.dr | type) == "number" then $l.dr else .dr end)
+        | reduce (($l.x // {}) | if type == "object" then to_entries[] else empty end
+                  | select(.value | type == "object")) as $e (.;
+            .x[$e.key] = ((.x[$e.key] // {}) + ($e.value | with_entries(select(.key == "s" or .key == "i" or .key == "n")
+                                                                          | select(.value | type == "number")))))
+      end)' "$out/history.jsonl" 2> "$work/known.err")" || rc=$?
+  [ "$rc" -eq 0 ] || die "could not read $out/history.jsonl (jq ended $rc)" "$(awk 'NR == 1' "$work/known.err")" \
+    "reproduce: jq -R 'fromjson? | .x' $out/history.jsonl"
+  bad="$(jq -r .bad <<< "$known" | tr -d '\r')"
+  if [ "$bad" -gt 0 ]; then
+    warn "$bad line(s) of $out/history.jsonl do not read as JSON objects; they are left out" \
+      "reproduce: jq -c . $out/history.jsonl"
+  fi
+  prev_dr="$(jq -r .dr <<< "$known" | tr -d '\r')"
+fi
+
+#---------------------------------------------------------------------------#
+# status.json
+#---------------------------------------------------------------------------#
+for arch in "${arches[@]}"; do
+  d="$work/p/$arch"
+  jq -c --arg a "$arch" 'select(.arch == $a)' "$work/jobs.jsonl" > "$d/jobs.jsonl"
+  jq -n -c --arg a "$arch" --argjson ports "$ports_json" \
+    --slurpfile ghcr "$d/ghcr.json" --slurpfile ev "$d/evidence.json" --slurpfile jobs "$d/jobs.jsonl" \
+    '($ports[] | select(.arch == $a)) as $p
+     | {arch: $a, platform: $p.platform, pacman_arch: $p.pacman_arch, distribution: $p.distribution,
+        homepage: $p.homepage, aliases: $p.aliases, repos: $p.repos,
+        ghcr: $ghcr[0], evidence: $ev[0], jobs: $jobs}' > "$d/port.json"
+done
+
+used=$((SECONDS - start))
+exhausted=false
+[ ! -f "$work/exhausted" ] || exhausted=true
+
+# The tag files and the rolling tables as JSON
+jq -R -s -c 'split("\n") | map(sub("\r$"; "") | select(. != ""))' "$work/ghcr.tags" > "$work/ghcr.tags.json"
+jq -R -s -c 'split("\n") | map(sub("\r$"; "") | select(. != ""))' "$work/hub.tags" > "$work/hub.tags.json"
+rolling_json() {
+  jq -R -s -c 'split("\n") | map(sub("\r$"; "") | select(. != "") | split("\t"))
+    | map({key: .[0], value: (if .[1] == "ok" then .[2] elif .[1] == "absent" then "" else null end)}) | from_entries' "$1"
+}
+rolling_json "$work/ghcr.rolling.tsv" > "$work/ghcr.rolling.json"
+rolling_json "$work/hub.rolling.tsv" > "$work/hub.rolling.json"
+
+# Every port file, in port order
+for arch in "${arches[@]}"; do cat "$work/p/$arch/port.json"; done > "$work/ports.jsonl"
+
+cat > "$work/status.jq" << 'JQ'
+def nul: if . == "" then null else . end;
+def num: if . == "" then null else tonumber end;
+def epoch: if type == "string" then (try fromdateiso8601 catch null) else null end;
+def plat: "\(.platform.os)/\(.platform.architecture)\(if (.platform.variant // "") != "" then "/" + .platform.variant else "" end)";
+def dated: test("^v[0-9]{4}[.][0-9]{2}[.][0-9]{2}$");
+def has($list): . as $x | any($list[]; . == $x);
+
+# One alias table for every port, the longest alias first, so a tag goes to
+# the port whose alias is its longest prefix.
+([$ports[] | .arch as $a | .aliases[] | {arch: $a, alias: .}] | sort_by(-(.alias | length))) as $al
+| def classify:
+    . as $t
+    | if $t == "latest" then {arch: null, fam: "rolling"}
+      elif ($t | dated) then {arch: null, fam: "dated"}
+      else (first($al[] | select(.alias as $x | $t == $x or ($t | startswith($x + "-")))) // null) as $m
+        | if $m == null then {arch: null, fam: "other"}
+          elif $t == $m.alias then {arch: $m.arch, fam: "rolling"}
+          elif ($t[($m.alias | length) + 1:] | dated) then {arch: $m.arch, fam: "dated", date: $t[($m.alias | length) + 2:]}
+          else {arch: $m.arch, fam: "anchor"} end
+      end;
+  def families($tags; $a):
+    [$tags[] | classify | select(.arch == $a)] as $c
+    | {rolling: ([$c[] | select(.fam == "rolling")] | length),
+       dated: ([$c[] | select(.fam == "dated")] | length),
+       anchor: ([$c[] | select(.fam == "anchor")] | length),
+       total: ($c | length)};
+  def newest($tags; $a):
+    [$tags[] | classify | select(.arch == $a and .fam == "dated") | .date] | max;
+
+  $ghcr_tags[0] as $gt | $hub_tags[0] as $ht
+  | $ghcr_roll[0] as $gr | $hub_roll[0] as $hr
+  | [($latest[0].manifests // [])[]
+     | select(.platform != null and .platform.os != "unknown"
+              and (.annotations["vnd.docker.reference.type"] // "") != "attestation-manifest")] as $lp
+  | [$lp[] | plat] as $platforms
+  | [$ports[].platform] as $port_platforms
+  | ($mirror[0].targets // []) as $mt
+
+  # Parity: a rolling tag counts with the same digest, a pinned tag at all.
+  | [$gt[] | select((classify).fam == "rolling")] as $rolling
+  | [$gt[] | select((classify).fam != "rolling")] as $pinned
+  | (if $ghcr_read and $hub_read then
+       [$rolling[] | {tag: ., g: $gr[.], h: $hr[.]}] as $rc
+       | {total: ($rc | length),
+          same: ([$rc[] | select(.g != null and .g != "" and .g == .h)] | length),
+          differs: [$rc[] | select(.g != null and .h != null and .g != .h) | .tag],
+          unknown: ([$rc[] | select(.g == null or .h == null)] | length)}
+     else {total: ($rolling | length), same: null, differs: [], unknown: ($rolling | length)} end) as $roll
+  | ($ht | map({key: ., value: true}) | from_entries) as $hset
+  | (if $ghcr_read and $hub_read then
+       [$pinned[] | select($hset[.] != true)] as $miss
+       | {total: ($pinned | length), present: (($pinned | length) - ($miss | length)),
+          missing: ($miss | length), missing_names: ($miss | sort | .[:20])}
+     else {total: ($pinned | length), present: null, missing: null, missing_names: []} end) as $pin
+  | (if $ghcr_read and $hub_read and $roll.unknown == 0 and ($roll.total + $pin.total) > 0 then
+       (($roll.same + $pin.present) / ($roll.total + $pin.total))
+     else null end) as $parity
+  | (if $parity == null then $prev_dr elif $parity < 1 then $prev_dr + 1 else 0 end) as $dr
+  # on_hub($a): the GHCR tags of port $a (null: the index tags) that Docker
+  # Hub carries, by the same rule. A rolling tag whose digest did not read on
+  # one registry is null, so same and ratio are unknown, never a gap.
+  | def on_hub($a):
+      [$gt[] | . as $t | (classify) as $c | select($c.arch == $a)
+       | if $c.fam != "rolling" then $hset[$t] == true
+         elif $gr[$t] == null or $hr[$t] == null then null
+         else ($gr[$t] != "" and $gr[$t] == $hr[$t]) end] as $v
+      | ([$v[] | select(. == null)] | length) as $u
+      | ([$v[] | select(. == true)] | length) as $s
+      | if $ghcr_read and $hub_read then
+          {tags: ($v | length), same: (if $u > 0 then null else $s end), unknown: $u,
+           ratio: (if $u == 0 and ($v | length) > 0 then $s / ($v | length) else null end)}
+        else null end;
+
+  [$ports[] | . as $p
+     | ($p.ghcr.created | epoch) as $ce
+     | ([$p.aliases[] | {key: ., value: $gr[.]}] | from_entries) as $grp
+     | ([$p.aliases[] | {key: ., value: $hr[.]}] | from_entries) as $hrp
+     | [$p.aliases[] | {g: $gr[.], h: $hr[.]}] as $pairs
+     | ([$lp[] | select(plat == $p.platform)] | .[0]) as $le
+     | ($p.jobs | sort_by(.started // "") | reverse) as $jobs
+     | [$p.repos[] | . as $r | ($p.pacman_arch + "-" + $r) as $tn
+        | ([$mt[] | select(.target == $tn)] | .[0]) as $m
+        | if $m == null then {target: $tn, repo: $r, found: false, current: null, lag_seconds: null,
+                              age_seconds: null, ratio_files: null, state: null}
+          else {target: $tn, repo: $r, found: true, current: $m.current, lag_seconds: $m.lag_seconds,
+                age_seconds: $m.age_seconds, ratio_files: ($m.coverage.ratio_files // null),
+                state: ($m.mirror.state // null)} end] as $mtargets
+     | {arch: $p.arch, platform: $p.platform, pacman_arch: $p.pacman_arch, distribution: $p.distribution,
+        homepage: $p.homepage, aliases: $p.aliases, repos: $p.repos,
+        ghcr: ($p.ghcr + {rolling: $grp,
+                          tags: (if $ghcr_read then families($gt; $p.arch) else null end),
+                          newest_dated: (if $ghcr_read then newest($gt; $p.arch) else null end)}),
+        hub: {state: (if ([$hrp[]] | any(. != null and . != "")) then "published"
+                      elif ([$hrp[]] | all(. == "")) then "absent" else "error" end),
+              error: ($hub_err | nul),
+              match: (if $p.ghcr.state != "published" then null
+                      elif ($pairs | any(.g != null and .h != null and .g != .h)) then false
+                      elif ($pairs | all(.g != null and .h != null and .g == .h)) then true
+                      else null end),
+              rolling: $hrp,
+              tags: (if $hub_read then families($ht; $p.arch) else null end),
+              newest_dated: (if $hub_read then newest($ht; $p.arch) else null end)},
+        parity: on_hub($p.arch),
+        age_seconds: (if $ce == null then null else $now - $ce end),
+        in_latest: (if $latest_state == "published" then ($le != null)
+                    elif $latest_state == "absent" then false else null end),
+        latest_current: (if $le == null or $p.ghcr.image_digest == null then null
+                         else $le.digest == $p.ghcr.image_digest end),
+        evidence: $p.evidence,
+        build: ($jobs[0] // null | if . == null then null else del(.arch) end),
+        builds: [$jobs[] | {result, started, duration_seconds, run_id, job_id}],
+        mirror: {read: $mirror_read,
+                 current: (if $mirror_read | not then null
+                           elif ($mtargets | any(.current == false)) then false
+                           elif ($mtargets | length) > 0 and ($mtargets | all(.current == true)) then true
+                           else null end),
+                 lag_seconds: ([$mtargets[] | .lag_seconds | select(type == "number")] | max),
+                 targets: (if $mirror_read then $mtargets else [] end)}}] as $out
+
+  | {schema: 1, generated: $generated, generated_epoch: $now, source: $source, site_url: $site,
+     images: {ghcr: $ghcr_image, hub: $hub_image},
+     interval: {workflow: $wf, gap_days: ($gap | num), tolerance_days: ($tol | num)},
+     budget: {seconds: $budget, used: $used, exhausted: $exhausted},
+     latest: {state: $latest_state, error: ($latest_err | nul), digest: ($latest_digest | nul),
+              platforms: (if $latest_state == "published" then $platforms else [] end),
+              missing: (if $latest_state == "published" then [$port_platforms[] | select(has($platforms) | not)] else [] end),
+              extra: (if $latest_state == "published" then [$platforms[] | select(has($port_platforms) | not)] else [] end),
+              hub_digest: ($hr["latest"] | if . == "" then null else . end),
+              hub_match: (if $gr["latest"] == null or $hr["latest"] == null then null else $gr["latest"] == $hr["latest"] end)},
+     registries: {ghcr: {image: $ghcr_image, read: $ghcr_read, error: ($ghcr_err | nul),
+                         tags: (if $ghcr_read then ($gt | length) else null end)},
+                  hub: {image: $hub_image, read: $hub_read, error: ($hub_err | nul),
+                        tags: (if $hub_read then ($ht | length) else null end)},
+                  parity: $parity, rolling: $roll, pinned: $pin, index: on_hub(null), drift_runs: $dr},
+     builds: {workflow: $wf, read: $builds_read, error: ($builds_err | nul), default_branch: ($branch | nul),
+              runs: ($runs[0] | length),
+              newest_run: (($runs[0][0] // null) | if . == null then null
+                           else {id, run_number, event, status, conclusion, created_at, html_url} end)},
+     mirror: {url: $mirror_url, read: $mirror_read, error: ($mirror_err | nul), generated: ($mirror[0].generated // null)},
+     summary: {ports: ($out | length),
+               published: ([$out[] | select(.ghcr.state == "published")] | length),
+               unread: ([$out[] | select(.ghcr.state == "error")] | length),
+               absent: ([$out[] | select(.ghcr.state == "absent")] | length),
+               with_evidence: ([$out[] | select(.evidence.packages != null)] | length),
+               builds_known: ([$out[] | select(.build.duration_seconds != null)] | length),
+               builds_passed: ([$out[] | select(.build.result == "success")] | length)},
+     ports: $out}
+JQ
+jq -n \
+  --arg generated "$generated" --argjson now "$now" --arg source "$SOURCE_URL" --arg site "$SITE_URL" \
+  --arg ghcr_image "$ghcr_reg/$ghcr_repo" --arg hub_image "$hub_reg/$hub_repo" \
+  --arg wf ".github/workflows/$BUILD_WF" --arg gap "$gap" --arg tol "$tolerance" \
+  --argjson budget "$BUDGET" --argjson used "$used" --argjson exhausted "$exhausted" \
+  --arg latest_state "$latest_state" --arg latest_err "$latest_err" --arg latest_digest "$latest_digest" \
+  --slurpfile latest "$work/latest.json" \
+  --argjson ghcr_read "$ghcr_tags_read" --arg ghcr_err "$ghcr_err" \
+  --argjson hub_read "$hub_tags_read" --arg hub_err "$hub_err" \
+  --slurpfile ghcr_tags "$work/ghcr.tags.json" --slurpfile hub_tags "$work/hub.tags.json" \
+  --slurpfile ghcr_roll "$work/ghcr.rolling.json" --slurpfile hub_roll "$work/hub.rolling.json" \
+  --argjson builds_read "$builds_read" --arg builds_err "$builds_err" --arg branch "$default_branch" \
+  --slurpfile runs "$work/runs.json" \
+  --arg mirror_url "$MIRROR_URL" --argjson mirror_read "$mirror_read" --arg mirror_err "$mirror_err" \
+  --slurpfile mirror "$work/mirror.json" \
+  --argjson prev_dr "$prev_dr" \
+  --slurpfile ports "$work/ports.jsonl" \
+  -f "$work/status.jq" > "$work/status.json"
+mv -f "$work/status.json" "$out/status.json"
+
+#---------------------------------------------------------------------------#
+# History: one compact line per run, the last HISTORY_LINES kept
+#---------------------------------------------------------------------------#
+jq -c --argjson known "$known" '
+  def epoch: if type == "string" then (try fromdateiso8601 catch null) else null end;
+  {t: .generated, p: .registries.parity, dr: .registries.drift_runs,
+   x: (.ports | map({key: .arch, value: (
+         {s: .ghcr.size, i: .evidence.installed_bytes, n: .evidence.packages} as $now_v
+         | ($known.x[.arch] // {}) as $k
+         | (if ($now_v.s == null and $k.s != null) or ($now_v.n == null and $k.n != null)
+              or ($now_v.i == null and $k.i != null) then
+              {s: ($now_v.s // $k.s), i: ($now_v.i // $k.i), n: ($now_v.n // $k.n), k: 1}
+            else $now_v end)
+         + {a: .age_seconds, l: .mirror.lag_seconds,
+            b: (if .build == null then null
+                else [.build.job_id, .build.result, (.build.started | epoch), .build.duration_seconds] end)})})
+        | from_entries)}' "$out/status.json" > "$work/line.json"
+if [ -f "$out/history.jsonl" ]; then
+  cat "$out/history.jsonl" "$work/line.json" > "$work/history.all"
+else
+  cp "$work/line.json" "$work/history.all"
+fi
+tail -n "$HISTORY_LINES" "$work/history.all" > "$work/history.jsonl"
+mv -f "$work/history.jsonl" "$out/history.jsonl"
+
+jq -r '"status-collect: \(.summary.ports) port(s), \(.summary.published) published, \(.summary.unread) not read from GHCR, \(.summary.with_evidence) with evidence, \(.summary.builds_passed) of \(.summary.ports) last builds passed, parity \(.registries.parity // "unknown"), drift runs \(.registries.drift_runs), \(.budget.used) s of \(.budget.seconds) s"' \
+  "$out/status.json" | tr -d '\r' >&2

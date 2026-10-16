@@ -1,0 +1,17 @@
+# The test container: an image of this repository with the tools of the
+# static suite. docs/tests.md tells how to run the suites in it.
+#
+#   podman build -f tests/Containerfile -t localhost/dal-test tests
+#
+# ⚠ Nothing moves this pin. pacman -Syu makes the packages current at each
+# build.
+#
+# tag: latest
+FROM ghcr.io/pkgforge-dev/archlinux:latest@sha256:0a4774dad9b1be24854f2103c1e4621658feb790b37e5a6c788641bab412ef31
+
+# The tools: jq, yq, shellcheck, actionlint, git, zstd, gpg, python3, bsdtar
+# (libarchive), diff, which, file, readelf (binutils), gawk and curl. git
+# reads a tree that another user owns, such as a mount of the host.
+RUN pacman -Syu --noconfirm --needed jq yq shellcheck actionlint git zstd gnupg python \
+      libarchive diffutils which file binutils gawk curl \
+    && git config --system --add safe.directory '*'

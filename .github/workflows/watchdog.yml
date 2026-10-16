@@ -1,0 +1,176 @@
+name: Watchdog
+
+# Read the outcomes one time each day:
+#   - Does each port still publish, on GHCR and on Docker Hub? (stale-<arch>)
+#   - Does each schedule still fire, and pass? (schedules-stopped,
+#     failing-<workflow>)
+#   - Does the status site still move? (status-down, pages-stale)
+# Start an overdue build or status run. Re-run the failed CI of a Renovate
+# pull request.
+#
+# ⭐ The job watch of build-deploy.yml runs scripts/watch-schedules too. Each
+# of the two workflows sees the other stop.
+#
+# ⭐ Each lasting problem is an issue (scripts/track-issue): opened one time,
+# kept current, closed when the problem clears.
+
+on:
+  schedule:
+    - cron: "40 7 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: watchdog
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  recency:
+    name: Each port publishes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Exit 3 (a port or the index is stale) and exit 1 (a registry could
+      # not be read) keep the run red. The state files stay for the next step.
+      - name: Measure the newest dated tag of each port
+        timeout-minutes: 10
+        run: scripts/check-publish-recency "$RUNNER_TEMP/recency"
+
+      # stale: raise. current: clear. unknown: leave the issue as it is.
+      - name: Raise or clear stale-<arch>
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          shopt -s nullglob
+          states=("$RUNNER_TEMP"/recency/*.state)
+          echo "${#states[@]} state file(s) from scripts/check-publish-recency"
+          for f in "${states[@]}"; do
+            key="$(basename "$f" .state)"
+            state="$(awk 'NR == 1 { print $1 }' "$f")"
+            case "$state" in
+              stale)
+                scripts/track-issue raise "stale-$key" "$key: no new image within the build schedule" "${f%.state}.md"
+                ;;
+              current)
+                scripts/track-issue clear "stale-$key" "\`$key\` has a new image within the build schedule: $run_url"
+                ;;
+              *)
+                echo "$key: $state; the issue stale-$key stays as it is"
+                ;;
+            esac
+          done
+
+  schedules:
+    name: Each schedule fires and passes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # keep-schedules-enabled, then check-schedules-fired. A stopped
+      # schedule, or a workflow that a person disabled, raises
+      # schedules-stopped. 3 failed scheduled runs in a row raise
+      # failing-<workflow>. Exit 3 is a stopped schedule, and
+      # schedules-stopped names it. The run stays green: a red run counts as
+      # a failure of this workflow.
+      - name: Keep each schedule enabled, check each schedule
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rc=0
+          scripts/watch-schedules || rc=$?
+          case "$rc" in
+            0) ;;
+            3) echo "::warning::a schedule stopped; the issue schedules-stopped names it" ;;
+            *) exit "$rc" ;;
+          esac
+
+      # ⛔ A failure above must not stop the restart of an overdue workflow.
+      - name: Start an overdue build or status run
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          rc=0
+          scripts/dispatch-overdue build-deploy.yml 1560 || rc=$?
+          scripts/dispatch-overdue status.yml 180 || rc=$?
+          exit "$rc"
+
+  status-site:
+    name: The status site moves
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # status-down when the record on the branch status is old or absent.
+      # pages-stale when the copy on Pages trails it. Exit 3 keeps the run red.
+      - name: Check the status record and its copy on Pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rc=0
+          git ls-remote --exit-code --heads origin status > "$RUNNER_TEMP/heads.txt" || rc=$?
+          case "$rc" in
+            0)
+              git fetch --quiet --depth=1 origin status
+              if git cat-file -e FETCH_HEAD:status.json; then
+                git show FETCH_HEAD:status.json > "$RUNNER_TEMP/status-branch.json"
+              fi
+              ;;
+            2) echo "no branch status: status.yml wrote no record" ;;
+            *)
+              echo "::error::git ls-remote origin status ended $rc"
+              exit "$rc"
+              ;;
+          esac
+          scripts/check-status-site "$RUNNER_TEMP/status-branch.json"
+
+  bot-ci:
+    name: Re-run the failed CI of Renovate pull requests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # At most 3 re-runs for one head commit.
+      - name: Re-run the failed jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/rerun-bot-ci

@@ -1,25 +1,7 @@
-# Well known servers, always written first and never dropped by ranking.
+# Anchors for loong64. scripts/gen-mirrorlist writes them first, in this order.
+# It never ranks or drops them. At least one must answer.
 #
-# ghcr.mirror.archlinux.pkgforge.dev is the GHCR mirror of this port,
-# pkgforge-dev/mirror-archlinux. It serves upstream's own databases and package
-# files from GitHub's package storage, through a redirect. It is first, so the
-# build and a consumer read it first, and pacman falls through to the next
-# Server when a transfer from it fails.
-#
-# ⚠ It follows upstream on a schedule of its own, every three hours. The build
-# compares it with the next server before it reads it, and builds without it
-# when it is behind: scripts/check-mirror-lag.
-#
-# ⚠ It cannot forge a package. SigLevel stays Required, and every package
-# carries upstream's own signature.
+# The first is the GHCR mirror (pkgforge-dev/mirror-archlinux). The second is
+# the server on the domain of the port maintainers (LCPU).
 Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo
-#
-# loongarchlinux.lcpu.dev is the endpoint on the port maintainers' own domain.
-# The other five, in mirrors/loong64.pool, are the rest of the list the port
-# ships as pacman-mirrorlist-loong64, and all six served the same 90776 byte
-# core.db when this file was written.
-#
-# It is also an anchor because it serves a plain directory index, which
-# scripts/check-keyring-pin has to read. mirrors.pku.edu.cn answers 200 for a
-# directory with a JavaScript page instead, so a text scan of it finds nothing.
 Server = https://loongarchlinux.lcpu.dev/loongarch/archlinux/$repo/os/$arch

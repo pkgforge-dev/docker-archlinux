@@ -1,38 +1,39 @@
 #!/usr/bin/env bash
 #
-# Pull one architecture rather than the multi-architecture index.
+# Pull the image of one port, not the multi-platform index.
 #
-# Each architecture answers to more than one tag name and they share one
-# manifest, so the two pulls below fetch the same digest.
+# The tags of one port name one manifest. So the two pulls below get one
+# digest.
+#
+# Run this on the host.
 set -euo pipefail
 
 IMAGE="${IMAGE:-ghcr.io/pkgforge-dev/archlinux}"
 
-# The uname -m spelling.
-docker pull "$IMAGE:x86_64"
+# The uname -m name of the port.
+docker pull --platform=linux/amd64 "$IMAGE:x86_64"
 
-# The Docker platform spelling. Same manifest.
-docker pull "$IMAGE:amd64"
+# The Docker name of the same port. The same manifest.
+docker pull --platform=linux/amd64 "$IMAGE:amd64"
 
-# They are one digest under two names.
+# One digest under two names.
 docker image inspect "$IMAGE:x86_64" --format '{{ index .RepoDigests 0 }}'
 docker image inspect "$IMAGE:amd64" --format '{{ index .RepoDigests 0 }}'
 
-# ⚠ A per-architecture tag is not a bare manifest. `imagetools create` wraps
-# even a single digest in an index, and the platform is recorded in it, so the
-# runtime still matches on platform. Pulling a foreign architecture tag without
-# --platform fails:
+# The platforms of the index, with the attestation entries left out.
+docker buildx imagetools inspect "$IMAGE:latest" --raw |
+  jq -r '.manifests[].platform
+         | select(.os != "unknown")
+         | .os + "/" + .architecture + (if .variant then "/" + .variant else "" end)'
+
+# ⚠ A tag of one port is an index with one platform, so the runtime still
+# matches on platform. A pull of a foreign port with no --platform fails:
 #
 #   docker pull ghcr.io/pkgforge-dev/archlinux:aarch64      # on an x86_64 host
 #   no image found in image index for architecture "amd64", variant "", OS "linux"
 #
-# So --platform is required for the other three on an x86_64 host, and QEMU has
-# to be installed to run them:
-#
-#   docker run --privileged --rm tonistiigi/binfmt --install all
+# ⚠ A container of a foreign port needs a user mode emulator in binfmt_misc
+# on the host. In a clone of this repository, scripts/binfmt-register ARCH
+# registers one from images pinned by digest.
 docker pull --platform=linux/arm64 "$IMAGE:aarch64"
-docker pull --platform=linux/arm/v7 "$IMAGE:armv7h"
-docker pull --platform=linux/riscv64 "$IMAGE:riscv64"
-
 docker run --rm --platform=linux/arm64 "$IMAGE:aarch64" uname -m      # aarch64
-docker run --rm --platform=linux/riscv64 "$IMAGE:riscv64" uname -m    # riscv64

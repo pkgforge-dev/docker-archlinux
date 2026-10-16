@@ -1,0 +1,10 @@
+# Candidate servers for amd64. scripts/gen-mirrorlist probes them and writes the
+# fastest after the anchors.
+#
+# A `source` line names where to read candidates. gen-mirrorlist reads the
+# sources in order and uses the first that gives candidates:
+#   status-json URL                 the mirror status of archlinux.org
+#   mirrorlist URL                  a mirrorlist file
+#   mirrorlist-package DB PKG PATH  the file PATH in package PKG of database DB
+source = status-json https://archlinux.org/mirrors/status/json/
+source = mirrorlist-package https://ghcr.mirror.archlinux.pkgforge.dev/x86_64/core/core.db pacman-mirrorlist etc/pacman.d/mirrorlist

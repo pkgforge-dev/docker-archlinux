@@ -1,79 +1,97 @@
 #!/usr/bin/env bash
 #
-# Write the evidence file for one built image.
+# Write the evidence file of one built image.
 #
-#   scripts/gen-evidence <docker-arch> <image> <platform> <output>
+#   scripts/gen-evidence ARCH IMAGE PLATFORM OUTPUT
 #
-# A record that says "built successfully" is not evidence. This records which
-# package, which version, which size, which checksum and when it was built, for
-# every package in the image, so a reader can tell what was in an image without
-# having the image.
+# The evidence names each package in the image: version, download size,
+# installed size, sha256 and the build date of the package. A reader can then
+# tell what is in an image without the image.
 #
-# The package set comes from the image's own pacman database, so it is what was
-# installed rather than what was requested. The size, the checksum and the build
-# date come from the repository databases, because the local database does not
-# carry a checksum and does not carry the download size for every package.
+# The package set comes from the pacman database inside the image, so it is
+# what was installed. The sizes, the sha256 and the dates come from the
+# repository databases, because the local database has no sha256 and no
+# download size.
 #
-# DB_SNAPSHOT names a directory holding the repository databases the build
-# resolved against, exported from the Dockerfile's dbsnapshot target. Set, they
-# are read from there and nothing is fetched. Unset, they are fetched, which
-# races upstream: a package superseded between the build and this run is
-# installed in the image and in no current database. HISTORY/evidence-race.md.
+# Environment:
+#   DB_SNAPSHOT        a directory with the repository databases that the
+#                      build used (the dbsnapshot target of the Dockerfile).
+#                      Set: they are read from there and nothing is fetched.
+#                      Unset: they are fetched from the mirror list.
+#                      ⚠ A fetch can see newer databases than the build did.
+#   EXPECT_ANCHOR      the anchor version that the build resolved. When set,
+#                      the anchor package in the image must have it.
+#   ANCHOR_PACKAGE     the anchor package (default pacman)
+#   SOURCE_COMMIT, BUILD_DATE   the commit and the time of the build, recorded
+#                      as they are. Unset or empty: read from the image labels
+#                      org.opencontainers.image.revision and
+#                      org.opencontainers.image.created. A label that is
+#                      absent or empty gives "unknown".
+#   CONTAINER_RUNTIME  docker or podman (default: the first one found)
 #
-# SOURCE_COMMIT and BUILD_DATE are read from the environment when set, so the
-# evidence records the same values the image labels do.
+# tests/image/40-evidence.sh checks the file.
 #
-# tests/image/40-evidence.sh checks the result.
+# Exit status:
+#   0  written
+#   1  an error: a bad argument, an image or a database that cannot be read
+#   3  DB_SNAPSHOT cannot be used: not a directory, or a database is missing
+#   4  the database entry of an installed package is damaged upstream
+#   5  installed packages are in no database: the snapshot is not the one the
+#      image was installed from, or the databases moved after the build
+#   6  the anchor in the image is not EXPECT_ANCHOR
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 ANCHOR_PACKAGE="${ANCHOR_PACKAGE:-pacman}"
-UA="${MIRROR_PROBE_UA:-docker-archlinux-mirrorlist/1 (+https://github.com/pkgforge-dev/docker-archlinux)}"
+UA="${MIRROR_PROBE_UA:-docker-archlinux (+https://github.com/${GITHUB_REPOSITORY:-pkgforge-dev/docker-archlinux})}"
 RUNTIME="${CONTAINER_RUNTIME:-}"
 
-# die MESSAGE [ACTION ...]
-#
-# The first argument says what is wrong. Every argument after it is printed
-# indented below it, and is what the reader does next. A message with no
-# next step leaves the reader to work it out from the source.
-die() {
+# die_rc CODE MESSAGE [DETAIL ...]
+die_rc() {
+  local code="$1"
+  shift
   echo "gen-evidence: $1" >&2
   shift
   while [ "$#" -gt 0 ]; do
     echo "  $1" >&2
     shift
   done
-  exit 1
+  exit "$code"
+}
+
+# die MESSAGE [DETAIL ...]
+die() {
+  die_rc 1 "$@"
 }
 
 need() {
-  command -v "$1" >/dev/null || die "$1 is required"
+  command -v "$1" > /dev/null || die "$1 is required"
 }
 need curl
 need awk
 need jq
 need tar
 
-[ "$#" -eq 4 ] || die "usage: gen-evidence <docker-arch> <image> <platform> <output>"
+[ "$#" -eq 4 ] || die "usage: gen-evidence ARCH IMAGE PLATFORM OUTPUT"
 dir="$1"
 image="$2"
 platform="$3"
 output="$4"
+[[ "$dir" =~ ^[a-z0-9]+$ ]] || die "the architecture '$dir' is not [a-z0-9]+"
 
 if [ -z "$RUNTIME" ]; then
-  if command -v podman >/dev/null; then
+  if command -v podman > /dev/null; then
     RUNTIME=podman
-  elif command -v docker >/dev/null; then
+  elif command -v docker > /dev/null; then
     RUNTIME=docker
   else
     die "no container runtime found, set CONTAINER_RUNTIME"
   fi
 fi
-# podman and docker on Windows are native binaries and do not read MSYS paths,
-# so path conversion is disabled for their arguments. It is scoped to this one
-# wrapper rather than exported: curl and tar in this script take MSYS paths and
-# break if conversion is switched off for them too.
+# podman and docker on Windows are native programs and do not read MSYS
+# paths. Only this wrapper turns path conversion off: curl and tar here need
+# it on.
 runtime() {
   MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "$RUNTIME" "$@"
 }
@@ -86,39 +104,30 @@ list="$REPO_ROOT/rootfs/$dir/etc/pacman.d/mirrorlist"
 arch="$(awk -F= '/^[[:space:]]*Architecture[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$conf")"
 [ -n "$arch" ] || die "$conf has no Architecture line"
 
-# The repositories this architecture actually enables. An evidence file that
-# looked in the wrong set would silently miss packages.
+# The repositories that this port enables. Evidence read from another set
+# would miss packages.
 repos="$(awk '/^[[:space:]]*\[/ { name = $0
                                   gsub(/^[[:space:]]*\[|\][[:space:]]*$/, "", name)
                                   if (name != "options") print name }' "$conf")"
 [ -n "$repos" ] || die "$conf enables no repository"
 
 #---------------------------------------------------------------------------#
-# The databases the build resolved against, when the caller kept them.
+# The snapshot of the databases that the build used.
 #
-# ⛔ Fetching them again races upstream. A package superseded between the build
-# and this run is installed in the image and absent from every current
-# database, so the join below has a hole in it and this script refuses to
-# write partial evidence. That is what failed the daily publish on 2026-08-27.
-#
-# The Dockerfile's dbsnapshot target carries the databases pacstrap actually
-# used. DB_SNAPSHOT names the directory they were exported to. Unset, they are
-# fetched, which is the local path and still carries the race.
-#
-# ⛔ Validated here, before the image is run, so a wrong path is reported in
-# under a second rather than after a pull.
+# ⛔ It is checked here, before the image runs, so a wrong path fails in
+# under a second.
 #---------------------------------------------------------------------------#
 snapshot="${DB_SNAPSHOT:-}"
 if [ -n "$snapshot" ]; then
-  [ -d "$snapshot" ] || die "DB_SNAPSHOT names $snapshot, which is not a directory" \
-    "it must name the directory the dbsnapshot build target was exported to" \
-    "export it with: docker buildx build --platform $platform --target dbsnapshot --output type=local,dest=$snapshot ." \
-    "or leave DB_SNAPSHOT unset to fetch the databases, which races upstream"
+  [ -d "$snapshot" ] || die_rc 3 "DB_SNAPSHOT names $snapshot, which is not a directory" \
+    "it must name the directory that the dbsnapshot target was exported to" \
+    "export it: docker buildx build --platform $platform --target dbsnapshot --output type=local,dest=$snapshot ." \
+    "or unset DB_SNAPSHOT to fetch the databases"
   for repo in $repos; do
-    [ -f "$snapshot/$repo.db" ] || die "DB_SNAPSHOT $snapshot carries no $repo.db" \
-      "$conf enables $repo, so the snapshot has to hold its database" \
-      "it holds: $(find "$snapshot" -mindepth 1 -maxdepth 1 -printf '%f ')" \
-      "export it again with: docker buildx build --platform $platform --target dbsnapshot --output type=local,dest=$snapshot ."
+    [ -f "$snapshot/$repo.db" ] || die_rc 3 "DB_SNAPSHOT $snapshot has no $repo.db" \
+      "$conf enables $repo, so the snapshot must have its database" \
+      "it has: $(find "$snapshot" -mindepth 1 -maxdepth 1 -printf '%f ')" \
+      "export it again: docker buildx build --platform $platform --target dbsnapshot --output type=local,dest=$snapshot ."
   done
 fi
 
@@ -126,25 +135,24 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 #---------------------------------------------------------------------------#
-# 1. what is installed, read from the image's own database
+# 1. What is installed: the pacman database inside the image.
 #
-# The image is run rather than inspected. Evidence is generated for an image
-# that already passed the shell check, so a root that cannot execute is a build
-# failure that has happened earlier, not a case to handle here.
+# The image runs. Evidence is made for an image that passed the shell test,
+# so a root that cannot run a shell is a fault of the build.
 #---------------------------------------------------------------------------#
 echo "==> reading the installed set from $image" >&2
 # shellcheck disable=SC2016
-# The single quotes are deliberate. The glob and the variable are expanded by
-# the shell inside the container, against the image's own filesystem.
+# The single quotes keep the glob and the variable for the shell in the
+# container, which reads the filesystem of the image.
 if ! runtime run --rm --platform "$platform" "$image" \
-     sh -c 'for d in /var/lib/pacman/local/*/desc; do [ -e "$d" ] && cat "$d" && echo "%%END%%"; done' \
-     > "$work/local.txt" 2> "$work/local.err"; then
+  sh -c 'for d in /var/lib/pacman/local/*/desc; do [ -e "$d" ] && cat "$d" && echo "%%END%%"; done' \
+  > "$work/local.txt" 2> "$work/local.err"; then
   echo "gen-evidence: cannot read the package database inside $image" >&2
   sed 's/^/  /' < "$work/local.err" >&2
-  die "the image must carry a readable /var/lib/pacman/local" \
-    "the runtime error is printed above" \
-    "an image whose bootstrap installed nothing has the directory and no entries in it" \
-    "list them with: $RUNTIME run --rm --platform $platform $image sh -c 'ls /var/lib/pacman/local'"
+  die "the image must have a readable /var/lib/pacman/local" \
+    "the runtime error is above" \
+    "an image whose bootstrap installed nothing has the directory and no entry in it" \
+    "list it: $RUNTIME run --rm --platform $platform $image sh -c 'ls /var/lib/pacman/local'"
 fi
 
 awk '
@@ -155,36 +163,30 @@ awk '
 ' "$work/local.txt" | sort > "$work/installed.tsv"
 
 installed_count="$(awk 'NF' "$work/installed.tsv" | wc -l | tr -d '[:space:]')"
-[ "$installed_count" -gt 0 ] || die "no installed packages found in $image"
+[ "$installed_count" -gt 0 ] || die "no installed package found in $image"
 echo "    $installed_count packages installed" >&2
 
 #---------------------------------------------------------------------------#
-# 2. what the repositories say about those artefacts
+# 2. What the repository databases say about those packages.
 #
-# With DB_SNAPSHOT the databases the build resolved against are read where the
-# build left them, and nothing is fetched, so nothing can have moved since.
-#
-# Without it each repository database is tried against every server in turn.
-# One mirror being mid sync must not decide the evidence for a whole release.
+# With DB_SNAPSHOT the databases are read where the build left them.
+# Without it each database is tried on each server of the mirror list in
+# turn. So one mirror in the middle of a sync does not decide the evidence.
 #---------------------------------------------------------------------------#
 
-# db_sources REPO -> one candidate source per line, best first
+# db_sources REPO -> one source per line, the best first
 #
-# A snapshot has exactly one candidate and it is not allowed to fail: the build
-# exported it, so an unreadable one is a build fault rather than a mirror having
-# a bad day. Without a snapshot the candidates are the mirrorlist, in its order.
+# A snapshot gives one source, and it must be readable: the build exported
+# it. Without a snapshot the sources are the Server lines of the list that
+# the section of REPO includes, in file order.
 db_sources() {
   if [ -n "$snapshot" ]; then
     printf '%s\n' "$snapshot/$1.db"
     return 0
   fi
 
-  # ⛔ The list this repository Includes, not the default one. ArchPOWER keeps
-  # its `any` architecture packages in a second database at base/any, which is
-  # not $repo/$arch for any value of either, so its section Includes a list of
-  # its own. Reading the default list for it would ask for base-any/<arch>,
-  # which answers 404, and the evidence would then be missing every package
-  # that has no architecture.
+  # ⛔ The list that the section includes, not always the default list. The
+  # ArchPOWER [base-any] section includes a list of its own.
   local include
   include="$(awk -v want="$1" '
     /^[[:space:]]*\[/ {
@@ -202,33 +204,28 @@ db_sources() {
 
   local from="$list"
   if [ -n "$include" ]; then
-    # The path is absolute inside the image, so it is resolved against the
-    # architecture's own rootfs tree here.
+    # The path is absolute in the image, so it is read in the rootfs tree of
+    # the port.
     from="$REPO_ROOT/rootfs/$dir${include}"
-    [ -f "$from" ] || die "$conf Includes $include for [$1] and rootfs/$dir$include does not exist" \
-      "a repository whose mirror list is missing resolves against nothing" \
-      "regenerate it with: scripts/gen-mirrorlist $dir"
+    [ -f "$from" ] || die "$conf includes $include for [$1] and rootfs/$dir$include is not there" \
+      "make it: scripts/gen-mirrorlist $dir"
   fi
   awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); print }' "$from"
 }
 
 # extract_desc FILE COMPRESSION -> the desc stream in $work/desc.txt
 #
-# COMPRESSION is the tar flag, -z or --zstd. tar's own complaint is left in
+# COMPRESSION is the tar flag, -z or --zstd. The complaint of tar goes to
 # $work/tar.err.
 #
-# ⛔ Through a pipe, never redirected straight to a file. A database can store a
-# desc member sparse, and GNU tar extracts a sparse member to standard output
-# by seeking. When standard output is a regular file, that seek lands near the
-# start of the file, every record written before the member is overwritten, and
-# tar still exits 0. A pipe cannot seek, so tar writes the hole out as NUL bytes
-# instead. Arch RISC-V's extra.db carries one, ntk-1.3.1001-4/desc, 576 NUL
-# bytes stored as GNU.sparse 1.0. It took the three installed packages that
-# sort before it out of the evidence on every riscv64 build from 2026-10-05.
-# HISTORY/outage-2026-09.md.
+# ⛔ Through a pipe, never into a file. A database can store a desc member as
+# a sparse file. GNU tar writes a sparse member to standard output with a
+# seek. Into a regular file the seek goes back and writes over the records
+# before the member, and tar still exits 0. A pipe cannot seek, so tar
+# writes the hole as NUL bytes. Arch RISC-V's extra.db has such a member.
 #
-# The NUL bytes are dropped, and every %FILENAME% is put at the start of a line
-# of its own, so a member holding nothing readable cannot fuse with the next.
+# The NUL bytes are removed. Each %FILENAME% starts a line of its own, so a
+# member with nothing readable in it cannot join the next record.
 extract_desc() {
   local file="$1" compression="$2"
   tar "$compression" -xOf "$file" --wildcards '*/desc' 2> "$work/tar.err" \
@@ -236,23 +233,19 @@ extract_desc() {
     | sed 's/%FILENAME%/\n&/g' > "$work/desc.txt"
 }
 
-# read_desc FILE LABEL -> writes the desc stream to $work/desc.txt
+# read_desc FILE LABEL -> the desc stream in $work/desc.txt
 #
-# LABEL is what the reader is told the database came from. Returns 1, having
-# left nothing behind, when FILE is not a readable archive in either
-# compression, so a caller working down a mirrorlist can step over one that is
-# mid sync. On success desc_compression names the flag that read it.
+# LABEL says where the database came from. Returns 1, and leaves nothing,
+# when FILE is not a readable archive in either compression, so a caller can
+# go to the next server. On success desc_compression is the tar flag.
 #
-# ⛔ Two compressions, because the ports do not agree. Every Arch family port
-# ships gzip and ArchPOWER ships Zstandard, and the file is named <repo>.db in
-# both cases, so neither announces which. Reporting the gzip error for a file
-# that was never gzip sends the reader looking for a corrupt database.
+# ⛔ Two compressions: the Arch ports use gzip and ArchPOWER uses Zstandard.
+# Both name the file <repo>.db.
 desc_compression=""
 read_desc() {
   local file="$1" label="$2" gz_said zstd_said
-  # The desc members are streamed rather than extracted. extra carries
-  # roughly 15000 of them, and writing that many small files costs minutes
-  # where the stream costs seconds. %FILENAME% opens every record.
+  # A stream, not an extract: extra has about 15000 members, and 15000 small
+  # files cost minutes.
   if extract_desc "$file" -z; then
     desc_compression=-z
     return 0
@@ -273,12 +266,12 @@ read_desc() {
   return 1
 }
 
-# unreadable_members FILE PARSED -> each desc member that produced no record
+# unreadable_members FILE PARSED -> each desc member that gave no record
 #
-# PARSED holds one "name<TAB>version" line per record read out of FILE. A
-# member's directory is named <name>-<version>, so the two sets compare
-# directly. ⚠ What comes out is a damaged entry in the database itself: it
-# exists, it has a name, and nothing readable is inside it.
+# PARSED has one "name<TAB>version" line for each record read from FILE. The
+# directory of a member is <name>-<version>, so the two sets compare
+# directly. ⚠ A member printed here is a damaged entry in the database: it
+# has a name and nothing readable in it.
 unreadable_members() {
   local file="$1" parsed="$2"
   tar "$desc_compression" -tf "$file" \
@@ -297,11 +290,11 @@ for repo in $repos; do
     [ -n "$source" ] || continue
 
     if [ -n "$snapshot" ]; then
-      # Read where it lies. Removing it would delete the build's own record.
+      # Read where it is. The file is the record of the build.
       read_desc "$source" "$source" \
-        || die "the $repo database in DB_SNAPSHOT is unreadable" \
-          "$source is what the dbsnapshot build target exported, so this is a build fault" \
-          "the reason tar gave is printed above" \
+        || die "the $repo database in DB_SNAPSHOT cannot be read" \
+          "$source is what the dbsnapshot target exported, so this is a fault of the build" \
+          "the reason from tar is above" \
           "reproduce: tar -tzf $source"
       from="$source"
       db="$source"
@@ -309,11 +302,11 @@ for repo in $repos; do
       url="${source//\$repo/$repo}"
       url="${url//\$arch/$arch}"
       db="$work/$repo.db"
-      # ⚠ -f, so a mirror answering 403 says so. Without it curl exits 0 with the
-      # error page in the file and the failure surfaces below as an unreadable
-      # archive, which reads as corruption rather than as a blocked path.
+      # ⚠ -f, so a mirror that answers 403 says so. Without it curl exits 0
+      # with the error page in the file, which then reads as a damaged
+      # archive.
       if ! fetch_error="$(curl -sSfL -A "$UA" --connect-timeout 10 --max-time 300 \
-          -o "$db" "$url/$repo.db" 2>&1)"; then
+        -o "$db" "$url/$repo.db" 2>&1)"; then
         echo "gen-evidence: cannot fetch $url/$repo.db: ${fetch_error:-no error text}" >&2
         rm -f "$db"
         continue
@@ -347,12 +340,12 @@ for repo in $repos; do
     ' "$work/desc.txt" > "$work/repo-one.tsv"
     rm -f "$work/desc.txt"
 
-    # ⛔ Every desc member has to come out as one record. A member that yields
-    # none is named here, so a damaged entry upstream is a line in the log
-    # rather than a package that falls silently out of the join below.
+    # ⛔ Each desc member must give one record. A member that gives none is
+    # named here. So a damaged entry upstream is a line in the log, not a
+    # package that drops out of the join below.
     unreadable_members "$db" "$work/repo-one.tsv" > "$work/damaged-one.txt"
     if [ -s "$work/damaged-one.txt" ]; then
-      echo "gen-evidence: ⚠ $from carries desc members with nothing readable in them:" >&2
+      echo "gen-evidence: ⚠ $from has desc members with nothing readable in them:" >&2
       sed 's/^/  /' "$work/damaged-one.txt" >&2
       cat "$work/damaged-one.txt" >> "$work/damaged.txt"
     fi
@@ -362,16 +355,12 @@ for repo in $repos; do
     break
   done < <(db_sources "$repo")
 
-  [ "$got" -eq 1 ] || die "could not fetch the $repo database for $dir from any server in rootfs/$dir/etc/pacman.d/mirrorlist"
+  [ "$got" -eq 1 ] || die "no server in rootfs/$dir/etc/pacman.d/mirrorlist gave the $repo database of $dir"
   echo "    $repo database read from $from, $(awk 'END { print NR + 0 }' "$work/repo-one.tsv") records" >&2
 done
 
 #---------------------------------------------------------------------------#
-# 3. join, and refuse to invent anything that is missing
-#
-# A package installed in the image but absent from every repository database is
-# reported by name. It means the databases moved between the build and this run,
-# and an evidence file with a hole in it is worse than none.
+# 3. Join. Nothing that is missing is made up.
 #---------------------------------------------------------------------------#
 awk -F'\t' '
   NR == FNR { key = $1 "\t" $2
@@ -388,16 +377,27 @@ awk -F'\t' '
 
 unresolved="$(awk -F'\t' '$5 == "-" { printf "%s %s, ", $1, $2 }' "$work/joined.tsv")"
 
+anchor_version="$(awk -F'\t' -v p="$ANCHOR_PACKAGE" '$1 == p { print $2; exit }' "$work/joined.tsv")"
+[ -n "$anchor_version" ] || die "the anchor package $ANCHOR_PACKAGE is not installed in $image"
+
+# ⛔ The pinned tag <alias>-<anchor> names the anchor that the build resolved.
+# The image must have that version, or the tag names a version it does not
+# have.
+if [ -n "${EXPECT_ANCHOR:-}" ] && [ "$anchor_version" != "$EXPECT_ANCHOR" ]; then
+  die_rc 6 "$image has $ANCHOR_PACKAGE $anchor_version; the build resolved $EXPECT_ANCHOR" \
+    "the tag $ANCHOR_PACKAGE version would name a version that the image does not have" \
+    "the database moved between the resolve step and the build, or the build cache is old" \
+    "reproduce: $RUNTIME run --rm --platform $platform $image pacman -Q $ANCHOR_PACKAGE"
+fi
+
 #---------------------------------------------------------------------------#
-# 4. emit
+# 4. Write.
 #
-# A build date that upstream does not publish is written as a dash. It is never
-# guessed, and tests/image/40-evidence.sh names any entry carrying one.
+# A build date that upstream does not give is a dash. It is never guessed.
 #---------------------------------------------------------------------------#
-# The two runtimes disagree about where the digest lives. podman exposes
-# .Digest; docker's inspect type has no such field and errors on it. A
-# reference that already carries @sha256: is authoritative and needs neither,
-# which is the shape CI passes in.
+# The two runtimes keep the digest in different places. podman has .Digest;
+# docker has no such field and fails on it. A reference with @sha256: needs
+# neither, and CI gives that shape.
 resolve_digest() {
   local ref="$1" out
   case "$ref" in
@@ -422,21 +422,68 @@ resolve_digest() {
   fi
   return 0
 }
+
+# ⛔ Each of three faults gets its own exit code and words, so the reader
+# goes to the right place. A damaged database entry is first, because no
+# export again can change it.
+if [ -n "$unresolved" ]; then
+  echo "gen-evidence: these installed packages are in no repository database:" >&2
+  echo "  ${unresolved%, }" >&2
+  damaged_installed="$(awk -F'\t' 'NR == FNR { bad[$1] = 1; next }
+                                    $5 == "-" && (($1 "-" $2) in bad) { printf "%s %s, ", $1, $2 }' \
+    "$work/damaged.txt" "$work/joined.tsv")"
+  if [ -n "$damaged_installed" ]; then
+    die_rc 4 "the repository database entry of an installed package is damaged upstream" \
+      "damaged: ${damaged_installed%, }" \
+      "the entry has nothing readable, so its size, sha256 and date cannot be recorded" \
+      "a later database that writes the entry again clears this with no change here" \
+      "reproduce: tar -tvf <the database> | grep <the package>, then extract that desc member"
+  fi
+  if [ -n "$snapshot" ]; then
+    die_rc 5 "$snapshot is not the snapshot that this image was installed from" \
+      "the packages above are in the image and not in the exported databases" \
+      "a build cache miss makes this: the export resolved against another set" \
+      "export it again from the same build: docker buildx build --platform $platform --target dbsnapshot --output type=local,dest=$snapshot ."
+  fi
+  die_rc 5 "the databases moved between the build and this run, so the evidence has holes" \
+    "the packages above are in the image and in no repository database" \
+    "set DB_SNAPSHOT to the databases that the build used"
+fi
+
 digest="$(resolve_digest "$image")"
 # shellcheck disable=SC2016
-# Expanded inside the container, against the image's own os-release.
+# Expanded in the container, from the os-release of the image.
 version_id="$(runtime run --rm --platform "$platform" "$image" \
   sh -c '. /etc/os-release; printf "%s\n" "${VERSION_ID:-}"')"
 
-anchor_version="$(awk -F'\t' -v p="$ANCHOR_PACKAGE" '$1 == p { print $2; exit }' "$work/joined.tsv")"
-[ -n "$anchor_version" ] || die "the anchor package $ANCHOR_PACKAGE is not installed in $image"
+# The commit and the time of the build. ⛔ Without SOURCE_COMMIT and
+# BUILD_DATE they come from the labels of the image, never from this run: a
+# release that makes the evidence again is not the build of the image.
+source_commit="${SOURCE_COMMIT:-}"
+built="${BUILD_DATE:-}"
+if [ -z "$source_commit" ] || [ -z "$built" ]; then
+  rc=0
+  labels="$(runtime image inspect "$image" --format '{{ json .Config.Labels }}' 2> "$work/inspect.err")" || rc=$?
+  if [ "$rc" -ne 0 ] || ! printf '%s' "$labels" | jq -e 'type == "object" or type == "null"' > /dev/null; then
+    die "cannot read the labels of $image: $RUNTIME image inspect exited $rc" \
+      "it said: $(awk 'NF { print; exit }' "$work/inspect.err")${labels:+; it printed: $labels}" \
+      "or set SOURCE_COMMIT and BUILD_DATE" \
+      "reproduce: $RUNTIME image inspect $image --format '{{ json .Config.Labels }}'"
+  fi
+  # label KEY -> the value of the label KEY, or unknown
+  label() {
+    printf '%s' "$labels" | jq -r --arg k "$1" '(.[$k] // "") | if . == "" then "unknown" else . end'
+  }
+  [ -n "$source_commit" ] || source_commit="$(label org.opencontainers.image.revision)"
+  [ -n "$built" ] || built="$(label org.opencontainers.image.created)"
+fi
 
 jq -n \
   --arg image "$image" \
   --arg platform "$platform" \
   --arg digest "${digest:--}" \
-  --arg built "${BUILD_DATE:--}" \
-  --arg source_commit "${SOURCE_COMMIT:--}" \
+  --arg built "$built" \
+  --arg source_commit "$source_commit" \
   --arg version "${version_id:--}" \
   --arg arch "$arch" \
   --arg docker_arch "$dir" \
@@ -471,39 +518,7 @@ jq -n \
    }
    | .package_count = (.packages | length)' > "$output"
 
-jq -e . "$output" > /dev/null || die "the generated evidence file is not valid JSON: $output"
+jq -e . "$output" > /dev/null || die "the evidence file is not valid JSON: $output"
 
 echo "==> wrote $output" >&2
 echo "    $(jq -r '.package_count' "$output") packages, anchor $ANCHOR_PACKAGE $anchor_version, digest ${digest:--}" >&2
-
-# ⛔ Three different faults reach here and they need different words. A package
-# whose own database entry is damaged is named as that, first, because no
-# amount of re-exporting changes it. Otherwise, without a snapshot it is the
-# race: upstream moved while the build ran. With one the databases cannot have
-# moved, so the snapshot is not the one this image was installed from, which is
-# what a build cache miss looks like. A diagnostic that names the wrong cause
-# sends the reader to the wrong place.
-if [ -n "$unresolved" ]; then
-  echo "gen-evidence: these installed packages are in no repository database:" >&2
-  echo "  ${unresolved%, }" >&2
-  damaged_installed="$(awk -F'\t' 'NR == FNR { bad[$1] = 1; next }
-                                    $5 == "-" && (($1 "-" $2) in bad) { printf "%s %s, ", $1, $2 }' \
-    "$work/damaged.txt" "$work/joined.tsv")"
-  if [ -n "$damaged_installed" ]; then
-    die "the repository database entry of an installed package is damaged upstream" \
-      "damaged: ${damaged_installed%, }" \
-      "the entry exists and carries nothing readable, so its size, checksum and date cannot be recorded" \
-      "a later database that rewrites the entry clears this with no change here" \
-      "reproduce: tar -tvf <the database> | grep <the package>, then extract that desc member"
-  fi
-  if [ -n "$snapshot" ]; then
-    die "$snapshot is not the snapshot this image was installed from" \
-      "the packages are named above: installed in the image, absent from the exported databases" \
-      "the export resolved against a different set, which is what a build cache miss looks like" \
-      "export it again from the same build: docker buildx build --platform $platform --target dbsnapshot --output type=local,dest=$snapshot ."
-  fi
-  die "the databases moved between the build and this run, so the evidence has holes" \
-    "the packages are named above: installed in the image, absent from every repository database" \
-    "this happens when a package is superseded between the build and this run" \
-    "set DB_SNAPSHOT to the databases the build resolved against, which is what removes the race"
-fi

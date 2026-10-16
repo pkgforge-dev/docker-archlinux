@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+#
+# Print the path the build stage uses to read the GHCR mirror of one port.
+#
+#   scripts/pick-transport ARCH
+#
+# stdout, one word:
+#   worker  the Cloudflare Worker (GHCR_WORKER_SERVER) answers 2xx or 3xx for
+#           the database of the first repository of ARCH
+#   oci     the Worker does not answer, and the registry (GHCR_OCI_SERVER)
+#           gives that database through pacman-oci
+#   worker  also when neither answers: the upstream servers follow the GHCR
+#           mirror in each list, and pacman tries them in turn
+# stderr: what each probe measured.
+#
+# The Dockerfile build argument TRANSPORT takes the word. With oci,
+# bootstrap/any/usr/local/bin/use-transport puts the oci:// server first in
+# the lists of the build stage. The lists that ship do not change.
+#
+# Environment:
+#   PICK_TIMEOUT  seconds for the Worker probe, default 30
+#   GHCR_WORKER_SERVER, GHCR_OCI_SERVER, PACMAN_OCI, FETCH_MAX_TIME and the
+#   paths that scripts/lib-mirrors.sh reads
+#
+# Exit status: 0 a word is on stdout, 1 an input cannot be read.
+set -euo pipefail
+
+PROG=pick-transport
+# shellcheck source=scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=scripts/lib-mirrors.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib-mirrors.sh"
+
+PICK_TIMEOUT="${PICK_TIMEOUT:-30}"
+case "$PICK_TIMEOUT" in
+  '' | *[!0-9]*) die "PICK_TIMEOUT is '$PICK_TIMEOUT'. Use a whole number of seconds." ;;
+esac
+
+[ "$#" -eq 1 ] || die "usage: scripts/pick-transport ARCH" "ARCH is one of: $(port_list | tr '\n' ' ')"
+arch="$1"
+port_check "$arch"
+need curl tar awk timeout od
+
+parch="$(port_get "$arch" pacman_arch)"
+repos="$(port_get "$arch" repos)"
+repo="${repos%% *}"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+# 1. The Worker. A redirect is an answer: the Worker sends each file to the
+#    blob storage of GHCR.
+url="$(server_url "$GHCR_WORKER_SERVER" "$repo" "$parch")/$repo.db"
+rc=0
+code="$(timeout -k 5 "$((PICK_TIMEOUT + 5))" curl -sS -o /dev/null -w '%{http_code}' -A "$HTTP_UA" \
+  --connect-timeout 10 --max-time "$PICK_TIMEOUT" "$url" 2> "$work/curl.err")" || rc=$?
+case "$url" in
+  file://*)
+    if [ "$rc" -eq 0 ]; then
+      code=200
+    else
+      code=404
+    fi
+    ;;
+esac
+note "worker: HTTP ${code:-000} from $url (curl exit $rc)"
+case "$code" in
+  2[0-9][0-9] | 3[0-9][0-9])
+    echo worker
+    exit 0
+    ;;
+esac
+if [ -s "$work/curl.err" ]; then
+  note "worker: $(first_line "$(cat "$work/curl.err")")"
+fi
+
+# 2. The registry, through the vendored client.
+url="$(server_url "$GHCR_OCI_SERVER" "$repo" "$parch")/$repo.db"
+if fetch_db "$url" "$work/db" && db_open "$work/db"; then
+  note "oci: $url gave a readable database"
+  echo oci
+  exit 0
+fi
+note "oci: $url gave no readable database: ${FETCH_WHY:-$DB_WHY}"
+
+warn "neither path to the GHCR mirror answered for $arch, so the build uses worker and pacman falls through to the next servers"
+echo worker

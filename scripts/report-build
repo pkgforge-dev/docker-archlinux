@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+#
+# Raise or clear the issues of one run of the build workflow, and write the
+# summary table of the run.
+#
+#   scripts/report-build [--dry-plan] [--legs FILE]
+#
+# The issue keys (scripts/track-issue):
+#   build-<arch>   raised when the leg of a planned port fails; cleared when
+#                  the publish job passes and the tags of the port read back
+#   publish-ghcr   raised when the publish job fails, or does not run while
+#                  ports were planned; cleared when it passes
+#   publish-hub    raised when the Docker Hub job fails; cleared when it
+#                  passes
+#
+# Environment (from the workflow):
+#   ARCHES              the ports the plan built, space separated
+#   PLAN_RESULT, GATE_RESULT, PUBLISH_RESULT, HUB_RESULT
+#                       success, failure, cancelled or skipped
+#   PUBLISHED           the ports whose tags read back after the write
+#                       (publish-ghcr output published), space separated
+#   CARRIED, ABSENT     the ports of the publish, space separated
+#   RUN_URL             the link to this run
+#   GH_TOKEN, GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT
+#                       read the result of each leg ("Build <arch>")
+#   GITHUB_STEP_SUMMARY when set, gets the summary table
+#
+# --legs FILE reads the legs from FILE, not from the Actions API. One line for
+# each leg: ARCH<TAB>CONCLUSION<TAB>FAILED STEP.
+# --dry-plan prints each track-issue call ("raise KEY TITLE" or "clear KEY")
+# on stdout and makes none.
+#
+# Exit status: 0 reported, 1 a track-issue call failed, 2 usage.
+set -euo pipefail
+shopt -s inherit_errexit
+
+PROG=report-build
+# shellcheck source=scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TRACK="$ROOT/scripts/track-issue"
+
+usage() {
+  sed -n '6p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  exit 2
+}
+
+dry=0
+legs_file=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dry-plan) dry=1 ;;
+    --legs)
+      [ "$#" -ge 2 ] || usage
+      legs_file="$2"
+      shift
+      ;;
+    *) usage ;;
+  esac
+  shift
+done
+need awk jq
+
+ARCHES="${ARCHES:-}"
+PLAN_RESULT="${PLAN_RESULT:-}"
+GATE_RESULT="${GATE_RESULT:-}"
+PUBLISH_RESULT="${PUBLISH_RESULT:-}"
+HUB_RESULT="${HUB_RESULT:-}"
+PUBLISHED="${PUBLISHED:-}"
+CARRIED="${CARRIED:-}"
+ABSENT="${ABSENT:-}"
+RUN_URL="${RUN_URL:-${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-}}"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+# member WORD LIST -> 0 when WORD is a word of LIST
+member() {
+  case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
+
+#---------------------------------------------------------------------------#
+# The result of each leg.
+#---------------------------------------------------------------------------#
+: > "$work/legs"
+if [ -n "$legs_file" ]; then
+  [ -r "$legs_file" ] || die "--legs $legs_file cannot be read"
+  tr -d '\r' < "$legs_file" > "$work/legs"
+elif [ -n "$ARCHES" ]; then
+  need gh timeout
+  rc=0
+  timeout -k 5 120 gh api --paginate \
+    "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/${GITHUB_RUN_ATTEMPT:-1}/jobs?per_page=100" \
+    --jq '.jobs[] | select(.name | startswith("Build ")) |
+          [ (.name | sub("^Build "; "")), (.conclusion // "running"),
+            ([ .steps[]? | select(.conclusion == "failure") | .name ] | join(", ")) ] | @tsv' \
+    > "$work/legs" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    warn "the jobs of run $GITHUB_RUN_ID cannot be read (exit $rc); each leg reads as unknown"
+    : > "$work/legs"
+  fi
+fi
+
+# leg ARCH -> "CONCLUSION<TAB>FAILED STEP"
+leg() {
+  awk -F'\t' -v a="$1" '$1 == a && !done { print $2 "\t" $3; done = 1 } END { if (!done) print "unknown\t" }' "$work/legs"
+}
+
+#---------------------------------------------------------------------------#
+# track-issue, or the plan of it.
+#---------------------------------------------------------------------------#
+failed=0
+raise() {
+  local key="$1" title="$2" body="$3" rc=0
+  if [ "$dry" -eq 1 ]; then
+    printf 'raise %s %s\n' "$key" "$title"
+    return 0
+  fi
+  "$TRACK" raise "$key" "$title" "$body" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    warn "track-issue raise $key exited $rc"
+    failed=$((failed + 1))
+  fi
+}
+clear_issue() {
+  local key="$1" text="$2" rc=0
+  if [ "$dry" -eq 1 ]; then
+    printf 'clear %s\n' "$key"
+    return 0
+  fi
+  "$TRACK" clear "$key" "$text" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    warn "track-issue clear $key exited $rc"
+    failed=$((failed + 1))
+  fi
+}
+
+# The summary table.
+{
+  printf '| port | build leg | failed step | published | issue |\n'
+  printf '| --- | --- | --- | --- | --- |\n'
+} > "$work/summary.md"
+
+#---------------------------------------------------------------------------#
+# One issue for each planned port.
+#---------------------------------------------------------------------------#
+for arch in $ARCHES; do
+  IFS=$'\t' read -r conclusion step <<< "$(leg "$arch")"
+  step="${step:--}"
+  # ⛔ Only a publish job that passed: a job that failed can have the output.
+  if [ "$PUBLISH_RESULT" = success ] && member "$arch" "$PUBLISHED"; then
+    clear_issue "build-$arch" "$arch is published again: $RUN_URL"
+    printf '| %s | %s | - | yes | cleared |\n' "$arch" "$conclusion" >> "$work/summary.md"
+    continue
+  fi
+  if [ "$conclusion" = success ]; then
+    # The leg passed and the publish did not take it: publish-ghcr says why.
+    printf '| %s | %s | - | no | publish-ghcr |\n' "$arch" "$conclusion" >> "$work/summary.md"
+    continue
+  fi
+  state="latest has no image for $arch."
+  if member "$arch" "$CARRIED"; then
+    state="latest keeps the last published image of $arch."
+  elif ! member "$arch" "$ABSENT"; then
+    state="The publish did not run, so latest did not change."
+  fi
+  # The format strings are markdown. A backtick in them is text.
+  # shellcheck disable=SC2016
+  {
+    printf 'The build leg `Build %s` did not pass.\n\n' "$arch"
+    printf '| leg result | failed step |\n| --- | --- |\n| `%s` | %s |\n\n' "$conclusion" "$step"
+    printf '%s\n\n' "$state"
+    printf 'Run: %s\n\n' "$RUN_URL"
+    printf 'The log of the failed step gives the cause. This issue closes when %s publishes.\n' "$arch"
+  } > "$work/build-$arch.md"
+  raise "build-$arch" "build: $arch is not publishing" "$work/build-$arch.md"
+  printf '| %s | %s | %s | no | raised build-%s |\n' "$arch" "$conclusion" "$step" "$arch" >> "$work/summary.md"
+done
+
+#---------------------------------------------------------------------------#
+# publish-ghcr and publish-hub.
+#---------------------------------------------------------------------------#
+publish_note=""
+case "$PUBLISH_RESULT" in
+  success)
+    clear_issue publish-ghcr "The publish to GHCR passed: $RUN_URL"
+    publish_note="cleared"
+    ;;
+  failure | cancelled)
+    publish_note="the publish job ended $PUBLISH_RESULT"
+    ;;
+  *)
+    if [ "$PLAN_RESULT" != success ]; then
+      publish_note="the plan job ended ${PLAN_RESULT:-unknown}, so nothing was built"
+    elif [ -n "$ARCHES" ]; then
+      publish_note="the publish job did not run: the gate job ended ${GATE_RESULT:-unknown}"
+    fi
+    ;;
+esac
+if [ -n "$publish_note" ] && [ "$publish_note" != cleared ]; then
+  # shellcheck disable=SC2016
+  {
+    printf 'The publish to GHCR did not pass: %s.\n\n' "$publish_note"
+    printf '| job | result |\n| --- | --- |\n'
+    printf '| plan | `%s` |\n| gate | `%s` |\n| publish | `%s` |\n\n' \
+      "${PLAN_RESULT:-none}" "${GATE_RESULT:-none}" "${PUBLISH_RESULT:-none}"
+    printf 'Run: %s\n\n' "$RUN_URL"
+    printf 'Each tag stays where it is. This issue closes when a publish passes.\n'
+  } > "$work/publish-ghcr.md"
+  raise publish-ghcr "publish: the publish to GHCR did not pass" "$work/publish-ghcr.md"
+fi
+
+case "$HUB_RESULT" in
+  success) clear_issue publish-hub "The copy to Docker Hub passed: $RUN_URL" ;;
+  failure | cancelled)
+    {
+      printf 'The copy from GHCR to Docker Hub ended %s.\n\n' "$HUB_RESULT"
+      printf 'GHCR is not changed by it. The next run copies each tag that Docker Hub does not have.\n\n'
+      printf 'Run: %s\n\n' "$RUN_URL"
+      printf 'reproduce: SOURCE_IMAGE=<GHCR image> HUB_TARGET=<Docker Hub image> scripts/sync-hub --dry-plan\n'
+    } > "$work/publish-hub.md"
+    raise publish-hub "publish: the copy to Docker Hub did not pass" "$work/publish-hub.md"
+    ;;
+esac
+
+{
+  printf '\n| job | result |\n| --- | --- |\n'
+  printf '| plan | %s |\n| gate | %s |\n| publish | %s |\n| hub | %s |\n' \
+    "${PLAN_RESULT:-none}" "${GATE_RESULT:-none}" "${PUBLISH_RESULT:-none}" "${HUB_RESULT:-none}"
+} >> "$work/summary.md"
+if [ "$dry" -eq 0 ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  cat "$work/summary.md" >> "$GITHUB_STEP_SUMMARY"
+fi
+if [ "$dry" -eq 1 ]; then
+  sed 's/^/summary /' "$work/summary.md"
+fi
+
+[ "$failed" -eq 0 ] || die "$failed track-issue call(s) failed" "the reasons are above"

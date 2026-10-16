@@ -1,18 +1,22 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
-# Write /etc/os-release into a bootstrapped root.
+# Write /etc/os-release into a new root.
+#
+#   write-os-release ROOT VERSION
 #
 # No package owns /etc/os-release. The filesystem package ships
-# /usr/lib/os-release, and Arch's release tooling writes /etc/os-release as a
-# real file with a release id injected. A pacstrap bootstrap never creates it,
-# and no Arch port ships a VERSION_ID of its own, so the value comes from the
-# build.
+# /usr/lib/os-release, and the release tools of Arch Linux write
+# /etc/os-release with a release id. A pacstrap root does not get one, and no
+# port ships a VERSION_ID, so the build gives the value.
 #
-#   write-os-release <root> <version>
+# It copies ROOT/usr/lib/os-release to ROOT/etc/os-release and adds VERSION_ID,
+# IMAGE_ID and IMAGE_VERSION.
+#
+# Exit status: 0 written, 1 the source is missing or has a VERSION_ID.
 set -euo pipefail
 
-root="${1:?usage: write-os-release <root> <version>}"
-version="${2:?usage: write-os-release <root> <version>}"
+root="${1:?usage: write-os-release ROOT VERSION}"
+version="${2:?usage: write-os-release ROOT VERSION}"
 
 src="$root/usr/lib/os-release"
 dst="$root/etc/os-release"
@@ -23,7 +27,7 @@ if [ ! -f "$src" ]; then
 fi
 
 if grep -qE '^VERSION_ID=' "$src"; then
-  echo "write-os-release: $src already carries VERSION_ID, refusing to guess which wins" >&2
+  echo "write-os-release: $src has a VERSION_ID, and two values would conflict" >&2
   exit 1
 fi
 

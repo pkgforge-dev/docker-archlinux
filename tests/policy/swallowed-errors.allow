@@ -1,11 +1,30 @@
-# Justified exceptions to the no-swallowed-errors rule.
+# Exceptions to tests/static/20-no-swallowed-errors.sh.
 #
-# Format, pipe separated, three fields:
-#   <repo relative path> | <fixed string that must appear in the line> | <reason>
+# Format, three fields separated by |:
+#   <repo relative path> | <fixed string in the line> | <reason>
 #
-# A reason is required. An entry that matches nothing fails the test, so this
-# file cannot accumulate dead exceptions.
-#
-# There are no entries. Every construct that hides a failure has been removed
-# rather than excepted. Add one here only with a reason that says why the
-# failure it hides is not a failure.
+# The reason says why the hidden output is not a failure. An entry that
+# matches no line fails the test, so a dead entry is removed.
+
+# The probe of tests/image/60-defect-parity.sh runs inside the image under
+# test. There a missing file or tool is a measured value (an empty count or
+# "none"), and the assertions compare that value.
+tests/image/60-defect-parity.sh | security.capability "$f" 2>/dev/null | a file with no capability is a measured value
+tests/image/60-defect-parity.sh | -type f 2>/dev/null | find reads /proc and /sys; the count of setuid files is the measured value
+tests/image/60-defect-parity.sh | pacman -Qq 2>/dev/null | the count of packages is the measured value
+tests/image/60-defect-parity.sh | ls /etc/profile.d/*.sh 2>/dev/null | no profile script is a measured value
+tests/image/60-defect-parity.sh | ls /usr/share/i18n/charmaps 2>/dev/null | no charmap is a measured value
+tests/image/60-defect-parity.sh | ls /usr/share/i18n/locales 2>/dev/null | no locale source is a measured value
+tests/image/60-defect-parity.sh | if locale-gen >/dev/null 2>&1; then | the if reports the status of locale-gen as ok or failed
+tests/image/60-defect-parity.sh | locale -a 2>/dev/null | no ja_JP locale is a measured value
+tests/image/60-defect-parity.sh | locale charmap 2>/dev/null | no ja_JP charmap is a measured value
+tests/image/60-defect-parity.sh | LC_ALL=C date +%A 2>/dev/null | the day name is compared, and an empty one fails that assertion
+tests/image/60-defect-parity.sh | LC_ALL=ja_JP.UTF-8 date +%A 2>/dev/null | the day name is compared, and an empty one fails that assertion
+tests/image/60-defect-parity.sh | private-keys-v1.d 2>/dev/null | no private key is the value the assertion wants
+tests/image/60-defect-parity.sh | command -v "$t" >/dev/null 2>&1 | each absent tool is listed and the list is asserted
+tests/image/60-defect-parity.sh | command -v parity-probe-tool 2>/dev/null | "none" is a measured value
+tests/image/60-defect-parity.sh | command -v bash 2>/dev/null | "none" is a measured value
+
+# tests/image/40-evidence.sh acts on each status in an if, and reports it.
+tests/image/40-evidence.sh | if ! command -v jq >/dev/null 2>&1; then | the if fails the test with a message when jq is absent
+tests/image/40-evidence.sh | if ! jq -e . "$EVIDENCE" >/dev/null 2>&1; then | the if fails the test with a message when the file is not JSON

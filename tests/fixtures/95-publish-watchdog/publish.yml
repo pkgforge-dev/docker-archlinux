@@ -1,0 +1,12 @@
+# A fixture publish workflow for tests/static/95-publish-watchdog.sh: two
+# daily crons, so the tolerance is 3 days. The env names the two images.
+name: Publish
+
+on:
+  schedule:
+    - cron: "30 5 * * *"
+    - cron: "30 17 * * *"
+
+env:
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/fixture-image
+  HUB_IMAGE: docker.io/fixture-org/fixture-image

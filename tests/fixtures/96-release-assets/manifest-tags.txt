@@ -1,0 +1,6 @@
+latest
+v2030.01.01
+x86_64
+aarch64-v2030.01.01
+ppc64le-7.1.0.r9.g54d9411-2.2
+powerpc64le

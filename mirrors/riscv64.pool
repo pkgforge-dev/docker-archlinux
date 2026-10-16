@@ -1,9 +1,9 @@
-# Candidate pool for Arch RISC-V.
+# Candidate servers for riscv64. scripts/gen-mirrorlist probes them and writes
+# the fastest after the anchors.
 #
-# Arch RISC-V publishes no mirror status API and no canonical mirror list file,
-# so the pool is kept here. Every entry is probed before it is written, and an
-# entry that stops answering is dropped from the generated list rather than
-# removed from this file, so it can come back.
+# Arch Linux RISC-V has no mirror status API and no mirrorlist package, so the
+# candidates are kept here. A server that does not answer is not written, and
+# stays here.
 Server = https://archriscv.felixc.at/repo/$repo
 Server = https://mirror.iscas.ac.cn/archriscv/repo/$repo
 Server = https://mirrors.sustech.edu.cn/archriscv/repo/$repo

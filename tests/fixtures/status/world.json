@@ -1,0 +1,63 @@
+{
+  "comment": "The registries, artifacts and stored evidence of the status tests. make-world writes them. Each port names how it differs from a port that is in order. Runs 1003 and 1005 are dry runs, and 1004 is a pull request from a fork: their artifacts must not count.",
+  "now": "2026-10-16T12:00:00Z",
+  "repository": "test-owner/docker-archlinux",
+  "ghcr": ["ghcr.io", "test-owner/archlinux"],
+  "hub": ["docker.io", "test/archlinux"],
+  "index_dates": ["2026.10.15", "2026.10.16"],
+  "ports": [
+    {
+      "arch": "amd64", "created": "2026-10-16T05:50:12.345678Z", "version": "2026.10.16", "revision": "aaaa111",
+      "layers": [104857600, 1048576], "dates": ["2026.10.15", "2026.10.16"], "anchors": ["7.1.0.r9.g54d9411-2"],
+      "evidence": {"artifact": [1002, 1004], "match": [1002, 1004]},
+      "packages": [["pacman", "7.1.0.r9.g54d9411-2", 900000, 4500000], ["bash", "5.3.9-1", 1900000, 9000000], ["glibc", "2.42-1", 10000000, 300000000]]
+    },
+    {
+      "arch": "arm64", "created": "2026-10-16T06:10:00Z", "version": "2026.10.16", "revision": "aaaa111",
+      "layers": [99614720], "dates": ["2026.10.15", "2026.10.16"], "anchors": ["7.1.0.r9.g54d9411-2"],
+      "hub_differs": ["arm64"],
+      "evidence": {"stored": "match"},
+      "packages": [["pacman", "7.1.0.r9.g54d9411-2", 880000, 4400000], ["bash", "5.3.9-1", 1800000, 260000000]]
+    },
+    {
+      "arch": "armv7", "created": "2026-10-16T06:20:00Z", "version": "2026.10.16", "revision": "aaaa111",
+      "layers": [83886080, 524288], "dates": ["2026.10.15", "2026.10.16"], "anchors": ["7.1.0.r9.g54d9411-2"],
+      "hub_missing": ["armv7h-v2026.10.15"],
+      "evidence": {"artifact": [1005, 1004, 1003, 1002, 1001], "match": [1001]},
+      "packages": [["pacman", "7.1.0.r9.g54d9411-2", 860000, 240000000]]
+    },
+    {
+      "arch": "loong64", "created": "2026-10-16T05:58:00Z", "version": "2026.10.16", "revision": "aaaa111",
+      "layers": [94371840], "dates": ["2026.10.16"], "anchors": ["7.1.0.r9.g54d9411-2"],
+      "plain_manifest": true,
+      "evidence": {"expired": [1002]},
+      "packages": []
+    },
+    {
+      "arch": "ppc", "created": "2026-09-05T09:15:00Z", "version": "2026.09.05", "revision": "bbbb222",
+      "layers": [73400320], "dates": ["2026.09.05"], "anchors": ["7.1.0.r9.g54d9411-2.2"],
+      "evidence": {"stored": "match"},
+      "packages": [["pacman", "7.1.0.r9.g54d9411-2.2", 700000, 3600000], ["bash", "5.3.3-1", 1500000, 190000000]]
+    },
+    {
+      "arch": "ppc64", "created": "2026-09-05T09:20:00Z", "version": "2026.09.05", "revision": "bbbb222",
+      "layers": [75497472], "dates": ["2026.09.05"], "anchors": ["7.1.0.r9.g54d9411-2.2"],
+      "image_code": 503,
+      "evidence": {},
+      "packages": []
+    },
+    {
+      "arch": "ppc64le", "created": "2026-09-05T09:25:00Z", "version": "2026.09.05", "revision": "bbbb222",
+      "layers": [77594624], "dates": ["2026.09.05"], "anchors": ["7.1.0.r9.g54d9411-2.2"],
+      "not_in_latest": true,
+      "evidence": {"stored": "old"},
+      "packages": [["pacman", "7.1.0.r9.g54d9411-2", 720000, 210000000]]
+    },
+    {
+      "arch": "riscv64", "created": "2026-10-16T07:40:00Z", "version": "2026.10.16", "revision": "aaaa111",
+      "layers": [89128960], "dates": ["2026.10.15", "2026.10.16"], "anchors": ["7.1.0.r9.g54d9411-2", "7.1.0.r9.g54d9411-2.1"],
+      "evidence": {"artifact": [1002], "match": [1002]},
+      "packages": [["pacman", "7.1.0.r9.g54d9411-2.1", 840000, 230000000], ["zlib", "1:1.3.2-1", 90000, 300000]]
+    }
+  ]
+}

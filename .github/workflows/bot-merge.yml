@@ -1,48 +1,56 @@
 name: Merge Renovate's pin bumps
 
-# ⭐ Renovate keeps every action and image pin moving. Each of its pull requests
-# used to wait for a person, and while it waited the pin went stale. This
-# merges the ones that only move pins, as soon as CI passes on them.
+# ⭐ Renovate moves each action pin, image pin and runner label.
+# This workflow approves and merges each Renovate pull request that only moves
+# pins, when the required checks pass on it.
 #
-# ⛔ What qualifies is decided by scripts/merge-bot-pr, from the pull request's
-# metadata and its diff, and it is narrow: Renovate's own branch, and every
-# changed line differing only in a hash, a digest or a version comment.
-# Anything labelled hold, a draft, and anything from a fork are left alone.
+# ⛔ scripts/merge-bot-pr decides from the metadata, the required check runs
+# and the diff of the pull request. It merges only a renovate/ branch whose
+# changed lines differ in a hash, a digest or a version, with no major version
+# change. It leaves a pull request that is a draft, from a fork, or has the
+# label hold.
 #
-# ⛔ The freshness pull requests are not merged here. The maintainer merges those
-# by hand, occasionally, decided 2026-10-13, and nothing breaks while one waits.
-# HISTORY/maintainer-actions.md section 4.
+# ⭐ The job starts on each completed CI run, whatever its conclusion. A job
+# that the required check does not need (network) can fail, and the pull
+# request still merges. scripts/merge-bot-pr reads the check runs of
+# tests/policy/required-checks on the head commit.
 #
-# ⛔ workflow_run, so this runs the default branch's copy of this file and of
-# the script, with nothing from the pull request executed. The branch name is
-# passed through env, never into the script text: a branch name is chosen by
-# whoever pushed it.
+# ⛔ A freshness/ pull request is not merged here. github-actions[bot] opens
+# it, and GitHub does not let the author of a pull request approve it. A
+# person merges it.
+#
+# ⛔ workflow_run: this runs the copy of this file and of the script on the
+# default branch. Nothing from the pull request runs. The branch name goes
+# through env, never into the script text.
+#
+# ⛔ workflows: [CI] is the name of ci.yml. When that name changes, this
+# workflow stops starting.
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
 
-defaults:
-  run:
-    shell: bash
-
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: bot-merge-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   merge:
     name: Merge it if it only moves pins
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
       startsWith(github.event.workflow_run.head_branch, 'renovate/')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
+      checks: read
       contents: write
       pull-requests: write
     steps:
@@ -56,4 +64,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: scripts/merge-bot-pr "$HEAD_BRANCH" "$HEAD_SHA"

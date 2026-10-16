@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+#
+# Decide what one run of the build workflow builds, and where it pushes.
+#
+#   scripts/plan-build [--dry-plan] [--fixtures DIR]
+#
+# The version is the UTC date. A port builds unless the target GHCR image
+# already has <first alias>-v<version>, the dated tag of that port for today.
+# So a second run on one day builds only the ports that did not publish in
+# the first. FORCE=true builds each port again. When the tag list cannot be
+# read, every port builds: the publish reads the list again before it tags.
+#
+# Environment:
+#   GHCR_IMAGE    the published GHCR image, ghcr.io/OWNER/NAME (required)
+#   HUB_IMAGE     the published Docker Hub image, docker.io/ORG/NAME (required)
+#   DRY_RUN       true: push to the scratch images, GHCR_IMAGE-ci and HUB_IMAGE-ci
+#   DRY_RUN_HUB   true: with DRY_RUN, also copy to the Docker Hub scratch image
+#   ARCHES        the ports to plan, space separated; empty for every port
+#   FORCE         true: build a port even when its dated tag exists
+#   PLAN_NOW      the time of the plan, YYYY-MM-DDTHH:MM:SSZ (default: now)
+#
+# Output, one KEY=VALUE line each, for $GITHUB_OUTPUT:
+#   version, build_date, target_image, hub_target, carry_image, hub_image,
+#   publish_hub, arches, skipped, matrix
+# carry_image and hub_image are the published images. A dry run reads them and
+# never writes them. matrix is `scripts/ports matrix` of arches, or [] for none.
+#
+# --dry-plan prints each decision as a line on stdout ("build ARCH" or
+# "skip ARCH TAG"), then each output as "output KEY=VALUE". Without it the
+# decisions go to stderr and stdout has the outputs only.
+# --fixtures DIR reads the tag lists from DIR and calls no registry:
+#   DIR/tags.tsv     REGISTRY<TAB>REPO<TAB>TAG, one tag per line
+#   DIR/unreadable   REGISTRY<TAB>REPO, a tag list that cannot be read; its
+#                    tags in tags.tsv are a part read, as a failed page gives
+#
+# Exit status: 0 planned (the arch list can be empty), 1 a bad input, 2 usage.
+set -euo pipefail
+shopt -s inherit_errexit
+
+PROG=plan-build
+# shellcheck source=scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORTS="$ROOT/scripts/ports"
+
+usage() {
+  sed -n '5p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  exit 2
+}
+
+dry=0
+FIXTURES=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dry-plan) dry=1 ;;
+    --fixtures)
+      [ "$#" -ge 2 ] || usage
+      FIXTURES="$2"
+      shift
+      ;;
+    *) usage ;;
+  esac
+  shift
+done
+need awk jq
+
+[ -n "${GHCR_IMAGE:-}" ] || die "GHCR_IMAGE is not set" "set it to ghcr.io/OWNER/NAME"
+[ -n "${HUB_IMAGE:-}" ] || die "HUB_IMAGE is not set" "set it to docker.io/ORG/NAME"
+if [ -n "$FIXTURES" ] && [ ! -f "$FIXTURES/tags.tsv" ]; then
+  die "--fixtures $FIXTURES has no tags.tsv"
+fi
+
+is_true() {
+  case "${1:-}" in
+    true) return 0 ;;
+    false | "") return 1 ;;
+    *) die "'$1' is not true or false" ;;
+  esac
+}
+
+# decide WORDS... -> a line on stdout with --dry-plan, on stderr without it
+decide() {
+  if [ "$dry" -eq 1 ]; then
+    printf '%s\n' "$*"
+  else
+    note "$*"
+  fi
+}
+
+# split_image IMAGE -> "REGISTRY REPO"
+split_image() {
+  local first="${1%%/*}"
+  case "$first" in
+    *.* | *:* | localhost) printf '%s %s\n' "$first" "${1#*/}" ;;
+    *) printf 'docker.io %s\n' "$1" ;;
+  esac
+}
+
+# read_tags REGISTRY REPO OUT -> 0 read, 1 could not read
+# ⚠ After 1, OUT can hold part of the list: reg_tags stops at the page that
+# fails. The fixture reader writes the list and then returns 1 the same way.
+read_tags() {
+  if [ -n "$FIXTURES" ]; then
+    awk -F'\t' -v r="$1" -v p="$2" '$1 == r && $2 == p && NF >= 3 { print $3 }' "$FIXTURES/tags.tsv" > "$3"
+    if [ -f "$FIXTURES/unreadable" ] &&
+      awk -F'\t' -v r="$1" -v p="$2" '$1 == r && $2 == p { f = 1 } END { exit f ? 0 : 1 }' "$FIXTURES/unreadable"; then
+      return 1
+    fi
+    return 0
+  fi
+  reg_tags "$1" "$2" "$3"
+}
+
+#---------------------------------------------------------------------------#
+# Time and targets.
+#---------------------------------------------------------------------------#
+now="${PLAN_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+[[ "$now" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
+  die "the plan time '$now' is not YYYY-MM-DDTHH:MM:SSZ"
+version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+
+dry_run=0
+dry_run_hub=0
+is_true "${DRY_RUN:-}" && dry_run=1
+is_true "${DRY_RUN_HUB:-}" && dry_run_hub=1
+force=0
+is_true "${FORCE:-}" && force=1
+
+# ⛔ dry_run_hub alone would take the real images and look like a test.
+if [ "$dry_run_hub" -eq 1 ] && [ "$dry_run" -eq 0 ]; then
+  die "dry_run_hub needs dry_run: alone it would publish to the real images" \
+    "dispatch again with dry_run and dry_run_hub, or with neither"
+fi
+
+if [ "$dry_run" -eq 1 ]; then
+  target_image="$GHCR_IMAGE-ci"
+  hub_target="$HUB_IMAGE-ci"
+  publish_hub=false
+  [ "$dry_run_hub" -eq 1 ] && publish_hub=true
+else
+  target_image="$GHCR_IMAGE"
+  hub_target="$HUB_IMAGE"
+  publish_hub=true
+fi
+
+#---------------------------------------------------------------------------#
+# The ports to consider.
+#---------------------------------------------------------------------------#
+all="$("$PORTS" list)"
+want=""
+if [ -z "$(tr -d '[:space:]' <<< "${ARCHES:-}")" ]; then
+  want="$all"
+else
+  for w in $ARCHES; do
+    grep -qxF -- "$w" <<< "$all" || die "ARCHES names '$w', which is not a port" \
+      "ports: $(tr '\n' ' ' <<< "$all")"
+  done
+  # Port order, each port once.
+  want="$(awk 'NR == FNR { for (i = 1; i <= NF; i++) w[$i] = 1; next } ($1 in w)' \
+    <(printf '%s\n' "$ARCHES") <(printf '%s\n' "$all"))"
+fi
+
+#---------------------------------------------------------------------------#
+# The ports that already have today's dated tag.
+#---------------------------------------------------------------------------#
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+read -r reg repo <<< "$(split_image "$target_image")"
+listed=1
+if ! read_tags "$reg" "$repo" "$work/tags"; then
+  listed=0
+  warn "the tag list of $target_image cannot be read, so every planned port builds"
+fi
+
+arches=""
+skipped=""
+while IFS= read -r a; do
+  [ -n "$a" ] || continue
+  first="$("$PORTS" aliases "$a" | awk 'NR == 1')"
+  tag="$first-v$version"
+  if [ "$force" -eq 0 ] && [ "$listed" -eq 1 ] && grep -qxF -- "$tag" "$work/tags"; then
+    skipped="$skipped $a"
+    decide "skip $a $tag"
+  else
+    arches="$arches $a"
+    decide "build $a"
+  fi
+done <<< "$want"
+arches="${arches# }"
+skipped="${skipped# }"
+
+if [ -n "$arches" ]; then
+  # shellcheck disable=SC2086 # one port per word
+  matrix="$("$PORTS" matrix $arches)"
+else
+  matrix="[]"
+  decide "stand down: each planned port has its dated tag for $version"
+fi
+jq -e 'type == "array"' > /dev/null <<< "$matrix" || die "the matrix is not a JSON array: $matrix"
+
+#---------------------------------------------------------------------------#
+# Outputs.
+#---------------------------------------------------------------------------#
+out() {
+  if [ "$dry" -eq 1 ]; then
+    printf 'output %s=%s\n' "$1" "$2"
+  else
+    printf '%s=%s\n' "$1" "$2"
+  fi
+}
+out version "$version"
+out build_date "$now"
+out target_image "$target_image"
+out hub_target "$hub_target"
+out carry_image "$GHCR_IMAGE"
+out hub_image "$HUB_IMAGE"
+out publish_hub "$publish_hub"
+out arches "$arches"
+out skipped "$skipped"
+out matrix "$matrix"

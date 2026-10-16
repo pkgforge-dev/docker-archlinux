@@ -1,0 +1,97 @@
+# Version comparison vectors: A, B and the result of vercmp A B.
+# The test also checks vercmp B A, which must give the opposite result.
+# The first block is the list in pacman's test/util/vercmptest.sh.
+# Columns are separated by one tab.
+#
+# all similar length, no pkgrel
+1.5.0	1.5.0	0
+1.5.1	1.5.0	1
+# mixed length
+1.5.1	1.5	1
+# with pkgrel, simple
+1.5.0-1	1.5.0-1	0
+1.5.0-1	1.5.0-2	-1
+1.5.0-1	1.5.1-1	-1
+1.5.0-2	1.5.1-1	-1
+# with pkgrel, mixed lengths
+1.5-1	1.5.1-1	-1
+1.5-2	1.5.1-1	-1
+1.5-2	1.5.1-2	-1
+# mixed pkgrel inclusion
+1.5	1.5-1	0
+1.5-1	1.5	0
+1.1-1	1.1	0
+1.0-1	1.1	-1
+1.1-1	1.0	1
+# alphanumeric versions
+1.5b-1	1.5-1	-1
+1.5b	1.5	-1
+1.5b-1	1.5	-1
+1.5b	1.5.1	-1
+# from the manual page
+1.0a	1.0alpha	-1
+1.0alpha	1.0b	-1
+1.0b	1.0beta	-1
+1.0beta	1.0rc	-1
+1.0rc	1.0	-1
+# alpha-dotted versions
+1.5.a	1.5	1
+1.5.b	1.5.a	1
+1.5.1	1.5.b	1
+# alpha dots and dashes
+1.5.b-1	1.5.b	0
+1.5-1	1.5.b	-1
+# same or similar content, different separators
+2.0	2_0	0
+2.0_a	2_0.a	0
+2.0a	2.0.a	-1
+2___a	2_a	1
+# epoch included in both
+0:1.0	0:1.0	0
+0:1.0	0:1.1	-1
+1:1.0	0:1.0	1
+1:1.0	0:1.1	1
+1:1.0	2:1.1	-1
+# epoch, and a pkgrel on one side only
+1:1.0	0:1.0-1	1
+1:1.0-1	0:1.1-1	1
+# epoch included on one version
+0:1.0	1.0	0
+0:1.0	1.1	-1
+0:1.1	1.0	1
+1:1.0	1.0	1
+1:1.0	1.1	1
+1:1.1	1.1	1
+#
+# More vectors, each worked through the algorithm in version.c.
+#
+# a longer version is newer when the shared part is equal
+1.0.0	1.0	1
+1.0	1.0.0	-1
+# an epoch is stronger than any version
+1:1.0	2.0	1
+# an empty epoch is 0
+:1.0	1.0	0
+# leading zeros do not count
+1.01	1.1	0
+1.001	1.1	0
+# the longer number is newer
+1.10	1.9	1
+1.100	1.99	1
+# a number longer than any integer type
+1.20000000000000000000	1.3	1
+# a numeric segment is newer than an alpha segment
+1.0.1	1.0.a	1
+# ~ is a separator for pacman, not an "older than" mark
+1.0~rc1	1.0	1
+# pkgrel compares as a version
+1.0-10	1.0-9	1
+1.0-2.1	1.0-2	1
+# the anchors this repository tags
+7.1.0.r9.g54d9411-2	7.1.0.r9.g54d9411-2.1	-1
+7.1.0.r9.g54d9411-2.2	7.1.0.r9.g54d9411-2.1	1
+7.1.0.r9.g54d9411-2	7.1.0-1	1
+7.1.0.r9.g54d9411-1	7.1.0.r10.gabcdef0-1	-1
+7.0.0.r6.g1234567-1	7.1.0.r9.g54d9411-2	-1
+# letters compare in ASCII order: upper case before lower case
+1.0A	1.0a	-1

@@ -1,233 +1,444 @@
 #!/usr/bin/env bash
 #
-# Build a statically linked pacman for one architecture, from source.
+# Build a statically linked pacman for one port, from the sources that
+# bootstrap/pacman-static/sources.pin pins.
 #
-#   scripts/build-pacman-static <amd64|arm64|armv7|loong64|riscv64|ppc|ppc64|ppc64le>
+#   scripts/build-pacman-static ARCH
+#       Build OUT/pacman-static-ARCH and its evidence file
+#       OUT/pacman-static-ARCH.json.
+#   scripts/build-pacman-static --fetch
+#       Download every zig and source record of the pin into WORK/dl and
+#       check each sha256. Remove other files from WORK/dl. Build nothing.
+#   scripts/build-pacman-static --describe ARCH
+#       Print the target facts for ARCH as key=value lines. Build nothing.
+#   scripts/build-pacman-static --check-evidence FILE
+#       Check an evidence file: the signed tag was verified, the binary ran
+#       under its emulator, and the binary is static.
+#   scripts/build-pacman-static --zig
+#       Print the path of the zig that a build uses and the version that it
+#       reports. Unpack the pinned zig into WORK when necessary.
 #
-# The trust root of an image build today is one container image plus working
-# mirrors. This removes the first: with this binary and a keyring pin, a root
-# can be built on a host that has no pacman, no libalpm and no Arch keyring.
+# ARCH is a port from scripts/ports list. Every fact about the target comes
+# from ports/ARCH.conf through scripts/ports.
 #
-# ⛔ Every input is pinned in bootstrap/pacman-static/sources.pin and verified
-# before it is used. Nothing is downloaded that is not named there, and a
-# checksum that does not match stops the build rather than being re-fetched.
+# The result is a release asset. ⛔ The Dockerfile does not call this script
+# and does not read the pin.
 #
-# ⛔ Nothing here runs during an image build. The Dockerfile does not call this
-# script and does not read the pin. This produces release assets.
+# ⛔ The build uses only inputs that the pin names. A tarball is used only when
+# its sha256 equals the pin. pacman is used only at the pinned commit.
 #
 # Environment:
-#   WORK   scratch directory, default a fresh mktemp -d. Reused across runs,
-#          so a second architecture does not re-download the sources.
-#   OUT    where the binary and its evidence file are written, default $WORK/dist
-#   ZIG    an already unpacked zig, default $WORK/zig/zig
-#   JOBS   parallelism, default nproc
+#   WORK               work directory. Default: a new directory from mktemp -d.
+#                      WORK/dl keeps each download under its sha256, so a
+#                      second run and a second port download nothing again.
+#   OUT                output directory. Default: WORK/dist.
+#   ZIG                an unpacked zig binary. Default: the pinned zig, in
+#                      WORK/zig-<sha256 of the pin>. The evidence file records
+#                      the version that the zig binary reports.
+#   JOBS               parallel jobs. Default: nproc.
+#   PACMAN_TAG_VERIFY  "required" (default) or "skip". skip writes SKIPPED
+#                      into the evidence file.
+#   PORTS_DIR          the port table directory, read by scripts/ports.
 #
-# ⚠ The source trees are extracted fresh per architecture, every time. A tree
-# configured once for one target keeps that target's absolute paths in
-# config.status and in the .pc files it generates, and the second architecture
-# then links the first architecture's objects. The prefix leak check below is
-# the assertion for that, and it is not decoration.
+# Exit status: 0 done, 1 a failure, 2 usage.
+#
+# ⚠ Each run extracts the source trees again for each port. A tree configured
+# for one target keeps that target's absolute paths. The prefix leak check
+# finds a tree that was used for two targets.
 set -euo pipefail
+
+PROG=build-pacman-static
+# shellcheck source=scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PIN="$REPO_ROOT/bootstrap/pacman-static/sources.pin"
+KEYS_DIR="$REPO_ROOT/bootstrap/pacman-static/keys"
+PORTS="$REPO_ROOT/scripts/ports"
 
-# The signed tag result, filled in by verify_pacman_tag and recorded in the
-# evidence file. NOT VERIFIED is the value that survives if the verification
-# never runs, so an evidence file can never imply a check that did not happen.
+# The lowest meson that detects the linker of zig: mesonbuild/linkers/detect.py
+# matches the banner "zig ld" from 1.6.0. An older meson stops at the pacman
+# step with "Unable to detect linker", after every library is built.
+MESON_MIN=1.6.0
+
+# The commands this script calls on the host. docs/bootstrap-with-pacman-static.md
+# lists the same set.
+HOST_TOOLS="curl sha256sum tar xz bzip2 gzip git make perl pkg-config readelf meson ninja gperf gpg"
+
+# The result of the tag verification. "NOT VERIFIED" stays in the evidence file
+# when the verification does not run.
 TAG_VERIFIED="NOT VERIFIED"
 TAG_SIGNER="NOT VERIFIED"
+TAG_KEY_SOURCE="-"
 
-die() {
-  echo "build-pacman-static: $1" >&2
-  shift
-  while [ "$#" -gt 0 ]; do
-    echo "  $1" >&2
-    shift
-  done
-  exit 1
+usage() {
+  sed -n '3,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  exit 2
 }
 
-# ⛔ Progress goes to stderr, and that is not a style choice.
-#
-# ensure_zig and src_of return a path through a command substitution, and both
-# print progress on the way. With step writing to stdout, ZIGBIN="$(ensure_zig)"
-# captured the banner as well as the path and every wrapper it wrote began
-#
-#   exec ==> zig x86_64-linux
-#   /tmp/ps/zig/zig cc -target x86_64-linux-musl "$@"
-#
-# so /bin/sh tried to exec a program called "==". zlib's configure reported
-# "Missing or broken C compiler" and the build stopped there, on all eight
-# architectures. Measured 2026-08-29 in run 33206329907, the first time this
-# workflow ran on a GitHub runner.
-#
-# ⚠ It never fired on the workstation because ensure_zig prints nothing when zig
-# is already unpacked at $WORK/zig/zig or named by $ZIG, which is the state every
-# run after the first is in.
+# ⛔ Progress goes to stderr. ensure_zig, fetch and src_of give a path on
+# stdout through a command substitution. Progress on stdout becomes part of
+# that path, and every compiler wrapper then fails.
 step() { echo "==> $*" >&2; }
 
 #---------------------------------------------------------------------------#
-# The architecture table.
-#
-# Six spellings name one architecture and none of them is derivable from
-# another, so all six are written down once, here.
-#
-#   1 the directory name this repository uses, which is the argument
-#   2 the zig target triple
-#   3 the autotools host triplet
-#   4 OpenSSL's Configure target
-#   5 the ELF machine string readelf prints, which is what proves the output
-#   6 the qemu-user binary, whose name is not the triple prefix
-#   7 the Architecture value a pacman.conf for this port carries
-#
-# ⛔ 32 bit PowerPC is powerpc-linux-musleabi, not powerpc-linux-musl. The
-# latter is not a target zig has: it answers "'pthread.h' file not found",
-# which reads like a broken toolchain rather than a wrong triple.
-#
-# ⚠ qemu names ppc, ppc64 and ppc64le where the triple says powerpc. A script
-# deriving the emulator name by cutting the triple reports "no emulator" for
-# one that is installed, and then prints a dash in a results column, which
-# reads like a pass.
+# The pin
 #---------------------------------------------------------------------------#
-arch_row() {
-  case "$1" in
-    amd64)       echo "x86_64-linux-musl x86_64-unknown-linux-musl linux-x86_64 Advanced_Micro_Devices_X86-64 qemu-x86_64-static x86_64 x86_64 little" ;;
-    arm64)       echo "aarch64-linux-musl aarch64-unknown-linux-musl linux-aarch64 AArch64 qemu-aarch64-static aarch64 aarch64 little" ;;
-    armv7)       echo "arm-linux-musleabihf arm-unknown-linux-musleabihf linux-armv4 ARM qemu-arm-static armv7h arm little" ;;
-    loong64)     echo "loongarch64-linux-musl loongarch64-unknown-linux-musl linux64-loongarch64 LoongArch qemu-loongarch64-static loong64 loongarch64 little" ;;
-    riscv64)     echo "riscv64-linux-musl riscv64-unknown-linux-musl linux64-riscv64 RISC-V qemu-riscv64-static riscv64 riscv64 little" ;;
-    ppc)         echo "powerpc-linux-musleabi powerpc-unknown-linux-musleabi linux-ppc PowerPC qemu-ppc-static powerpc ppc big" ;;
-    ppc64)       echo "powerpc64-linux-musl powerpc64-unknown-linux-musl linux-ppc64 PowerPC64 qemu-ppc64-static powerpc64 ppc64 big" ;;
-    ppc64le)     echo "powerpc64le-linux-musl powerpc64le-unknown-linux-musl linux-ppc64le PowerPC64 qemu-ppc64le-static powerpc64le ppc64 little" ;;
-    *) return 1 ;;
-  esac
-}
 
-arch="${1:-}"
-[ -n "$arch" ] || die "usage: build-pacman-static <arch>" \
-  "one of: amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le"
-
-row="$(arch_row "$arch")" || die "unknown architecture: $arch" \
-  "one of: amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le"
-
-read -r TRIPLE HOSTTRIPLET OSSLTARGET ELFMACHINE QEMU PACMAN_ARCH CPUFAMILY ENDIAN <<< "$row"
-# The ELF machine string carries spaces, so the table holds it with underscores.
-ELFMACHINE="${ELFMACHINE//_/ }"
-
-[ -f "$PIN" ] || die "no source pin at $PIN" \
-  "the pin names every tarball, its sha256 and pacman's commit" \
-  "without it nothing can be verified, so nothing is fetched"
-
-WORK="${WORK:-$(mktemp -d)}"
-OUT="${OUT:-$WORK/dist}"
-if [ -z "${JOBS:-}" ]; then
-  if command -v nproc >/dev/null; then
-    JOBS="$(nproc)"
-  else
-    JOBS=2
-  fi
-fi
-mkdir -p "$WORK/dl" "$OUT"
-
-DL="$WORK/dl"
-SRC="$WORK/src/$arch"
-PREFIX="$WORK/out/$arch"
-BIN="$WORK/bin/$arch"
-rm -rf "$SRC" "$PREFIX" "$BIN"
-mkdir -p "$SRC" "$PREFIX/lib/pkgconfig" "$PREFIX/include" "$BIN"
-
-# zig writes its caches under HOME by default, and a CI runner's HOME is not
-# always writable from the step that runs this.
-export ZIG_GLOBAL_CACHE_DIR="$WORK/zig-cache"
-export ZIG_LOCAL_CACHE_DIR="$WORK/zig-cache"
-mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
-
-#---------------------------------------------------------------------------#
-# pin readers
-#---------------------------------------------------------------------------#
-pin_field() { # pin_field KIND [SELECTOR] -> the matching record's remaining fields
+# pin_field KIND [SELECTOR] -> the other fields of the first matching record
+pin_field() {
   awk -v kind="$1" -v sel="${2:-}" '
-    $1 == kind {
-      if (sel == "" || $2 == sel) { $1 = ""; sub(/^[[:space:]]+/, ""); print; exit }
+    $1 == kind && (sel == "" || $2 == sel) && !done {
+      $1 = ""; sub(/^[[:space:]]+/, ""); print; done = 1
     }
   ' "$PIN"
 }
 
-pin_sources() {
-  awk '$1 == "source" { print $2, $3, $4, $5 }' "$PIN"
+# pin_source_names -> the name of each source record, in pin order
+pin_source_names() {
+  awk '$1 == "source" { print $2 }' "$PIN"
 }
 
+# mirrors_of NAME -> each mirror URL of the record NAME, in pin order
+mirrors_of() {
+  awk -v n="$1" '$1 == "mirror" && $2 == "=" && $3 == n { print $4 }' "$PIN"
+}
+
+ver_of() { awk -v n="$1" '$1 == "source" && $2 == n { print $3 }' "$PIN"; }
+
 #---------------------------------------------------------------------------#
-# fetch URL SHA256 -> path in $DL
+# fetch NAME URL SHA256 -> the path of the verified file in $DL
 #
-# ⛔ -f is load-bearing. Without it a host answering 403 returns exit 0 with an
-# error page in the file, and the failure surfaces later as a corrupt archive.
+# ⭐ The file name is the sha256, so a cached file is the pinned bytes or is
+# fetched again. Two records with the same URL base name cannot collide.
+#
+# The URL of the record comes first, then each mirror line of NAME. A download
+# with a different sha256 is deleted and the next URL is tried.
 #---------------------------------------------------------------------------#
 fetch() {
-  local url="$1" want="$2" out
-  out="$DL/$(basename "$url")"
-  if [ -f "$out" ] && [ "$(sha256sum "$out" | cut -c1-64)" = "$want" ]; then
+  local name="$1" url="$2" want="$3" out part got code rc u tried=""
+  out="$DL/$want"
+  if [ -f "$out" ]; then
+    got="$(sha256sum "$out" | awk '{ print $1 }')"
+    if [ "$got" = "$want" ]; then
+      note "$name: from the download cache"
+      printf '%s\n' "$out"
+      return 0
+    fi
+    warn "$name: the cached file $out has sha256 $got, the pin says $want"
+    rm -f "$out"
+  fi
+  part="$out.part"
+  while IFS= read -r u; do
+    [ -n "$u" ] || continue
+    rm -f "$part"
+    rc=0
+    code="$(HTTP_TRIES=2 HTTP_MAX_TIME=900 HTTP_CONNECT_TIMEOUT=20 \
+      http_get "$u" "$part" --speed-limit 10240 --speed-time 60)" || rc=$?
+    if [ "$rc" -ne 0 ] || [ "$code" != 200 ]; then
+      warn "$name: $u answered HTTP ${code:-000}"
+      tried="$tried; $u: HTTP ${code:-000}"
+      continue
+    fi
+    got="$(sha256sum "$part" | awk '{ print $1 }')"
+    if [ "$got" != "$want" ]; then
+      warn "$name: $u gave sha256 $got, the pin says $want"
+      tried="$tried; $u: sha256 $got"
+      continue
+    fi
+    mv -f "$part" "$out"
+    note "$name: from $u"
     printf '%s\n' "$out"
     return 0
-  fi
-  rm -f "$out"
-  curl -sSfL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 900 \
-    -o "$out" "$url" \
-    || die "cannot fetch $url" "the pin names this URL and no substitute" \
-           "check it with: curl -sSI --connect-timeout 20 --max-time 60 $url"
-  local got
-  got="$(sha256sum "$out" | cut -c1-64)"
-  if [ "$got" != "$want" ]; then
-    rm -f "$out"
-    die "sha256 mismatch for $url" "pinned:   $want" "delivered: $got" \
-      "⛔ nothing is re-fetched from elsewhere. Either upstream replaced the" \
-      "  artefact or the transfer was tampered with. Both need a person."
-  fi
-  printf '%s\n' "$out"
+  done <<< "$(printf '%s\n' "$url"; mirrors_of "$name")"
+  rm -f "$part"
+  die "no URL gave $name with the pinned sha256 $want" \
+    "tried: ${tried#; }" \
+    "the pin names the URL of the record and its mirror lines, and nothing else" \
+    "reproduce: curl -sSfL --connect-timeout 20 --max-time 900 -o f $url && sha256sum f"
+}
+
+# fetch_all: every zig and source record, for every host. Used by --fetch.
+fetch_all() {
+  local kind f2 f3 f4 f5 n=0 keep path
+  while read -r kind f2 f3 f4 f5; do
+    case "$kind" in
+      zig) path="$(fetch "zig-$f3" "$f4" "$f5")" ;;
+      source) path="$(fetch "$f2" "$f4" "$f5")" ;;
+      *) continue ;;
+    esac
+    [ -f "$path" ] || die "fetch gave no file for the record of $f2 $f3"
+    n=$((n + 1))
+  done <<< "$(awk '$1 == "zig" || $1 == "source"' "$PIN")"
+  [ "$n" -gt 0 ] || die "the pin has no zig and no source record" \
+    "reproduce: awk '\$1 == \"zig\" || \$1 == \"source\"' $PIN"
+  keep="$(awk '$1 == "zig" || $1 == "source" { print $5 }' "$PIN")"
+  local f base
+  for f in "$DL"/*; do
+    [ -e "$f" ] || continue
+    base="$(basename "$f")"
+    if ! printf '%s\n' "$keep" | awk -v b="$base" '$0 == b { hit = 1 } END { exit hit ? 0 : 1 }'; then
+      note "remove $base from the download cache: no record of the pin names it"
+      rm -f "$f"
+    fi
+  done
+  note "$n files in $DL, each with the pinned sha256"
 }
 
 #---------------------------------------------------------------------------#
-# the toolchain
+# ensure_zig -> the path of the zig binary that the build uses
+#
+# ZIG when it names an executable. Else the zig record of the pin for this
+# host, unpacked into WORK/zig-<sha256>. ⭐ The directory name is the pinned
+# sha256: after a pin change a reused WORK unpacks the new zig, and never
+# gives the old one.
 #---------------------------------------------------------------------------#
 ensure_zig() {
   if [ -n "${ZIG:-}" ] && [ -x "$ZIG" ]; then
     printf '%s\n' "$ZIG"
     return 0
   fi
-  if [ -x "$WORK/zig/zig" ]; then
-    printf '%s\n' "$WORK/zig/zig"
+  local host rec url sha tarball dir
+  host="$(uname -m)-linux"
+  rec="$(awk -v h="$host" '$1 == "zig" && $3 == h { print $4, $5 }' "$PIN")"
+  [ -n "$rec" ] || die "the pin has no zig record for the host $host" \
+    "the pin has: $(awk '$1 == "zig" { printf "%s ", $3 }' "$PIN")" \
+    "measure one: curl -sSfL --connect-timeout 20 --max-time 900 -o z URL && sha256sum z" \
+    "then add a zig line to $PIN"
+  read -r url sha <<< "$rec"
+  dir="$WORK/zig-$sha"
+  if [ -x "$dir/zig" ]; then
+    printf '%s\n' "$dir/zig"
     return 0
   fi
-  local host rec url sha tarball
-  case "$(uname -m)" in
-    x86_64) host=x86_64-linux ;;
-    aarch64) host=aarch64-linux ;;
-    *) die "no zig pinned for this host architecture: $(uname -m)" \
-         "the pin carries x86_64-linux and aarch64-linux" \
-         "check it with: curl -sSfL -o z URL && sha256sum z, then add a zig line to $PIN" ;;
-  esac
-  rec="$(awk -v h="$host" '$1 == "zig" && $3 == h { print $4, $5 }' "$PIN")"
-  [ -n "$rec" ] || die "the pin has no zig record for host $host"
-  read -r url sha <<< "$rec"
   step "zig $host"
-  tarball="$(fetch "$url" "$sha")"
-  mkdir -p "$WORK/zig"
-  tar xf "$tarball" -C "$WORK/zig" --strip-components=1
-  printf '%s\n' "$WORK/zig/zig"
+  tarball="$(fetch "zig-$host" "$url" "$sha")"
+  # Unpack into DIR.part, then rename. A cut unpack leaves no DIR that a
+  # later run takes as complete.
+  rm -rf "$dir.part" "$dir"
+  mkdir -p "$dir.part"
+  tar xf "$tarball" -C "$dir.part" --strip-components=1
+  mv "$dir.part" "$dir"
+  printf '%s\n' "$dir/zig"
 }
 
-ZIGBIN="$(ensure_zig)"
+# zig_version BIN -> the version that BIN reports. ⛔ The evidence records the
+# zig that ran, not the version that the pin names.
+zig_version() {
+  local out rc=0
+  out="$("$1" version 2>&1)" || rc=$?
+  [ "$rc" -eq 0 ] && [ -n "$out" ] || die "$1 version failed (exit $rc)" \
+    "it said: $(printf '%s\n' "$out" | awk 'NR == 1')" \
+    "reproduce: $1 version"
+  printf '%s\n' "$out" | awk 'NR == 1'
+}
 
-# Wrapper scripts rather than a multi-word CC. autotools, cmake and meson each
-# split CC differently, and a two word compiler has broken all three at some
-# point. One executable per tool is unambiguous everywhere.
+#---------------------------------------------------------------------------#
+# --check-evidence FILE
+#
+# ⛔ A release asset needs three facts: a verified signed tag, a binary that
+# ran under its emulator, and no dynamic loader. "NOT VERIFIED", "SKIPPED" and
+# "NOT MEASURED" are correct values for a local build. They must not reach a
+# release.
+#---------------------------------------------------------------------------#
+check_evidence() {
+  local ev="$1" faults="" v
+  need jq
+  [ -f "$ev" ] || die "no evidence file at $ev" "reproduce: ls -l $ev"
+  jq -e . "$ev" > /dev/null || die "$ev is not JSON" "reproduce: jq . $ev"
+  v="$(jq -r '.pacman_tag_verified_by // ""' "$ev")"
+  [[ "$v" =~ ^[0-9A-F]{40}$ ]] \
+    || faults="$faults|the signed tag was not verified: pacman_tag_verified_by is '$v'"
+  v="$(jq -r '.reported_version // ""' "$ev")"
+  case "$v" in
+    "" | "NOT MEASURED") faults="$faults|the binary did not run: reported_version is '$v'" ;;
+  esac
+  v="$(jq -r '.interp_segments // "missing"' "$ev")"
+  [ "$v" = 0 ] || faults="$faults|the binary names a dynamic loader: interp_segments is '$v'"
+  v="$(jq -r '.sha256 // ""' "$ev")"
+  [[ "$v" =~ ^[0-9a-f]{64}$ ]] || faults="$faults|sha256 is '$v'"
+  if [ -n "$faults" ]; then
+    echo "$PROG: $ev is not release evidence:" >&2
+    printf '%s\n' "${faults#|}" | tr '|' '\n' | sed 's/^/  /' >&2
+    echo "  reproduce: jq '{pacman_tag_verified_by, reported_version, interp_segments, sha256}' $ev" >&2
+    exit 1
+  fi
+  note "$ev: tag verified by $(jq -r .pacman_tag_verified_by "$ev"), ran as $(jq -r .reported_version "$ev")"
+}
+
+#---------------------------------------------------------------------------#
+# Arguments
+#---------------------------------------------------------------------------#
+mode=build
+arch=""
+case "${1:-}" in
+  --fetch)
+    [ "$#" -eq 1 ] || usage
+    mode=fetch
+    ;;
+  --describe)
+    [ "$#" -eq 2 ] || usage
+    mode=describe
+    arch="$2"
+    ;;
+  --check-evidence)
+    [ "$#" -eq 2 ] || usage
+    check_evidence "$2"
+    exit 0
+    ;;
+  --zig)
+    [ "$#" -eq 1 ] || usage
+    mode=zig
+    ;;
+  "" | -h | --help | -*) usage ;;
+  *)
+    [ "$#" -eq 1 ] || usage
+    arch="$1"
+    ;;
+esac
+
+[ -f "$PIN" ] || die "no source pin at $PIN" \
+  "the pin names every tarball, its sha256 and the pacman commit" \
+  "reproduce: ls -l $PIN"
+
+if [ "$mode" = fetch ]; then
+  need curl sha256sum
+  WORK="${WORK:-$(mktemp -d)}"
+  DL="$WORK/dl"
+  mkdir -p "$DL"
+  fetch_all
+  exit 0
+fi
+
+if [ "$mode" = zig ]; then
+  need curl sha256sum tar
+  WORK="${WORK:-$(mktemp -d)}"
+  DL="$WORK/dl"
+  mkdir -p "$DL"
+  zig="$(ensure_zig)"
+  printf '%s %s\n' "$zig" "$(zig_version "$zig")"
+  exit 0
+fi
+
+#---------------------------------------------------------------------------#
+# The target facts. ⛔ All come from ports/ARCH.conf. This script carries no
+# table of architectures.
+#---------------------------------------------------------------------------#
+known="$("$PORTS" list)"
+if ! printf '%s\n' "$known" | awk -v a="$arch" '$0 == a { hit = 1 } END { exit hit ? 0 : 1 }'; then
+  die "unknown port: $arch" "known: $(printf '%s' "$known" | tr '\n' ' ')" \
+    "reproduce: scripts/ports list"
+fi
+
+port() { "$PORTS" get "$arch" "$1"; }
+TRIPLE="$(port zig_triple)"
+HOSTTRIPLET="$(port host_triplet)"
+OSSLTARGET="$(port openssl_target)"
+ELFMACHINE="$(port elf_machine)"
+# ports/*.conf names the emulator without -static. The qemu-user-static
+# package installs each one with the suffix.
+QEMU="$(port qemu)-static"
+PACMAN_ARCH="$(port pacman_arch)"
+CPUFAMILY="$(port meson_cpu_family)"
+ENDIAN="$(port endian)"
+
+if [ "$mode" = describe ]; then
+  printf 'arch=%s\n' "$arch"
+  printf 'zig_triple=%s\n' "$TRIPLE"
+  printf 'host_triplet=%s\n' "$HOSTTRIPLET"
+  printf 'openssl_target=%s\n' "$OSSLTARGET"
+  printf 'elf_machine=%s\n' "$ELFMACHINE"
+  printf 'emulator=%s\n' "$QEMU"
+  printf 'pacman_arch=%s\n' "$PACMAN_ARCH"
+  printf 'meson_cpu_family=%s\n' "$CPUFAMILY"
+  printf 'endian=%s\n' "$ENDIAN"
+  exit 0
+fi
+
+#---------------------------------------------------------------------------#
+# Host checks, before any download.
+#---------------------------------------------------------------------------#
+tools="$HOST_TOOLS"
+if [ "${PACMAN_TAG_VERIFY:-required}" = skip ]; then
+  tools="${tools/ gpg/}"
+fi
+missing=""
+for t in $tools; do
+  command -v "$t" > /dev/null || missing="$missing $t"
+done
+[ -z "$missing" ] || die "these host tools are missing:$missing" \
+  "the build calls each of them" \
+  "docs/bootstrap-with-pacman-static.md gives the install commands" \
+  "reproduce: command -v$missing"
+
+# ⚠ meson's own words are kept. A broken pip install says why on stderr.
+meson_version=""
+rc=0
+meson_version="$(meson --version 2>&1 | tr -d '\r')" || rc=$?
+[ "$rc" -eq 0 ] && [ -n "$meson_version" ] || die "meson --version failed (exit $rc)" \
+  "meson said: $(printf '%s' "$meson_version" | awk 'NR == 1')" \
+  "reproduce: meson --version"
+
+# Compare field by field as integers. A string compare puts 1.10 below 1.6.
+if ! awk -v got="$meson_version" -v want="$MESON_MIN" 'BEGIN {
+       n = split(got, g, ".")
+       split(want, w, ".")
+       for (i = 1; i <= 3; i++) {
+         a = (i <= n) ? g[i] + 0 : 0
+         b = w[i] + 0
+         if (a > b) exit 0
+         if (a < b) exit 1
+       }
+       exit 0
+     }'; then
+  die "meson $meson_version is too old: $MESON_MIN or newer is necessary" \
+    "meson detects the zig linker from $MESON_MIN (mesonbuild/linkers/detect.py)" \
+    "an older meson stops at the pacman step with \"Unable to detect linker\"" \
+    "install the pinned one: scripts/install-tools DIR meson, then put DIR first on PATH" \
+    "reproduce: meson --version"
+fi
+
+WORK="${WORK:-$(mktemp -d)}"
+DL="$WORK/dl"
+OUT="${OUT:-$WORK/dist}"
+if [ -z "${JOBS:-}" ]; then
+  if command -v nproc > /dev/null; then
+    JOBS="$(nproc)"
+  else
+    JOBS=2
+  fi
+fi
+mkdir -p "$DL" "$OUT"
+
+SRC="$WORK/src/$arch"
+PREFIX="$WORK/out/$arch"
+BIN="$WORK/bin/$arch"
+rm -rf "$SRC" "$PREFIX" "$BIN"
+mkdir -p "$SRC" "$PREFIX/lib/pkgconfig" "$PREFIX/include" "$BIN"
+
+# zig writes its caches under HOME by default. HOME is not always writable on
+# a CI runner.
+export ZIG_GLOBAL_CACHE_DIR="$WORK/zig-cache"
+export ZIG_LOCAL_CACHE_DIR="$WORK/zig-cache"
+mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
+
+#---------------------------------------------------------------------------#
+# The toolchain
+#---------------------------------------------------------------------------#
+ZIGBIN="$(ensure_zig)"
+ZIG_VERSION="$(zig_version "$ZIGBIN")"
+note "zig $ZIG_VERSION: $ZIGBIN"
+
+# One executable per tool. autotools, cmake and meson split a CC of two words
+# in different ways. A wrapper is one word everywhere.
 write_wrapper() { # write_wrapper NAME ARGS...
-  local name="$1"; shift
+  local name="$1"
+  shift
   {
     echo '#!/bin/sh'
     printf 'exec %s' "$ZIGBIN"
     printf ' %s' "$@"
+    # shellcheck disable=SC2016 # "$@" is for the wrapper, written literally
     printf ' "$@"\n'
   } > "$BIN/$name"
   chmod +x "$BIN/$name"
@@ -236,21 +447,17 @@ write_wrapper() { # write_wrapper NAME ARGS...
 write_wrapper cc cc -target "$TRIPLE"
 write_wrapper c++ c++ -target "$TRIPLE"
 
-# ⛔ A compiler for the build machine, which is a different job from the one
-# above. libgpg-error's mkheader and gpgme's helpers are built and run on the
-# host during the build, so autotools asks for CC_FOR_BUILD once --build and
-# --host differ. Its default is gcc, and this recipe's whole claim is that no
-# gcc is needed: without this the build stops at "gcc: No such file or
-# directory" on a host that has a perfectly good compiler.
-#
-# ⚠ No -target. That is what makes it native.
+# ⛔ A compiler for the build machine. libgpg-error and gpgme build helper
+# programs and run them on the host. autotools uses CC_FOR_BUILD for them when
+# --build and --host differ, and its default is gcc. ⚠ No -target: that makes
+# it native.
 write_wrapper cc-build cc
 write_wrapper ar ar
 write_wrapper ranlib ranlib
 write_wrapper strip-tool objcopy --strip-debug
 
-# meson and libtool both look for a strip; zig has no strip subcommand, and a
-# missing one makes meson's install step fail rather than skip stripping.
+# meson and libtool look for a strip. zig has no strip command, and meson's
+# install step fails without one.
 {
   echo '#!/bin/sh'
   echo 'exit 0'
@@ -268,35 +475,23 @@ chmod +x "$BIN/strip"
 chmod +x "$BIN/pkg-config"
 
 #---------------------------------------------------------------------------#
-# ⛔ --build is passed to every autotools configure, and it is not decoration.
+# ⛔ Every autotools configure gets --build.
 #
-# With --host given and --build absent, autoconf sets cross_compiling=maybe and
-# then decides by compiling a program and trying to run it. On a host with QEMU
-# registered in binfmt_misc that program runs, autoconf answers "checking
-# whether we are cross compiling... no", and every later AC_RUN_IFELSE executes
-# a target binary under emulation.
-#
-# ⛔ That makes the output depend on the build host's kernel state. The same
-# recipe on a host without binfmt takes the cross branch of each of those tests
-# and can produce a different binary, which is the opposite of reproducible.
-# It also hangs: curl's getifaddrs run test never returned for
-# powerpc-unknown-linux-musleabi under qemu-ppc, after 26 minutes.
-#
-# With both --build and --host given and different, autoconf sets
-# cross_compiling=yes without probing, and no target binary is ever executed
-# during a configure.
-#
-# ⚠ The value only has to be a parseable triplet that differs from the host.
-# config.sub canonicalises it, and nothing in these builds reads it further.
+# With --host and no --build, autoconf compiles a test program and runs it. A
+# host with QEMU in binfmt_misc runs it, so autoconf decides "not cross
+# compiling" and runs each later AC_RUN_IFELSE under emulation. The result then
+# depends on the kernel state of the host, and the curl getifaddrs test hangs
+# under qemu-ppc. With --build and --host different, autoconf runs no target
+# program. The value only has to differ from the host triplet.
+#---------------------------------------------------------------------------#
 BUILDTRIPLET="$(uname -m)-pc-linux-gnu"
 
 export CC="$BIN/cc"
 export CXX="$BIN/c++"
 export CC_FOR_BUILD="$BIN/cc-build"
 export BUILD_CC="$BIN/cc-build"
-# The build machine compiler must not inherit the target's include and library
-# paths. Those are a foreign architecture's, and a host tool linked against them
-# does not run.
+# The build machine compiler must not get the target's include and library
+# paths. A host tool linked against them does not run.
 export CFLAGS_FOR_BUILD=""
 export CPPFLAGS_FOR_BUILD=""
 export LDFLAGS_FOR_BUILD=""
@@ -305,22 +500,23 @@ export RANLIB="$BIN/ranlib"
 export STRIP="$BIN/strip"
 export PKG_CONFIG="$BIN/pkg-config"
 export CPPFLAGS="-I$PREFIX/include"
-# -static is on every link from here down, configure probes included. zig cc
-# prefers a dynamic library and this prefix has only archives, so without it
-# every probe reports "unable to find dynamic system library 'crypto'" and
-# curl concludes that OpenSSL is missing. ⚠ The error names the option that
-# failed, not the library that caused it: read config.log, not the message.
+# -static on every link, configure probes too. zig cc prefers a shared library,
+# and this prefix has only archives. Without -static each probe fails and curl
+# decides that OpenSSL is missing. ⚠ That message names the option, not the
+# cause: read config.log.
 export LDFLAGS="-L$PREFIX/lib -static"
 export CFLAGS="-Os -fPIC"
 
 #---------------------------------------------------------------------------#
-# unpack NAME VERSION URL SHA -> the extracted directory under $SRC
+# src_of NAME -> extract the source record NAME again and print its directory
 #---------------------------------------------------------------------------#
-unpack() {
-  # $2 is the version. It is in the pin so the evidence file can record it and
-  # so the build can print it; the extracted directory is named after $1.
-  local name="$1" url="$3" sha="$4" tarball dir
-  tarball="$(fetch "$url" "$sha")"
+src_of() {
+  local name="$1" url sha tarball dir
+  # pin_field source NAME gives: NAME VERSION URL SHA256
+  read -r _ _ url sha <<< "$(pin_field source "$name")"
+  [ -n "$url" ] && [ -n "$sha" ] || die "the pin has no source record for $name" \
+    "reproduce: awk '\$1 == \"source\" && \$2 == \"$name\"' $PIN"
+  tarball="$(fetch "$name" "$url" "$sha")"
   dir="$SRC/$name"
   rm -rf "$dir"
   mkdir -p "$dir"
@@ -328,53 +524,43 @@ unpack() {
   printf '%s\n' "$dir"
 }
 
-src_of() { # src_of NAME -> extract it fresh and print the directory
-  local name="$1" rec
-  rec="$(awk -v n="$name" '$1 == "source" && $2 == n { print $2, $3, $4, $5 }' "$PIN")"
-  [ -n "$rec" ] || die "the pin has no source record for $name"
-  # shellcheck disable=SC2086
-  unpack $rec
-}
-
-ver_of() { awk -v n="$1" '$1 == "source" && $2 == n { print $3 }' "$PIN"; }
-
 #---------------------------------------------------------------------------#
-# the dependency stack, in the order it is built
+# One build function per source record: build_<name>, with - as _.
 #---------------------------------------------------------------------------#
 build_zlib() {
-  local d; d="$(src_of zlib)"
-  ( cd "$d" && CHOST="$HOSTTRIPLET" ./configure --prefix="$PREFIX" --static \
-      && make -j"$JOBS" && make install )
+  local d
+  d="$(src_of zlib)"
+  (cd "$d" && CHOST="$HOSTTRIPLET" ./configure --prefix="$PREFIX" --static \
+    && make -j"$JOBS" && make install)
 }
 
 build_xz() {
-  local d; d="$(src_of xz)"
-  ( cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
-      --enable-static --disable-shared --disable-xz --disable-xzdec \
-      --disable-lzmadec --disable-lzmainfo --disable-scripts --disable-doc \
-      --disable-nls \
-      && make -j"$JOBS" && make install )
+  local d
+  d="$(src_of xz)"
+  (cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
+    --enable-static --disable-shared --disable-xz --disable-xzdec \
+    --disable-lzmadec --disable-lzmainfo --disable-scripts --disable-doc \
+    --disable-nls \
+    && make -j"$JOBS" && make install)
 }
 
 build_bzip2() {
-  local d; d="$(src_of bzip2)"
-  ( cd "$d" && make -j"$JOBS" CC="$CC" AR="$AR" RANLIB="$RANLIB" CFLAGS="$CFLAGS" libbz2.a \
-      && install -m 644 libbz2.a "$PREFIX/lib/" && install -m 644 bzlib.h "$PREFIX/include/" )
+  local d
+  d="$(src_of bzip2)"
+  (cd "$d" && make -j"$JOBS" CC="$CC" AR="$AR" RANLIB="$RANLIB" CFLAGS="$CFLAGS" libbz2.a \
+    && install -m 644 libbz2.a "$PREFIX/lib/" && install -m 644 bzlib.h "$PREFIX/include/")
 }
 
 build_zstd() {
-  local d; d="$(src_of zstd)"
-  ( cd "$d/lib" && make -j"$JOBS" CC="$CC" AR="$AR" RANLIB="$RANLIB" libzstd.a \
-      && install -m 644 libzstd.a "$PREFIX/lib/" \
-      && install -m 644 zstd.h zstd_errors.h "$PREFIX/include/" )
-  # zstd's own libzstd.pc is generated by its install target, which also builds
-  # the shared library. Writing it here keeps the static-only build honest:
-  # libarchive and curl both resolve zstd through pkg-config.
-  #
-  # The ${} below are pkg-config's own variable syntax and are written into the
-  # file literally. Expanding them here would bake this prefix into every line
-  # rather than only into the first.
-  # shellcheck disable=SC2016
+  local d
+  d="$(src_of zstd)"
+  (cd "$d/lib" && make -j"$JOBS" CC="$CC" AR="$AR" RANLIB="$RANLIB" libzstd.a \
+    && install -m 644 libzstd.a "$PREFIX/lib/" \
+    && install -m 644 zstd.h zstd_errors.h "$PREFIX/include/")
+  # The install target of zstd writes libzstd.pc and also builds the shared
+  # library. This writes the .pc file for the static library only. libarchive
+  # and curl find zstd through pkg-config.
+  # shellcheck disable=SC2016 # ${prefix} and the others are pkg-config syntax
   {
     echo "prefix=$PREFIX"
     echo 'exec_prefix=${prefix}'
@@ -390,86 +576,77 @@ build_zstd() {
 }
 
 build_openssl() {
-  # ⛔ --libdir=lib is not cosmetic. OpenSSL chooses lib64 on some targets and
-  # lib on others, so without it the prefix has two library directories and
-  # which one holds libcrypto.a depends on the architecture. Everything after
-  # this searches one of them, and curl then reports that OpenSSL could not be
-  # detected, which names the option that failed rather than the cause.
-  local d; d="$(src_of openssl)"
-  ( cd "$d" && ./Configure "$OSSLTARGET" no-shared no-tests no-module no-docs \
-      --prefix="$PREFIX" --libdir=lib --openssldir=/etc/ssl \
-      && make -j"$JOBS" build_libs \
-      && make install_dev )
+  # ⛔ --libdir=lib. OpenSSL picks lib64 on some targets and lib on others.
+  # Then curl does not find libcrypto.a and reports that OpenSSL is missing.
+  local d
+  d="$(src_of openssl)"
+  (cd "$d" && ./Configure "$OSSLTARGET" no-shared no-tests no-module no-docs \
+    --prefix="$PREFIX" --libdir=lib --openssldir=/etc/ssl \
+    && make -j"$JOBS" build_libs \
+    && make install_dev)
 }
 
 build_libarchive() {
-  local d; d="$(src_of libarchive)"
-  ( cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
-      --enable-static --disable-shared --disable-bsdtar --disable-bsdcpio \
-      --disable-bsdcat --disable-bsdunzip --without-xml2 --without-expat \
-      --without-lzo2 --without-nettle --without-iconv --without-libb2 \
-      && make -j"$JOBS" && make install )
+  local d
+  d="$(src_of libarchive)"
+  (cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
+    --enable-static --disable-shared --disable-bsdtar --disable-bsdcpio \
+    --disable-bsdcat --disable-bsdunzip --without-xml2 --without-expat \
+    --without-lzo2 --without-nettle --without-iconv --without-libb2 \
+    && make -j"$JOBS" && make install)
 }
 
 build_curl() {
-  local d; d="$(src_of curl)"
-  # ⚠ --with-ca-bundle names a path, not embedded data. A host with no CA
-  # bundle at that path gets a TLS failure that reads like a mirror problem.
-  # docs/bootstrap-with-pacman-static.md says so and gives the http fallback.
-  ( cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
-      --enable-static --disable-shared --with-openssl="$PREFIX" \
-      --with-zlib="$PREFIX" --with-zstd="$PREFIX" \
-      --without-brotli --without-nghttp2 --without-libpsl --without-libidn2 \
-      --disable-ldap --disable-ldaps --disable-manual \
-      --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt \
-      --with-ca-path=/etc/ssl/certs \
-      && make -j"$JOBS" && make install )
+  # ⚠ --with-ca-bundle names a path on the host that runs the binary. A host
+  # with no bundle at that path gets a TLS failure. The guide gives the fix.
+  local d
+  d="$(src_of curl)"
+  (cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
+    --enable-static --disable-shared --with-openssl="$PREFIX" \
+    --with-zlib="$PREFIX" --with-zstd="$PREFIX" \
+    --without-brotli --without-nghttp2 --without-libpsl --without-libidn2 \
+    --disable-ldap --disable-ldaps --disable-manual \
+    --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt \
+    --with-ca-path=/etc/ssl/certs \
+    && make -j"$JOBS" && make install)
 }
 
 #---------------------------------------------------------------------------#
-# libgpg-error cross compiles only to a host it ships a lock object for.
+# libgpg-error needs a lock object header for the host triplet.
 #
-# ⛔ It ships one musl file, x86_64-unknown-linux-musl.h, and nothing for
-# aarch64, arm, riscv64, loongarch64 or any PowerPC under musl. mkheader
-# canonicalises the vendor field and stops there: it does not map musl onto
-# gnu, so a cross build for seven of this repository's eight architectures
-# fails on a missing include.
+# ⛔ It ships one musl header, for x86_64. The header holds
+# sizeof(pthread_mutex_t), and glibc and musl do not agree on it, so a copy of
+# the gnu header is wrong.
 #
-# ⛔ Copying the gnu file is wrong. It carries sizeof(pthread_mutex_t), and
-# glibc and musl do not agree on it.
-#
-# ⭐ So the size is measured for the target rather than assumed: a translation
-# unit declaring an array of that length is compiled for the target, and the
-# symbol's size is read back out of the object. Nothing is executed, so this
-# needs no emulator, and the value is the target ABI's own.
+# ⭐ The size is measured for the target: compile a symbol of that size for
+# the target, then read the symbol size with readelf. Nothing runs, so no
+# emulator is necessary.
 #---------------------------------------------------------------------------#
 mutex_size() {
-  local probe="$SRC/.mutex-probe.c" obj="$SRC/.mutex-probe.o" size
+  local probe="$SRC/.mutex-probe.c" obj="$SRC/.mutex-probe.o" size probe_err rc=0
   {
     echo '#include <pthread.h>'
     echo 'char gpgrt_probe_mutex[sizeof(pthread_mutex_t)];'
   } > "$probe"
-  # The compiler's own words are kept and reported. A probe that fails silently
-  # would be read as "this target has no pthread", which is never the cause.
-  if ! probe_err="$("$CC" -c "$probe" -o "$obj" 2>&1)"; then
-    die "cannot compile the pthread_mutex_t probe for $TRIPLE" \
-      "the compiler said: $(awk 'NF { print; exit }' <<< "$probe_err")" \
-      "libgpg-error needs the target's lock object size and ships none for musl here" \
-      "check the toolchain with: $CC -c $probe -o $obj"
-  fi
+  probe_err="$("$CC" -c "$probe" -o "$obj" 2>&1)" || rc=$?
+  [ "$rc" -eq 0 ] || die "cannot compile the pthread_mutex_t probe for $TRIPLE" \
+    "the compiler said: $(awk 'NF { print; exit }' <<< "$probe_err")" \
+    "libgpg-error needs the lock object size of the target" \
+    "reproduce: $CC -c $probe -o $obj"
   size="$(readelf -sW "$obj" | awk '$8 == "gpgrt_probe_mutex" { print $3 }')"
   case "$size" in
-    ''|*[!0-9]*) die "could not read the size of pthread_mutex_t for $TRIPLE" \
-      "readelf printed no symbol size for gpgrt_probe_mutex" \
-      "check it with: readelf -sW $obj" ;;
+    '' | *[!0-9]*)
+      die "readelf gave no size for pthread_mutex_t on $TRIPLE" \
+        "reproduce: readelf -sW $obj"
+      ;;
   esac
-  [ "$size" -gt 0 ] || die "pthread_mutex_t measured as $size bytes for $TRIPLE"
+  [ "$size" -gt 0 ] || die "pthread_mutex_t is $size bytes on $TRIPLE" \
+    "reproduce: readelf -sW $obj"
   printf '%s\n' "$size"
 }
 
 write_lock_obj() { # write_lock_obj SRCDIR SIZE
-  local d="$1" size="$2" f="$1/src/syscfg/lock-obj-pub.$HOSTTRIPLET.h" i zeros
-  zeros=""
+  local f="$1/src/syscfg/lock-obj-pub.$HOSTTRIPLET.h" size="$2" i zeros=""
   i=0
   while [ "$i" -lt "$size" ]; do
     if [ -z "$zeros" ]; then zeros="0"; else zeros="$zeros,0"; fi
@@ -477,7 +654,7 @@ write_lock_obj() { # write_lock_obj SRCDIR SIZE
   done
   {
     echo "## lock-obj-pub.$HOSTTRIPLET.h"
-    echo "## Measured by scripts/build-pacman-static, not copied from another host"
+    echo "## Measured by scripts/build-pacman-static for this target"
     echo '## To be included by mkheader into gpg-error.h'
     echo ''
     echo 'typedef struct'
@@ -501,74 +678,68 @@ write_lock_obj() { # write_lock_obj SRCDIR SIZE
 }
 
 build_libgpg_error() {
-  local d size; d="$(src_of libgpg-error)"
+  local d size
+  d="$(src_of libgpg-error)"
   size="$(mutex_size)"
   echo "    pthread_mutex_t is $size bytes on $TRIPLE"
   write_lock_obj "$d" "$size"
-  ( cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
-      --enable-static --disable-shared --disable-doc --disable-tests \
-      --disable-languages --disable-nls \
-      && make -j"$JOBS" && make install )
+  (cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
+    --enable-static --disable-shared --disable-doc --disable-tests \
+    --disable-languages --disable-nls \
+    && make -j"$JOBS" && make install)
 }
 
 build_libassuan() {
-  local d; d="$(src_of libassuan)"
-  ( cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
-      --enable-static --disable-shared --disable-doc \
-      --with-libgpg-error-prefix="$PREFIX" \
-      && make -j"$JOBS" && make install )
+  local d
+  d="$(src_of libassuan)"
+  (cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
+    --enable-static --disable-shared --disable-doc \
+    --with-libgpg-error-prefix="$PREFIX" \
+    && make -j"$JOBS" && make install)
 }
 
 build_gpgme() {
-  # ⚠ _LARGEFILE64_SOURCE is required, and the reason is not portability
-  # nostalgia. gpgme declares struct linux_dirent64 itself, because getdents64
-  # is not in a public header, and it spells the fields ino64_t and off64_t.
-  # musl only defines those two names under _LARGEFILE64_SOURCE, so without it
-  # the build stops at "unknown type name 'ino64_t'" in posix-io.c. Measured
-  # against zig's musl: the same file compiles with the flag and not without.
-  local d; d="$(src_of gpgme)"
-  ( cd "$d" && CPPFLAGS="$CPPFLAGS -D_LARGEFILE64_SOURCE" \
-      ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
-      --enable-static --disable-shared --disable-gpg-test --disable-gpgsm-test \
-      --disable-g13-test --disable-gpgconf-test --enable-languages=cl \
-      --with-libgpg-error-prefix="$PREFIX" --with-libassuan-prefix="$PREFIX" \
-      && make -j"$JOBS" && make install )
+  # ⚠ _LARGEFILE64_SOURCE is necessary. gpgme declares struct linux_dirent64
+  # with ino64_t and off64_t, and musl defines those names only with that
+  # macro. Without it, posix-io.c stops at "unknown type name 'ino64_t'".
+  local d
+  d="$(src_of gpgme)"
+  (cd "$d" && CPPFLAGS="$CPPFLAGS -D_LARGEFILE64_SOURCE" \
+    ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
+    --enable-static --disable-shared --disable-gpg-test --disable-gpgsm-test \
+    --disable-g13-test --disable-gpgconf-test --enable-languages=cl \
+    --with-libgpg-error-prefix="$PREFIX" --with-libassuan-prefix="$PREFIX" \
+    && make -j"$JOBS" && make install)
 }
 
 build_libseccomp() {
-  local d; d="$(src_of libseccomp)"
-  ( cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
-      --enable-static --disable-shared --disable-python \
-      && make -j"$JOBS" && make install )
+  local d
+  d="$(src_of libseccomp)"
+  (cd "$d" && ./configure --build="$BUILDTRIPLET" --host="$HOSTTRIPLET" --prefix="$PREFIX" \
+    --enable-static --disable-shared --disable-python \
+    && make -j"$JOBS" && make install)
 }
 
 #---------------------------------------------------------------------------#
-# ⛔ The prefix leak check.
+# ⛔ The prefix leak check. A non-zero result stops the build.
 #
-# Every architecture reports a full set of .a files and then one link fails
-# with "is incompatible with <other arch>". The cause is upstream of the link:
-# a .pc file in this architecture's prefix naming another architecture's
-# directory. OpenSSL bakes the prefix into configdata.pm and its generated .pc
-# files, and autotools does the same through config.status.
-#
-# ⚠ A non-zero exit here means stop. It is not a warning.
+# OpenSSL and autotools write the prefix into the .pc files they generate. A
+# .pc file in this prefix that names the prefix of another port means that a
+# source tree was configured for two targets. The link then fails with
+# "is incompatible with <other arch>".
 #---------------------------------------------------------------------------#
 prefix_leak_check() {
   local other pc_files
-  # ⛔ An empty prefix is a failure, not a pass. A leak check that finds no .pc
-  # file at all reports "no leak", which is the same answer it gives for a
-  # clean build.
+  # ⛔ No .pc file is a failure, not a pass: a check with no input finds no
+  # leak.
   pc_files="$(find "$PREFIX/lib/pkgconfig" -name '*.pc' -type f | LC_ALL=C sort)"
   [ -n "$pc_files" ] || die "no pkg-config files in $PREFIX/lib/pkgconfig" \
-    "the stack reported success and installed nothing that later steps can find" \
-    "check it with: ls $PREFIX/lib/pkgconfig"
+    "the libraries reported success and installed nothing that pacman can find" \
+    "reproduce: ls $PREFIX/lib/pkgconfig"
 
-  # awk rather than grep for the filter: grep exits 1 when nothing survives,
-  # which is the normal result here and would kill the script under set -e.
-  #
-  # $pc_files is unquoted on purpose: it is a newline separated file list and
-  # awk is being handed each path as its own argument. The paths are produced by
-  # find under a directory this script created, so none carries a space.
+  # awk, not grep: no match is the usual result, and grep exits 1 for it.
+  # $pc_files is a list of paths under a directory that this script made,
+  # with no space in a path. So word splitting gives one argument per file.
   # shellcheck disable=SC2086
   other="$(awk -v want="$WORK/out/$arch" '
     {
@@ -580,189 +751,187 @@ prefix_leak_check() {
     }
     END { for (p in seen) print p }
   ' $pc_files | LC_ALL=C sort -u)"
-  if [ -n "$other" ]; then
-    die "this prefix names another architecture's directory" \
-      "$(printf '%s' "$other" | tr '\n' ' ')" \
-      "a source tree configured for one target was reused for another" \
-      "check it with: grep -o '$WORK/out/[a-z0-9_]*' $PREFIX/lib/pkgconfig/*.pc | sort -u"
-  fi
+  [ -z "$other" ] || die "this prefix names the prefix of another port" \
+    "$(printf '%s' "$other" | tr '\n' ' ')" \
+    "a source tree was configured for one target and used for another" \
+    "reproduce: grep -o '$WORK/out/[a-z0-9_]*' $PREFIX/lib/pkgconfig/*.pc | sort -u"
 }
 
 #---------------------------------------------------------------------------#
-# pacman
-#
-# ⚠ -static in LDFLAGS does nothing under a meson cross build: meson takes link
-# arguments from the cross file, and the environment reaches the build machine
-# compiler used for helper programs. The flag goes in c_link_args.
+# git_fetch DIR ARGS... : git fetch with a deadline, three tries.
+#---------------------------------------------------------------------------#
+git_fetch() {
+  local d="$1" n rc
+  shift
+  for n in 1 2 3; do
+    rc=0
+    timeout -k 5 300 git -C "$d" fetch -q "$@" || rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    warn "git fetch $* exited $rc (try $n of 3)"
+    [ "$n" -lt 3 ] && sleep $((n * 10))
+  done
+  return 1
+}
+
+# key_has_fpr FPR: the keyring holds a primary key with fingerprint FPR.
+key_has_fpr() {
+  local listed rc=0
+  listed="$(gpg --batch --list-keys --with-colons "$1" 2>&1)" || rc=$?
+  [ "$rc" -eq 0 ] || return 1
+  printf '%s\n' "$listed" | awk -F: -v want="$1" '
+    $1 == "pub" { primary = 1; next }
+    primary && $1 == "fpr" { if ($10 == want) hit = 1; primary = 0 }
+    END { exit hit ? 0 : 1 }'
+}
+
 #---------------------------------------------------------------------------#
 # verify_pacman_tag
 #
-# ⛔ The pin names two release manager fingerprints, and until this existed
-# nothing read them. A pin carrying a fingerprint nothing checks is worse than a
-# pin with no fingerprint at all: it reads as a verified signature to anyone
-# skimming it. Making them load-bearing immediately found that the two names
-# beside them were swapped.
+# ⛔ Runs before any library is built. It fetches the pinned tag object and
+# checks its object sha. It imports each signer key. It requires a VALIDSIG
+# whose primary key fingerprint is a signer line of the pin.
 #
-# ⚠ What this proves is bounded and is worth stating exactly. The tag object is
-# the 7.1.0 release point. The pinned build commit is nine commits after it, and
-# nothing signs those nine. ⛔ So this says upstream published this history under
-# a release manager's key. It does not say a release manager signed the commit
-# this binary is built from.
+# ⚠ This proves that a pinned signer signed the tag. The pinned build commit
+# can be after the tag. The commit sha, not the signature, covers those
+# commits.
 #
-# ⚠ The fetch stays shallow. A depth 1 fetch of the tag ref alone brings the tag
-# object and its target and nothing else: measured at 1.6 MB and 2.4 s against
-# gitlab.archlinux.org on 2026-08-29. Fetching the nine commits in between is
-# not needed and would make the cost depend on how far the pin has drifted.
+# ⚠ The fetch is shallow: the tag object and its commit only.
 #---------------------------------------------------------------------------#
 verify_pacman_tag() {
-  local d tag_name tag_sha got fp name ks imported raw validsig matched url
+  local d tag_name tag_sha got fp name ks src raw validsig matched url vrc
   read -r _ url <<< "$(pin_field pacman)"
   d="$SRC/pacman-tag"
   rm -rf "$d"
   mkdir -p "$d"
-  if ! ( cd "$d" && git init -q . && git remote add origin "$url" ); then
-    die "cannot prepare a checkout to verify the tag in" \
-      "reproduce: git init $d && git remote add origin $url"
+  if ! { git -C "$d" init -q . && git -C "$d" remote add origin "$url"; }; then
+    die "cannot make a git directory to verify the tag in" \
+      "reproduce: git init $d && git -C $d remote add origin $url"
   fi
 
   read -r tag_name tag_sha <<< "$(pin_field tag)"
   [ -n "$tag_name" ] && [ -n "$tag_sha" ] || die "the pin names no tag" \
-    "expected a line: tag <name> <tag object sha>" \
-    "reproduce: awk '\$1 == \"tag\"' bootstrap/pacman-static/sources.pin"
+    "expected a line: tag NAME TAG-OBJECT-SHA" \
+    "reproduce: awk '\$1 == \"tag\"' $PIN"
 
   if [ "${PACMAN_TAG_VERIFY:-required}" = skip ]; then
-    # ⚠ Named deliberately, never reached by accident, and it goes in the
-    # evidence file so a consumer reading the asset can see it happened.
-    echo "build-pacman-static: PACMAN_TAG_VERIFY=skip, the signed tag is NOT verified" >&2
+    # ⚠ The evidence file records SKIPPED, and --check-evidence refuses it.
+    warn "PACMAN_TAG_VERIFY=skip: the signed tag is NOT verified"
     TAG_VERIFIED="SKIPPED"
     return 0
   fi
 
-  command -v gpg >/dev/null || die "gpg is required to verify the signed tag" \
-    "the pin names two release manager fingerprints and they are checked, not decorative" \
-    "⛔ to build without the check, set PACMAN_TAG_VERIFY=skip, which is recorded in the evidence" \
-    "reproduce: command -v gpg"
+  step "fetch the signed tag $tag_name"
+  git_fetch "$d" --depth 1 origin "refs/tags/$tag_name:refs/tags/$tag_name" \
+    || die "cannot fetch the tag $tag_name from $url" \
+      "reproduce: git fetch --depth 1 $url refs/tags/$tag_name:refs/tags/$tag_name"
 
-  step "fetching the signed tag $tag_name"
-  ( cd "$d" && git fetch -q --depth 1 origin "refs/tags/$tag_name:refs/tags/$tag_name" ) \
-    || die "cannot fetch the tag $tag_name" \
-      "reproduce: git fetch --depth 1 origin refs/tags/$tag_name:refs/tags/$tag_name"
-
-  # ⛔ The tag object's sha, not its name. A name can be moved and re-pushed.
-  got="$(git -C "$d" rev-parse "$tag_name")"
+  # ⛔ Compare the object sha, not the name. A name can move.
+  got="$(git -C "$d" rev-parse "refs/tags/$tag_name")"
   [ "$got" = "$tag_sha" ] || die "the tag $tag_name is object $got, the pin says $tag_sha" \
-    "a tag that moved is upstream republishing a release under the same name" \
-    "reproduce: git ls-remote --tags $(pin_field pacman | awk '{print $2}') refs/tags/$tag_name"
+    "upstream moved the tag" \
+    "reproduce: git ls-remote --tags $url refs/tags/$tag_name"
 
-  [ "$(git -C "$d" cat-file -t "$tag_name")" = tag ] \
-    || die "$tag_name is not an annotated tag object, so it carries no signature" \
-      "reproduce: git cat-file -t $tag_name"
+  [ "$(git -C "$d" cat-file -t "$tag_sha")" = tag ] \
+    || die "$tag_name is not an annotated tag object, so it has no signature" \
+      "reproduce: git cat-file -t $tag_sha"
 
-  #-------------------------------------------------------------------------#
-  # The signers. Each key is fetched by fingerprint and the fingerprint of what
-  # arrived is checked, so a keyserver answering with a different key fails
-  # here rather than being trusted.
-  #-------------------------------------------------------------------------#
+  # The signer keys. The vendored file first, then each keyserver. ⛔ Every
+  # key that arrives is checked against the fingerprint that the pin names.
   export GNUPGHOME="$SRC/gnupg"
   rm -rf "$GNUPGHOME"
   mkdir -p "$GNUPGHOME"
   chmod 700 "$GNUPGHOME"
 
+  local -A key_source=()
   while read -r fp name; do
     [ -n "$fp" ] || continue
-    imported=no
-    while read -r ks; do
-      [ -n "$ks" ] || continue
-      # ⚠ A keyserver fetch is a fetch and carries a timeout for the same reason
-      # every curl in this repository does: a host that accepts the connection
-      # and then stops sending would otherwise hold the job open until CI kills
-      # it, with no message about what it was waiting for.
-      # tests/static/65-fetch-policy.sh asserts it.
-      if gpg --batch --quiet --keyserver-options timeout=30 \
-           --keyserver "$ks" --recv-keys "$fp" > "$SRC/recv.log" 2>&1; then
-        imported=yes
-        break
+    src=""
+    if [ -f "$KEYS_DIR/$fp.asc" ]; then
+      rc=0
+      gpg --batch --quiet --import "$KEYS_DIR/$fp.asc" > "$SRC/import.log" 2>&1 || rc=$?
+      if [ "$rc" -eq 0 ] && key_has_fpr "$fp"; then
+        src="bootstrap/pacman-static/keys/$fp.asc"
+      else
+        warn "bootstrap/pacman-static/keys/$fp.asc did not give the key $fp (gpg exit $rc)"
+        awk 'NR <= 3 { print "  " $0 }' "$SRC/import.log" >&2
       fi
-      echo "build-pacman-static: $ks did not serve $fp, trying the next keyserver" >&2
-      awk 'NR <= 3 { print "  " $0 }' "$SRC/recv.log" >&2
-    done <<< "$(awk '$1 == "keyserver" { print $2 }' "$PIN")"
-
-    [ "$imported" = yes ] || die "no pinned keyserver served $fp ($name)" \
-      "every keyserver in the pin was tried" \
-      "reproduce: gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys $fp"
-
-    # ⛔ What arrived is checked against what was asked for. A keyserver is not
-    # trusted, it is queried. ⚠ gpg's own words are kept rather than discarded:
-    # "no such key" and "keyring is unusable" are different faults and a check
-    # that prints neither leaves the reader guessing.
-    if ! listed="$(gpg --batch --list-keys --with-colons "$fp" 2>&1)"; then
-      die "gpg cannot list the key it just imported for $fp" \
-        "gpg said: $(printf '%s' "$listed" | awk 'NR == 1')" \
-        "reproduce: gpg --list-keys --with-colons $fp"
+    else
+      warn "no vendored key file for $fp ($name), trying the keyservers"
     fi
-    printf '%s\n' "$listed" \
-      | awk -F: -v want="$fp" '$1 == "fpr" && $10 == want { found = 1 } END { exit found ? 0 : 1 }' \
-      || die "the key served for $fp does not carry that fingerprint" \
-        "⛔ a keyserver answering with a different key is not a key this pin names" \
-        "reproduce: gpg --list-keys --with-colons $fp"
-  done <<< "$(awk '$1 == "signer" { print $2, $3 " " $4 }' "$PIN")"
+    if [ -z "$src" ]; then
+      while read -r ks; do
+        [ -n "$ks" ] || continue
+        rc=0
+        # tests/static/65-fetch-policy.sh checks for the keyserver timeout.
+        timeout -k 5 120 gpg --batch --quiet --keyserver-options timeout=30 \
+          --keyserver "$ks" --recv-keys "$fp" > "$SRC/recv.log" 2>&1 || rc=$?
+        if [ "$rc" -eq 0 ] && key_has_fpr "$fp"; then
+          src="$ks"
+          break
+        fi
+        warn "$ks did not give the key $fp (gpg exit $rc)"
+        awk 'NR <= 3 { print "  " $0 }' "$SRC/recv.log" >&2
+      done <<< "$(awk '$1 == "keyserver" { print $2 }' "$PIN")"
+    fi
+    [ -n "$src" ] || die "no source gave the key $fp ($name)" \
+      "tried: bootstrap/pacman-static/keys/$fp.asc and every keyserver line of the pin" \
+      "reproduce: gpg --show-keys bootstrap/pacman-static/keys/$fp.asc"
+    key_source["$fp"]="$src"
+    note "key $fp ($name) from $src"
+  done <<< "$(awk '$1 == "signer" { $1 = ""; sub(/^[[:space:]]+/, ""); print }' "$PIN")"
 
-  #-------------------------------------------------------------------------#
-  # The signature.
+  # ⛔ Read VALIDSIG, not the exit status. gpg exits 0 for a good signature
+  # from a key with no trust path, and every key here has none.
   #
-  # ⛔ VALIDSIG is parsed rather than git's exit status. gpg exits 0 for a good
-  # signature from a key with no trust path, which is every key here because no
-  # trust database is built. The fingerprint on the VALIDSIG line is the fact:
-  # it says which key made this signature, and it is compared against the pin.
+  # ⛔ Read the LAST field of VALIDSIG. It is the primary key fingerprint. The
+  # third field is the fingerprint of the key that made the signature, which
+  # is a subkey when a subkey signs. ⚠ The third field is the fallback for a
+  # gpg that prints no primary key fingerprint.
   #
-  # ⛔ The LAST field, not the third. gpg's VALIDSIG is
-  #   VALIDSIG <signing-key-fpr> <date> <ts> <exp> <ver> <res> <algo> <hash>
-  #           <class> [<primary-key-fpr>]
-  # and the two differ whenever a signature is made by a subkey. The pin names
-  # primary key fingerprints, because that is what gpg --recv-keys takes, so
-  # comparing the third field would reject a valid signature the day a release
-  # manager signs with a subkey. ⚠ The third field is kept only as the fallback
-  # for a gpg too old to print the primary.
-  #-------------------------------------------------------------------------#
-  # ⚠ verify-tag exits non-zero for a signature it cannot check, which is a
-  # result this reports rather than a failure to swallow. The status is captured
-  # and the VALIDSIG line is what decides, so an exit code alone never passes
-  # and never fails on its own.
+  # git verify-tag exits non-zero for a signature it cannot check. The status
+  # is kept and shown. The VALIDSIG line decides.
   raw=""
   vrc=0
-  raw="$(git -C "$d" verify-tag --raw "$tag_name" 2>&1)" || vrc=$?
-  validsig="$(printf '%s\n' "$raw" | awk '$2 == "VALIDSIG" { print (NF >= 12 ? $NF : $3); exit }')"
-  [ "$vrc" = 0 ] || echo "build-pacman-static: git verify-tag exited $vrc, reading its raw status" >&2
+  raw="$(git -C "$d" verify-tag --raw "$tag_sha" 2>&1)" || vrc=$?
+  validsig="$(printf '%s\n' "$raw" | awk '$2 == "VALIDSIG" && !done { print (NF >= 12 ? $NF : $3); done = 1 }')"
+  [ "$vrc" -eq 0 ] || warn "git verify-tag exited $vrc, reading its status lines"
   [ -n "$validsig" ] || die "no valid signature on $tag_name" \
-    "gpg printed no VALIDSIG line" \
+    "gpg printed no VALIDSIG line:" \
     "$(printf '%s\n' "$raw" | awk 'NR <= 8 { print "  " $0 }')" \
     "reproduce: git verify-tag --raw $tag_name"
 
-  matched="$(awk -v got="$validsig" '$1 == "signer" && $2 == got { $1 = ""; $2 = ""; sub(/^[[:space:]]+/, ""); print; exit }' "$PIN")"
-  [ -n "$matched" ] || die "$tag_name is signed by $validsig, which the pin does not name" \
-    "the pin names: $(awk '$1 == "signer" { printf "%s ", $2 }' "$PIN")" \
-    "⛔ a valid signature from an unpinned key is not the same as a pinned signer" \
+  matched="$(awk -v got="$validsig" '$1 == "signer" && $2 == got && !done { $1 = ""; $2 = ""; sub(/^[[:space:]]+/, ""); print; done = 1 }' "$PIN")"
+  [ -n "$matched" ] || die "$tag_name is signed by $validsig, which is no signer line of the pin" \
+    "the signer lines: $(awk '$1 == "signer" { printf "%s ", $2 }' "$PIN")" \
+    "⛔ a valid signature from a key that the pin does not name is not accepted" \
     "reproduce: git verify-tag --raw $tag_name"
 
   TAG_VERIFIED="$validsig"
   TAG_SIGNER="$matched"
-  step "$tag_name verified: signed by $matched ($validsig)"
+  TAG_KEY_SOURCE="${key_source[$validsig]:--}"
+  step "$tag_name: signed by $matched ($validsig)"
 }
 
 build_pacman() {
-  local commit url d cross
+  local commit url d cross got
   read -r commit url <<< "$(pin_field pacman)"
   d="$SRC/pacman"
   rm -rf "$d"
   mkdir -p "$d"
-  ( cd "$d" && git init -q . \
-      && git remote add origin "$url" \
-      && git fetch -q --depth 1 origin "$commit" \
-      && git checkout -q FETCH_HEAD )
-  local got
+  if ! { git -C "$d" init -q . && git -C "$d" remote add origin "$url"; }; then
+    die "cannot make a git directory for pacman" "reproduce: git init $d"
+  fi
+  git_fetch "$d" --depth 1 origin "$commit" \
+    || die "cannot fetch the pacman commit $commit from $url" \
+      "reproduce: git fetch --depth 1 $url $commit"
+  git -C "$d" checkout -q FETCH_HEAD \
+    || die "cannot check out the fetched pacman commit" "reproduce: git -C $d checkout FETCH_HEAD"
   got="$(git -C "$d" rev-parse HEAD)"
-  [ "$got" = "$commit" ] || die "pacman checked out $got, the pin says $commit"
+  [ "$got" = "$commit" ] || die "pacman checked out $got, the pin says $commit" \
+    "reproduce: git -C $d rev-parse HEAD"
 
+  # ⚠ meson takes link arguments from the cross file. -static in LDFLAGS
+  # reaches only the build machine compiler, so -static goes in c_link_args.
   cross="$SRC/cross.ini"
   {
     echo '[binaries]'
@@ -784,146 +953,64 @@ build_pacman() {
     echo "c_link_args = ['-static', '-L$PREFIX/lib']"
   } > "$cross"
 
-  # ⛔ use-git-version stays off, and the reason is the shallow fetch above.
-  # It runs `git describe`, which needs the v7.1.0 tag and the nine commits
-  # between it and the pin. A depth 1 fetch of one commit has neither, so meson
-  # setup stops with "No names found, cannot describe anything". Fetching deep
-  # enough would make the recipe depend on how far the pin has drifted from the
-  # last tag, which moves on its own. The commit is checked against the pin two
-  # lines above instead, which says more than a describe string does.
+  # ⛔ use-git-version=false. It runs git describe, which needs the tag and
+  # the commits after it. The shallow fetch has neither, and meson stops with
+  # "No names found, cannot describe anything". The commit check above
+  # replaces it.
   #
-  # ⛔ buildstatic is not enough on its own, and the two options do different
-  # jobs. buildstatic asks meson for the static form of each dependency;
-  # default_library decides how pacman's own libalpm is built, and it is
-  # declared with library(), which follows that option. With only the first,
-  # every dependency resolves statically and the final link still names
-  # libalpm.so.16.0.1, which fails as "using shared libraries requires dynamic
-  # linking" after all 168 objects have compiled.
+  # ⛔ default_library=static and buildstatic=true do different jobs.
+  # buildstatic selects static dependencies. default_library makes libalpm
+  # static. With buildstatic only, the link names libalpm.so and fails with
+  # "using shared libraries requires dynamic linking".
   #
-  # ⚠ Both meson steps keep their output. A build that fails with its log sent
-  # to /dev/null reports the symptom the next check happens to notice: this
-  # said "meson built no binary" when what actually went wrong was setup.
+  # The meson output goes to a log, and a failure prints its end.
   local log="$SRC/meson.log"
-  if ! ( cd "$d" && meson setup build --cross-file "$cross" \
-      -Ddefault_library=static \
-      -Dbuildstatic=true -Duse-git-version=false -Ddoc=disabled \
-      -Ddoxygen=disabled -Di18n=false -Dcrypto=openssl \
-      -Dcurl=enabled -Dgpgme=enabled -Dfile-seccomp=disabled \
-      --prefix=/usr \
-      && meson compile -C build ) > "$log" 2>&1; then
+  if ! (cd "$d" && meson setup build --cross-file "$cross" \
+    -Ddefault_library=static \
+    -Dbuildstatic=true -Duse-git-version=false -Ddoc=disabled \
+    -Ddoxygen=disabled -Di18n=false -Dcrypto=openssl \
+    -Dcurl=enabled -Dgpgme=enabled -Dfile-seccomp=disabled \
+    --prefix=/usr \
+    && meson compile -C build) > "$log" 2>&1; then
     die "meson could not build pacman for $TRIPLE" \
       "$(awk 'NF { keep[NR] = $0 } END { for (i = NR - 8; i <= NR; i++) if (i in keep) print keep[i] }' "$log")" \
-      "the whole log is at $log" \
-      "meson's own log is at $d/build/meson-logs/meson-log.txt"
+      "the whole log: $log" \
+      "the meson log: $d/build/meson-logs/meson-log.txt"
   fi
 
-  # ⛔ meson puts the binary at the build root, not at build/src/pacman/pacman.
-  # A script that looks in the wrong place and treats "not found" as anything
-  # other than a failure reports a pass for something it never measured.
-  [ -f "$d/build/pacman" ] || die "meson reported success and produced no binary" \
+  # ⛔ meson writes the binary at the build root.
+  [ -f "$d/build/pacman" ] || die "meson reported success and wrote no binary" \
     "expected: $d/build/pacman" \
-    "look for it with: find $d/build -name pacman -type f" \
-    "the build log is at $log"
+    "reproduce: find $d/build -name pacman -type f" \
+    "the build log: $log"
   printf '%s\n' "$d/build/pacman"
 }
 
 #---------------------------------------------------------------------------#
-# run it
+# The build
 #---------------------------------------------------------------------------#
-#---------------------------------------------------------------------------#
-# ⛔ meson has to know what zig's linker is, and versions before 1.6.0 do not.
-#
-# meson detects the linker by running the compiler with -Wl,--version and
-# matching the banner. zig answers `zig ld 0.16.0`, and the branch that
-# recognises it, `elif o.startswith('zig ld')` in mesonbuild/linkers/detect.py,
-# arrived in 1.6.0. 1.5.0 and earlier stop with
-#
-#   ERROR: Unable to detect linker for compiler `.../cc -Wl,--version -static`
-#   stdout: zig ld 0.16.0
-#
-# after every one of the eleven libraries has already been built, which is
-# twenty minutes in. Measured 2026-08-29 in run 33208408451, on a runner whose
-# apt meson is 1.3.2.
-#
-# ⚠ Checked here rather than left to meson, because meson's message names the
-# linker and not the version requirement, and the reader then has to know that
-# zig support has a version at all.
-#---------------------------------------------------------------------------#
-command -v meson >/dev/null || die "meson is required" \
-  "this recipe needs meson 1.6.0 or newer, which is where zig linker support arrived"
-
-# ⚠ meson's own words are kept. A meson that is installed but cannot run, which
-# is the usual shape of a broken pip install, says so on stderr and a check that
-# discards it reports only that the version was empty.
-if ! meson_version="$(meson --version 2>&1 | tr -d '\r')"; then
-  die "meson --version failed" \
-    "meson said: $(printf '%s' "$meson_version" | awk 'NR == 1')" \
-    "reproduce: meson --version"
-fi
-[ -n "$meson_version" ] || die "meson --version printed nothing" \
-  "reproduce: meson --version"
-
-# ⚠ Compared field by field as integers. A string compare puts 1.10 below 1.6.
-if ! awk -v got="$meson_version" 'BEGIN {
-       n = split(got, g, ".")
-       split("1.6.0", w, ".")
-       for (i = 1; i <= 3; i++) {
-         a = (i <= n) ? g[i] + 0 : 0
-         b = w[i] + 0
-         if (a > b) exit 0
-         if (a < b) exit 1
-       }
-       exit 0
-     }'; then
-  die "meson $meson_version is too old, 1.6.0 or newer is required" \
-    "meson learned zig's linker banner in 1.6.0, in mesonbuild/linkers/detect.py" \
-    "an older one fails at the pacman step with \"Unable to detect linker\"," \
-    "after every library has already been built" \
-    "reproduce: meson --version"
-fi
-
 step "$arch: target $TRIPLE, openssl $OSSLTARGET, meson $meson_version"
 
-# ⛔ First, before eleven libraries are built. Verifying the tag costs about two
-# seconds and a 1.6 MB fetch; discovering a moved tag or an unreachable
-# keyserver after a twenty minute build costs the build.
+# ⛔ First: the tag check takes seconds. A moved tag found after the libraries
+# costs the whole build.
 step "  pacman signed tag"
 verify_pacman_tag
 
-# ⛔ Every library build keeps its log, and a failure prints the tail of it.
-#
-# Each of these used to send configure's and make's output to /dev/null. When
-# the toolchain was broken, zlib's configure printed "Missing or broken C
-# compiler" on stdout, that went to /dev/null, and the whole run ended as
-# "Process completed with exit code 1" with nothing else in the log. Eight
-# architectures failed that way in run 33206329907 and the reason was invisible
-# in all eight.
-#
-# ⚠ The output is kept rather than printed. A successful build of eleven
-# libraries is tens of thousands of lines, and burying the one that matters is
-# the other half of the same problem. build_pacman already worked this way.
-for lib in zlib xz bzip2 zstd openssl libarchive curl libgpg-error libassuan gpgme libseccomp; do
+# ⛔ Each library build keeps its log. A failure prints the end of the log.
+# Every source record of the pin is built, in pin order. ⛔ A record with no
+# build function stops the build.
+for lib in $(pin_source_names); do
+  fn="build_${lib//-/_}"
+  [ "$(type -t "$fn")" = function ] || die "the pin has the source record $lib and this script has no function $fn" \
+    "add $fn, or remove the record" \
+    "reproduce: awk '\$1 == \"source\" { print \$2 }' $PIN"
   step "  $lib $(ver_of "$lib")"
   liblog="$SRC/$lib.log"
-  if ! (
-    case "$lib" in
-      zlib)         build_zlib ;;
-      xz)           build_xz ;;
-      bzip2)        build_bzip2 ;;
-      zstd)         build_zstd ;;
-      openssl)      build_openssl ;;
-      libarchive)   build_libarchive ;;
-      curl)         build_curl ;;
-      libgpg-error) build_libgpg_error ;;
-      libassuan)    build_libassuan ;;
-      gpgme)        build_gpgme ;;
-      libseccomp)   build_libseccomp ;;
-    esac
-  ) > "$liblog" 2>&1; then
+  if ! ("$fn") > "$liblog" 2>&1; then
     die "$lib $(ver_of "$lib") failed for $TRIPLE" \
       "$(awk 'NF { keep[NR] = $0 } END { for (i = NR - 15; i <= NR; i++) if (i in keep) print keep[i] }' "$liblog")" \
-      "the whole log is at $liblog" \
-      "⚠ a configure failure usually names the option, not the cause: read config.log too" \
+      "the whole log: $liblog" \
+      "⚠ a configure failure names the option, not the cause: read config.log too" \
       "reproduce: WORK=$WORK OUT=$OUT scripts/build-pacman-static $arch"
   fi
 done
@@ -935,53 +1022,54 @@ step "  pacman"
 built="$(build_pacman)"
 
 #---------------------------------------------------------------------------#
-# ⭐ Three checks, and only the third means the binary works.
+# ⭐ Three checks. Only the third shows that the binary works: the ELF names
+# the right machine, the ELF has no PT_INTERP, and the binary ran under the
+# emulator of the port and printed its version.
 #
-# meson compiled it; the ELF names the right machine and carries no PT_INTERP;
-# and the binary ran under its architecture's emulator and printed its version.
-#
-# ⛔ An absence is not a zero. With no emulator the third is NOT MEASURED, and
-# that string goes in the evidence file rather than a dash.
+# ⛔ With no emulator the run is "NOT MEASURED" in the evidence file, never a
+# dash. --check-evidence refuses it.
 #---------------------------------------------------------------------------#
 machine="$(readelf -hW "$built" | awk -F: '/Machine:/ { sub(/^[[:space:]]+/, "", $2); print $2 }')"
 [ "$machine" = "$ELFMACHINE" ] || die "the binary is for the wrong machine" \
-  "expected: $ELFMACHINE" "readelf says: $machine" \
-  "check it with: readelf -hW $built"
+  "expected: $ELFMACHINE (elf_machine in ports/$arch.conf)" "readelf: $machine" \
+  "reproduce: readelf -hW $built"
 
 interp="$(readelf -lW "$built" | awk '/INTERP/ { n++ } END { print n + 0 }')"
 [ "$interp" = "0" ] || die "the binary names a dynamic loader, so it is not static" \
   "readelf -lW found $interp INTERP entries" \
-  "-static in the environment does nothing under a meson cross build; it goes in c_link_args" \
-  "check it with: readelf -lW $built"
+  "reproduce: readelf -lW $built"
 
 reported="NOT MEASURED"
 emulator="NOT MEASURED"
-if command -v "$QEMU" >/dev/null 2>&1; then
+if command -v "$QEMU" > /dev/null; then
   emulator="$QEMU"
-  if ! run_out="$("$QEMU" "$built" --version 2>&1)"; then
-    die "the binary would not run under $QEMU" \
-      "it said: $(awk 'NF { print; exit }' <<< "$run_out")" \
-      "it linked and it names the right machine, so the fault is at run time" \
-      "check it with: $QEMU $built --version"
-  fi
-  reported="$(awk '/Pacman v/ { sub(/^[^P]*/, ""); print; exit }' <<< "$run_out")"
-  [ -n "$reported" ] || die "the binary did not report a version under $QEMU" \
+  rc=0
+  run_out="$("$QEMU" "$built" --version 2>&1)" || rc=$?
+  [ "$rc" -eq 0 ] || die "the binary did not run under $QEMU (exit $rc)" \
     "it said: $(awk 'NF { print; exit }' <<< "$run_out")" \
-    "it linked and it names the right machine, so this is a runtime fault" \
-    "check it with: $QEMU $built --version"
+    "it links and names the right machine, so the fault is at run time" \
+    "reproduce: $QEMU $built --version"
+  reported="$(awk '/Pacman v/ && !done { sub(/^[^P]*/, ""); print; done = 1 }' <<< "$run_out")"
+  [ -n "$reported" ] || die "the binary printed no version under $QEMU" \
+    "it said: $(awk 'NF { print; exit }' <<< "$run_out")" \
+    "reproduce: $QEMU $built --version"
+else
+  warn "$QEMU is not on PATH: the run is NOT MEASURED"
+fi
+
+curl_features="-"
+if [ -x "$PREFIX/bin/curl-config" ]; then
+  curl_features="$("$PREFIX/bin/curl-config" --features | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
 fi
 
 size="$(wc -c < "$built" | tr -d '[:space:]')"
-sha="$(sha256sum "$built" | cut -c1-64)"
+sha="$(sha256sum "$built" | awk '{ print $1 }')"
 asset="$OUT/pacman-static-$arch"
 install -m 755 "$built" "$asset"
 
 #---------------------------------------------------------------------------#
-# the evidence file
-#
-# "Built successfully" is not evidence. This records which sources, which
-# versions, which checksums, which commit, and what the binary reported when it
-# was run.
+# The evidence file: the sources, their versions and sha256, the commit, the
+# tag check, and what the binary printed when it ran.
 #---------------------------------------------------------------------------#
 {
   echo '{'
@@ -991,31 +1079,34 @@ install -m 755 "$built" "$asset"
   echo "  \"built\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
   echo "  \"pacman_commit\": \"$(git -C "$SRC/pacman" rev-parse HEAD)\","
   echo "  \"pacman_describe_pinned\": \"$(pin_field describe)\","
-  echo "  \"pacman_signed_tag\": \"$(pin_field tag | awk '{print $1}')\","
-  echo "  \"pacman_signed_tag_object\": \"$(pin_field tag | awk '{print $2}')\","
+  echo "  \"pacman_signed_tag\": \"$(pin_field tag | awk '{ print $1 }')\","
+  echo "  \"pacman_signed_tag_object\": \"$(pin_field tag | awk '{ print $2 }')\","
   echo "  \"pacman_tag_verified_by\": \"$TAG_VERIFIED\","
   echo "  \"pacman_tag_signer\": \"$TAG_SIGNER\","
+  echo "  \"pacman_tag_key_source\": \"$TAG_KEY_SOURCE\","
   echo "  \"reported_version\": \"$reported\","
   echo "  \"emulator\": \"$emulator\","
   echo "  \"elf_machine\": \"$machine\","
   echo "  \"interp_segments\": $interp,"
   echo "  \"size\": $size,"
   echo "  \"sha256\": \"$sha\","
-  echo "  \"zig\": \"$(pin_field zig | awk '{ print $1 }')\","
+  echo "  \"zig\": \"$ZIG_VERSION\","
+  echo "  \"meson\": \"$meson_version\","
+  echo "  \"curl_features\": \"$curl_features\","
   echo '  "sources": ['
-  pin_sources | awk '{
-    printf "    { \"name\": \"%s\", \"version\": \"%s\", \"url\": \"%s\", \"sha256\": \"%s\" }", $1, $2, $3, $4
-    if (NR > 0) printf "%s", ","
-    printf "\n"
-  }' | sed '$ s/,$//'
+  awk '$1 == "source" { print $2, $3, $4, $5 }' "$PIN" | awk '{
+    printf "%s    { \"name\": \"%s\", \"version\": \"%s\", \"url\": \"%s\", \"sha256\": \"%s\" }", (NR > 1 ? ",\n" : ""), $1, $2, $3, $4
+  } END { printf "\n" }'
   echo '  ]'
   echo '}'
 } > "$OUT/pacman-static-$arch.json"
 
 step "$arch done"
-echo "  binary   $asset"
-echo "  size     $size"
-echo "  sha256   $sha"
-echo "  machine  $machine"
-echo "  reported $reported"
-echo "  evidence $OUT/pacman-static-$arch.json"
+{
+  echo "  binary   $asset"
+  echo "  size     $size"
+  echo "  sha256   $sha"
+  echo "  machine  $machine"
+  echo "  reported $reported"
+  echo "  evidence $OUT/pacman-static-$arch.json"
+} >&2

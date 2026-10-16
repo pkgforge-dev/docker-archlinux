@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+#
+# Pick a registry that serves an image pinned by digest.
+#
+#   scripts/pick-base-image [--fixtures DIR] [DOCKERFILE]
+#   scripts/pick-base-image [--fixtures DIR] --image REF
+#
+# REF is docker.io/<repo>[:<tag>]@sha256:<digest>. Without --image, REF is the
+# one `ARG BASE_IMAGE=` value of DOCKERFILE (default: the Dockerfile of the
+# tree). The build job gives --image for the buildkit image of the builder.
+#
+# The same digest is asked for on each registry, in this order:
+#   1. docker.io/<repo>                 (REF, unchanged)
+#   2. mirror.gcr.io/<repo>
+#   3. public.ecr.aws/docker/<repo>     (library/<name> only: ECR Public
+#                                        mirrors the Docker official images)
+# The first that answers HEAD with HTTP 200 and that digest is printed, as
+# the value to use in place of REF. The same digest is the same bytes, so the
+# choice does not change what is trusted.
+# A registry whose answer has ratelimit-remaining 0 is skipped: its pull
+# limit is used up. Docker Hub sends this header and does not count a HEAD.
+# ⚠ The limit can run out between this probe and the pull. The build then
+# fails, and the next run probes again.
+#
+# --fixtures DIR reads the answers from DIR/heads.tsv
+# (REGISTRY<TAB>REPO<TAB>REF<TAB>CODE<TAB>DIGEST[<TAB>REMAINING]) and calls no
+# registry. A HEAD that is not in the file answers 404.
+#
+# Exit status: 0 printed, 1 no registry serves the digest, 2 usage.
+set -euo pipefail
+shopt -s inherit_errexit
+
+PROG=pick-base-image
+# shellcheck source=scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+  sed -n '5,6p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  exit 2
+}
+
+FIXTURES=""
+dockerfile=""
+image=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --fixtures)
+      [ "$#" -ge 2 ] || usage
+      FIXTURES="$2"
+      shift
+      ;;
+    --image)
+      [ "$#" -ge 2 ] || usage
+      image="$2"
+      shift
+      ;;
+    -*) usage ;;
+    *)
+      [ -z "$dockerfile" ] || usage
+      dockerfile="$1"
+      ;;
+  esac
+  shift
+done
+
+if [ -n "$image" ]; then
+  [ -z "$dockerfile" ] || usage
+  ref="$image"
+  again="scripts/pick-base-image --image $image"
+else
+  dockerfile="${dockerfile:-$ROOT/Dockerfile}"
+  [ -r "$dockerfile" ] || die "$dockerfile cannot be read"
+  ref="$(awk '/^[[:space:]]*ARG[[:space:]]+BASE_IMAGE=/ {
+      sub(/^[[:space:]]*ARG[[:space:]]+BASE_IMAGE=/, "")
+      sub(/[[:space:]]+$/, "")
+      gsub(/"/, "")
+      v = $0
+      n++
+    }
+    END { if (n == 1) print v }' "$dockerfile")"
+  [ -n "$ref" ] || die "$dockerfile has no single ARG BASE_IMAGE=<image>@sha256:<digest> line" \
+    "reproduce: grep -n 'ARG BASE_IMAGE' $dockerfile"
+  again="scripts/pick-base-image $dockerfile"
+fi
+[[ "$ref" =~ ^docker\.io/([a-z0-9._/-]+)(:[A-Za-z0-9._-]+)?@(sha256:[0-9a-f]{64})$ ]] ||
+  die "the image '$ref' is not docker.io/<repo>[:<tag>]@sha256:<64 hex>"
+repo="${BASH_REMATCH[1]}"
+digest="${BASH_REMATCH[3]}"
+
+# probe REGISTRY REPO -> "CODE DIGEST REMAINING" for the digest. An empty
+# field is -.
+probe() {
+  local line
+  if [ -n "$FIXTURES" ]; then
+    line=""
+    if [ -f "$FIXTURES/heads.tsv" ]; then
+      line="$(awk -F'\t' -v r="$1" -v p="$2" -v f="$digest" '
+        $1 == r && $2 == p && $3 == f && !done {
+          print $4 " " ($5 == "" ? "-" : $5) " " ($6 == "" ? "-" : $6); done = 1
+        }' "$FIXTURES/heads.tsv")"
+    fi
+    printf '%s\n' "${line:-404 - -}"
+    return 0
+  fi
+  reg_head_limit "$1" "$2" "$digest" || printf '000 - -\n'
+}
+
+# REGISTRY REPO VALUE, in the order of trial.
+candidates="docker.io $repo $ref
+mirror.gcr.io $repo mirror.gcr.io/$repo@$digest"
+case "$repo" in
+  library/*)
+    candidates="$candidates
+public.ecr.aws docker/$repo public.ecr.aws/docker/$repo@$digest"
+    ;;
+esac
+
+while read -r reg path value; do
+  read -r code got left <<< "$(probe "$reg" "$path")"
+  if [ "$code" = 200 ] && [ "$got" = "$digest" ] && [ "$left" = 0 ]; then
+    warn "$reg/$path@$digest answered HTTP 200 with ratelimit-remaining 0: the pull limit is used up"
+    continue
+  fi
+  if [ "$code" = 200 ] && [ "$got" = "$digest" ]; then
+    note "$repo comes from $reg"
+    printf '%s\n' "$value"
+    exit 0
+  fi
+  warn "$reg/$path@$digest answered HTTP ${code:-none} with ${got:--}"
+done <<< "$candidates"
+
+die "no registry serves $repo@$digest" \
+  "tried: $(awk '{ printf "%s%s", sep, $1; sep = ", " }' <<< "$candidates")" \
+  "reproduce: $again"

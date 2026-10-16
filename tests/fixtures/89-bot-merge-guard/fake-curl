@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#
+# A stand-in for curl, for the test of scripts/check-image-pins. It makes no
+# network request.
+#
+#   PATH=<dir with this file as curl>:$PATH FAKE_CURL_ROUTES=FILE scripts/...
+#
+# FILE has one route per line, fields split by one tab:
+#   <url> <http code> <body or -> <docker-content-digest or ->
+# A URL with no route answers 404 with an empty body. The script reads the
+# options of curl that scripts/lib.sh gives: -o FILE (the body), -D FILE (the
+# headers), -w FORMAT (prints the code). The last argument is the URL.
+set -euo pipefail
+
+routes="${FAKE_CURL_ROUTES:?FAKE_CURL_ROUTES is not set}"
+out=/dev/null
+hdr=""
+fmt=""
+url=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    -D) hdr="$2"; shift 2 ;;
+    -w) fmt="$2"; shift 2 ;;
+    -A | -H | -u | --connect-timeout | --max-time | --retry | --retry-delay) shift 2 ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+
+code=404
+body=""
+digest=""
+while IFS=$'\t' read -r r c b d; do
+  [ "$r" = "$url" ] || continue
+  code="$c"
+  [ "$b" = - ] || body="$b"
+  [ "$d" = - ] || digest="$d"
+done < "$routes"
+
+printf '%s' "$body" > "$out"
+if [ -n "$hdr" ]; then
+  {
+    printf 'HTTP/1.1 %s\r\n' "$code"
+    [ -z "$digest" ] || printf 'docker-content-digest: %s\r\n' "$digest"
+    printf '\r\n'
+  } > "$hdr"
+fi
+if [ -n "$fmt" ]; then
+  printf '%s' "$code"
+fi

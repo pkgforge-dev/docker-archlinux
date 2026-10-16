@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+#
+# Re-run the failed jobs of CI on each open Renovate pull request, at most
+# RERUN_MAX times for one head commit.
+#
+#   scripts/rerun-bot-ci
+#
+# ⭐ A pin bump can fail CI on a transient: a registry that did not answer, or
+# a runner that stopped. It then waits until CI passes. One re-run a day moves
+# it on, and bot-merge.yml merges it when CI passes.
+#
+# The count is the sum of run_attempt over every CI run for the head commit.
+# The first run is attempt 1, so RERUN_MAX=3 gives at most 3 re-runs. A new
+# commit on the branch starts the count again.
+#
+# Only a run that completed with failure, timed_out or startup_failure is
+# re-run. A run that is queued or in progress, a run that succeeded, and a run
+# that a person cancelled are left alone.
+#
+# ⚠ Not measured: whether bot-merge.yml starts after a re-run that the
+# GITHUB_TOKEN requested. When it does not, the next push or a person merges.
+#
+# Environment: GH_TOKEN with actions: write and pull-requests: read,
+# GITHUB_REPOSITORY (owner/name). RERUN_WORKFLOW (default ci.yml), RERUN_MAX
+# (default 3), RERUN_BRANCH_PREFIX (default renovate/).
+#
+# Output, one line per pull request:
+#   rerun     #N SHA  attempt K of 1+MAX: the failed jobs start again
+#   limit     #N SHA  K attempts; no more re-runs for this commit
+#   green     #N SHA  the newest run succeeded
+#   busy      #N SHA  the newest run did not end
+#   other     #N SHA  the newest run concluded CONCLUSION
+#   none      #N SHA  no CI run for this commit
+#
+# Exit status: 0 done, 1 could not read or re-run, 2 usage.
+set -euo pipefail
+
+die() {
+  echo "rerun-bot-ci: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+[ "$#" -eq 0 ] || {
+  echo "usage: scripts/rerun-bot-ci" >&2
+  exit 2
+}
+command -v gh > /dev/null || die "gh is required"
+command -v jq > /dev/null || die "jq is required"
+
+slug="${GITHUB_REPOSITORY:-}"
+case "$slug" in
+  */*) ;;
+  *) die "GITHUB_REPOSITORY is not owner/name: ${slug:-<unset>}" ;;
+esac
+wf="${RERUN_WORKFLOW:-ci.yml}"
+max="${RERUN_MAX:-3}"
+prefix="${RERUN_BRANCH_PREFIX:-renovate/}"
+[[ "$max" =~ ^[0-9]+$ ]] || die "RERUN_MAX is not a whole number: $max"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+rc=0
+gh api --paginate "repos/$slug/pulls?state=open&per_page=100" > "$work/pulls.json" || rc=$?
+[ "$rc" -eq 0 ] || die "could not list the open pull requests (gh ended $rc)" \
+  "reproduce: gh api 'repos/$slug/pulls?state=open&per_page=100'"
+
+jq -r --arg p "$prefix" --arg s "$slug" '
+  .[] | select(.head.ref | startswith($p)) | select((.head.repo.full_name // "") == $s)
+  | "\(.number) \(.head.sha)"' "$work/pulls.json" | tr -d '\r' > "$work/prs.txt"
+
+n_prs="$(awk 'END { print NR + 0 }' "$work/prs.txt")"
+echo "rerun-bot-ci: $n_prs open pull request(s) on $prefix* branches of $slug"
+
+while read -r number sha; do
+  [ -n "$number" ] || continue
+  rc=0
+  gh api "repos/$slug/actions/workflows/$wf/runs?head_sha=$sha&per_page=100" < /dev/null > "$work/runs.json" || rc=$?
+  [ "$rc" -eq 0 ] || die "could not list the $wf runs of #$number (gh ended $rc)" \
+    "reproduce: gh api 'repos/$slug/actions/workflows/$wf/runs?head_sha=$sha&per_page=100'"
+
+  # attempts, then the newest run: id status conclusion
+  attempts="$(jq '[.workflow_runs[] | (.run_attempt // 1)] | add // 0' "$work/runs.json")"
+  newest="$(jq -r '.workflow_runs | sort_by(.created_at, .id) | last // empty
+    | "\(.id) \(.status) \(.conclusion // "none")"' "$work/runs.json" | tr -d '\r')"
+  short="${sha:0:12}"
+  if [ -z "$newest" ]; then
+    printf 'none      #%s %s  no %s run for this commit\n' "$number" "$short" "$wf"
+    continue
+  fi
+  read -r run_id status conclusion <<< "$newest"
+  if [ "$status" != completed ]; then
+    printf 'busy      #%s %s  the newest run is %s\n' "$number" "$short" "$status"
+    continue
+  fi
+  case "$conclusion" in
+    success)
+      printf 'green     #%s %s  the newest run succeeded\n' "$number" "$short"
+      continue
+      ;;
+    failure | timed_out | startup_failure) ;;
+    *)
+      printf 'other     #%s %s  the newest run concluded %s\n' "$number" "$short" "$conclusion"
+      continue
+      ;;
+  esac
+  if [ "$attempts" -gt "$max" ]; then
+    printf 'limit     #%s %s  %s attempts; no more re-runs for this commit\n' "$number" "$short" "$attempts"
+    continue
+  fi
+  rc=0
+  gh api -X POST "repos/$slug/actions/runs/$run_id/rerun-failed-jobs" < /dev/null > /dev/null || rc=$?
+  [ "$rc" -eq 0 ] || die "could not re-run run $run_id of #$number (gh ended $rc)" \
+    "reproduce: gh run rerun $run_id --failed --repo $slug"
+  printf 'rerun     #%s %s  attempt %s of %s: the failed jobs start again\n' \
+    "$number" "$short" "$((attempts + 1))" "$((max + 1))"
+done < "$work/prs.txt"

@@ -1,124 +1,152 @@
-# Bootstrapping an Arch root with `pacman-static`
+# Bootstrap an Arch root with `pacman-static`
 
-Build a working Arch Linux root on a host that has no `pacman`, no `libalpm` and
-no Arch keyring, using a statically linked `pacman` this repository builds from
-source.
+This guide builds an Arch Linux root on a host that has no `pacman`, no `libalpm` and no Arch keyring. It uses `pacman-static-<arch>`: a statically linked `pacman` for one port.
 
-⛔ The binary is built here, never downloaded. `scripts/build-pacman-static`
-fetches only what `bootstrap/pacman-static/sources.pin` names, checks every
-tarball against its `sha256`, and checks out `pacman` at a pinned commit.
+There are two ways to get the binary:
 
-⭐ That commit is the one every image this repository publishes is built from.
-The anchor tag family is `<alias>-7.1.0.r9.g54d9411-<pkgrel>`, and `g54d9411` is
-that commit abbreviated, so the binary and the image's own `pacman` come from
-one source. `tests/static/85-pacman-static-pin.sh` asserts it.
+- Download it from a release of this repository, then check `SHA256SUMS` and its evidence file.
+- Build it from source with `scripts/build-pacman-static`.
 
-## What the host needs
+Each command below runs from the root of a clone of this repository. Set `ARCH` to a port name first. `scripts/ports list` gives the port names.
 
-No cross compiler and no `gcc`. `zig cc` is the compiler, the linker and the
-archiver, and it carries the musl sources for every target.
+```bash
+export ARCH="${ARCH:?set ARCH to a port name from scripts/ports list}"
+```
 
-| tool | why |
+⭐ The binary and the images use the same `pacman` source. `bootstrap/pacman-static/sources.pin` pins the commit and its `describe` value. The anchor tags of the images end in the same `describe` value. `tests/static/85-pacman-static-pin.sh` checks that the commit and `describe` agree. The freshness workflow compares `describe` with the live anchor and raises the issue `pacman-static-pin` when they differ.
+
+## Get the binary from a release
+
+```bash
+base="https://github.com/pkgforge-dev/docker-archlinux/releases/latest/download"
+for f in "pacman-static-$ARCH" "pacman-static-$ARCH.json" SHA256SUMS; do
+  curl -sSfLO --connect-timeout 15 --max-time 600 "$base/$f"
+done
+awk -v f="pacman-static-$ARCH" '$2 == f || $2 == f ".json"' SHA256SUMS | sha256sum -c
+scripts/build-pacman-static --check-evidence "pacman-static-$ARCH.json"
+chmod +x "pacman-static-$ARCH"
+export PACMAN="$PWD/pacman-static-$ARCH"
+```
+
+`--check-evidence` needs `jq`. It checks three facts in the evidence file:
+
+- A signer of the pin signed the `pacman` tag, and the build checked that signature.
+- The binary ran under the emulator of its port and printed its version.
+- The binary names no dynamic loader.
+
+## Build the binary from source
+
+### Host tools
+
+The build needs no `gcc` and no cross compiler. `zig cc` is the compiler, the linker and the archiver, and it has the musl source for every port. The build downloads the pinned `zig`.
+
+| tool | used for |
 | --- | --- |
-| `curl` | fetch the sources |
-| `git` | check out `pacman` at its pinned commit |
-| `tar`, `xz`, `bzip2`, `gzip` | unpack |
-| `make`, `patch`, `cmp` | build |
-| `cmake`, `meson`, `ninja` | build |
-| `pkg-config` | dependency resolution |
-| `perl` | OpenSSL's `Configure` |
-| `python3` | meson |
-| `gperf` | libseccomp |
-| `readelf` | the static linkage check, and the lock object measurement |
-| `qemu-user-static` | optional, to run a foreign binary |
+| `curl` | download the pinned tarballs |
+| `sha256sum` | check each tarball against the pin |
+| `tar`, `xz`, `bzip2`, `gzip` | extract the tarballs |
+| `git` | fetch `pacman` at the pinned commit, and its signed tag |
+| `gpg` | check the signature of the tag |
+| `make`, `perl` | build the libraries (`perl` runs the OpenSSL `Configure`) |
+| `pkg-config` | find the static libraries |
+| `gperf` | build libseccomp |
+| `meson`, `ninja` | build `pacman` |
+| `readelf` | measure `pthread_mutex_t`, and check the ELF machine and `PT_INTERP` |
+| `qemu-<cpu>-static` | optional: run the binary once. Without it the run is `NOT MEASURED` |
+| `jq` | optional: read the evidence file, and `--check-evidence` |
 
-On this repository's own image:
+The variable `HOST_TOOLS` in `scripts/build-pacman-static` holds the same list. The script checks each tool before it downloads anything.
 
-```bash
-pacman -Sy --noconfirm --needed meson ninja cmake perl python git patch make \
-  pkgconf binutils file diffutils gperf qemu-user-static
-```
+⛔ `meson` must be 1.6.0 or newer. An older `meson` does not detect the `zig` linker. It stops at the `pacman` step, after every library is built. The apt `meson` of Ubuntu 24.04 is older than 1.6.0.
 
-On Debian or Ubuntu:
+On Arch Linux, or in an image of this repository:
 
 ```bash
-apt-get install -y --no-install-recommends curl ca-certificates git tar \
-  xz-utils bzip2 gzip zstd make patch cmake ninja-build pkg-config perl \
-  python3 binutils file meson gperf qemu-user-static
+pacman -Syu --noconfirm --needed curl git gnupg make perl pkgconf binutils \
+  xz bzip2 gzip meson ninja gperf qemu-user-static jq
 ```
 
-## Build the binary
+On Debian or Ubuntu, install `meson` with `scripts/install-tools`. It gets the pinned version and checks its sha256. CI uses the same pin.
 
 ```bash
-WORK=/tmp/pacman-static OUT=/tmp/dist scripts/build-pacman-static amd64
+apt-get install -y --no-install-recommends ca-certificates curl git gnupg make \
+  perl pkg-config binutils xz-utils bzip2 gzip ninja-build gperf python3 \
+  qemu-user-static jq
+scripts/install-tools "$HOME/.local/tools" meson
+export PATH="$HOME/.local/tools:$PATH"
 ```
 
-One of `amd64`, `arm64`, `armv7`, `loong64`, `riscv64`, `ppc`, `ppc64`,
-`ppc64le`. `WORK` is reused between architectures, so the sources are fetched
-once. It prints the size, the `sha256`, the ELF machine and, when the emulator
-is installed, what the binary reported when it was run.
-
-⚠ With no emulator for that target the run column reads `NOT MEASURED`, in the
-output and in the evidence file. It is never a dash and never a pass.
-
-The evidence file beside the binary records every source, its version, its URL
-and its `sha256`, the `pacman` commit, and the three checks:
+### Build
 
 ```bash
-jq '{arch, triple, pacman_commit, reported_version, elf_machine, interp_segments, sha256}' \
-  /tmp/dist/pacman-static-amd64.json
+WORK=/tmp/pacman-static OUT=/tmp/dist scripts/build-pacman-static "$ARCH"
+scripts/build-pacman-static --check-evidence "/tmp/dist/pacman-static-$ARCH.json"
+export PACMAN="/tmp/dist/pacman-static-$ARCH"
 ```
 
-## Check it yourself
+The build does these steps:
+
+1. It reads the target facts from `ports/$ARCH.conf`: the `zig` triple, the autotools host triplet, the OpenSSL target, the ELF machine, the emulator, the `meson` CPU family and the byte order. `scripts/build-pacman-static --describe "$ARCH"` shows them.
+2. It downloads each tarball of the pin into `WORK/dl`. The file name is the `sha256`. For each tarball it tries the URL of the record, then each `mirror` line of that record. ⛔ It keeps a file only when the `sha256` equals the pin.
+3. It fetches the signed `pacman` tag and checks its object sha. It imports each signer key from `bootstrap/pacman-static/keys/`, then from the keyservers of the pin. It requires a valid signature from a signer of the pin.
+4. It builds each library of the pin, in pin order, then `pacman` at the pinned commit.
+5. It checks the ELF machine and that there is no `PT_INTERP`. Then it runs `--version` under the emulator.
+
+A second run, or a run for another port, with the same `WORK` downloads nothing again. `scripts/build-pacman-static --fetch` downloads and checks every tarball of the pin, and builds nothing.
+
+zig is unpacked into `WORK/zig-<sha256>`, so a reused `WORK` unpacks the new zig after a pin change. `scripts/build-pacman-static --zig` prints the zig that a build uses and its version. The evidence file records that version.
+
+⚠ With no emulator for the port, the evidence file records `NOT MEASURED` for the run. `--check-evidence` refuses it.
+
+⚠ `PACMAN_TAG_VERIFY=skip` builds with no tag check. The evidence file records `SKIPPED`, and `--check-evidence` refuses it.
+
+The evidence file beside the binary records each source with its version, URL and `sha256`, the `pacman` commit, the tag check and the run:
 
 ```bash
-BIN=/tmp/dist/pacman-static-amd64
-
-file "$BIN"
-readelf -lW "$BIN" | awk '/INTERP/ { n++ } END { print n + 0 }'
-"$BIN" --version
+jq '{arch, triple, pacman_commit, pacman_tag_verified_by, reported_version, elf_machine, interp_segments, sha256}' \
+  "/tmp/dist/pacman-static-$ARCH.json"
 ```
 
-The `INTERP` count must be `0`. That is what static means: no dynamic loader is
-named, so the binary runs on a system whose `libc` is missing or broken.
+## Check the binary
 
-## Build a root with it
+```bash
+readelf -lW "$PACMAN" | awk '/INTERP/ { n++ } END { print n + 0 }'
+"$PACMAN" --version
+```
 
-The two passes are not interchangeable. The first has no keyring to verify
-against, because there is no `gpg` inside a static `pacman`: `pacman-key` is a
-shell script that drives `gpg`. The second runs inside the new root, where
-`gpg` now exists, and is the pass that makes the root trustworthy.
+The `INTERP` count must be `0`. Then the binary names no dynamic loader, and it runs on a system with no `libc` or a broken `libc`.
 
-⛔ Nothing installed in pass one is verified. A bootstrap that stops there has
-proved that the download worked and nothing about trust.
+⚠ A binary for another CPU runs only on that CPU, or under `qemu-user` with `binfmt_misc`.
 
-### Pass one, unverified
+## Build a root
+
+The root needs two passes:
+
+- Pass one installs `base` with no signature check. A static `pacman` cannot check signatures without a keyring, and `pacman-key` is a shell script that needs `gpg` from the new root.
+- Pass two runs inside the new root. It populates the keyring and syncs again with the shipped `SigLevel`.
+
+⛔ Pass one checks no package signature. Do not use the root before pass two succeeds.
+
+### Pass one, no signature check
 
 ```bash
 export ROOT=/tmp/archroot
-export PACMAN=/tmp/dist/pacman-static-amd64
-
 mkdir -p "$ROOT/var/lib/pacman" "$ROOT/var/cache/pacman/pkg" \
-         "$ROOT/etc/pacman.d/hooks" "$ROOT/etc/pacman.d/gnupg" "$ROOT/var/log"
+  "$ROOT/etc/pacman.d/hooks" "$ROOT/etc/pacman.d/gnupg" "$ROOT/var/log"
 ```
 
-⚠ `--hookdir` must already exist. `pacman` creates `--dbpath` and `--cachedir`
-and refuses a missing `--hookdir`.
+⚠ `pacman` makes `--dbpath` and `--cachedir`, but it refuses a `--hookdir` that does not exist.
 
-⛔ Redirect all six paths, not just `--root`. `pacman` keeps its database,
-cache, hooks, keyring and log at compiled-in absolute paths, and one that is not
-redirected is written on the host.
-
-Write a config outside the root, so nothing in the transaction can rewrite it.
-This repository already ships one per architecture, and it is the config that
-built the published image:
+Write a config outside the root, so that no package in the transaction can change it. Start from the config that built the published image of the port. Set `SigLevel = Never`, and point each `Include` line at the server lists of the port in this repository:
 
 ```bash
 mkdir -p /tmp/pacboot
-sed 's|^SigLevel .*|SigLevel = Never|' rootfs/amd64/etc/pacman.conf > /tmp/pacboot/pacman.conf
-sed 's|^Include .*|Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch|' \
-  -i /tmp/pacboot/pacman.conf
+sed -e 's|^SigLevel .*|SigLevel = Never|' \
+  -e "s|^Include = /etc/pacman.d/|Include = $PWD/rootfs/$ARCH/etc/pacman.d/|" \
+  "rootfs/$ARCH/etc/pacman.conf" > /tmp/pacboot/pacman.conf
 ```
+
+⛔ Give `pacman` all six paths, not only `--root`. `--root` moves only the database, the lock and the log into the root. The config, the cache, the keyring and the hook directory `/etc/pacman.d/hooks` stay at their compiled-in paths on the host.
 
 ```bash
 pac() {
@@ -132,116 +160,135 @@ pac -Sy --noconfirm
 pac -S --noconfirm base
 ```
 
-⚠ `base` is the target, not a hand picked minimal set. Install scriptlets run
-with the target root's own shell, so a root without `bash` cannot run them.
+⚠ Install `base`, not a smaller set. Install scriptlets run with the shell of the new root, so a root with no `bash` cannot run them.
 
-Count what landed rather than trusting the exit status:
+Count the installed packages. Do not trust the exit status alone:
 
 ```bash
-ls -1 "$ROOT/var/lib/pacman/local" | awk '!/ALPM_DB_VERSION/ { n++ } END { print n + 0 }'
+find "$ROOT/var/lib/pacman/local" -mindepth 1 -maxdepth 1 -type d | awk 'END { print NR }'
 ```
 
-### Pass two, verified
+### The keyring
 
-⛔ Do not bind mount the host's `/dev`. If the later `umount` fails, an `rm -rf`
-on the root deletes the host's device nodes. Five `mknod` calls are enough.
+The keyring to populate depends on the port. `ports/$ARCH.conf` names it in the key `keyring`. `none` means `archlinux`. Any other value names a pin in `bootstrap/keyrings/`. The pin gives the keyring package, its `sha256` and its trusted fingerprints, and this repository carries the package.
+
+Install the carried keyring package after a `sha256` check. `keyring` gets a value only when the check passes:
 
 ```bash
-mknod -m 666 "$ROOT/dev/null"    c 1 3
-mknod -m 666 "$ROOT/dev/zero"    c 1 5
-mknod -m 666 "$ROOT/dev/random"  c 1 8
+pin="$(scripts/ports get "$ARCH" keyring)"
+keyring=""
+if [ "$pin" = none ]; then
+  keyring=archlinux
+else
+  pkg="bootstrap/keyrings/$(awk -F' *= *' '$1 == "package" { print $2 }' "bootstrap/keyrings/$pin.pin")"
+  want="$(awk -F' *= *' '$1 == "sha256" { print $2 }' "bootstrap/keyrings/$pin.pin")"
+  if [ "$(sha256sum "$pkg" | awk '{ print $1 }')" = "$want" ]; then
+    pac -U --noconfirm "$pkg"
+    keyring="$pin"
+  else
+    echo "$pkg does not have the sha256 of its pin" >&2
+    false
+  fi
+fi
+echo "keyring: ${keyring:-none, the check failed}"
+```
+
+⛔ Do not go on to pass two when the sha256 does not match. For the pins `archpower` and `archlinux-lcpu`, `base` depends on the keyring package. So pass one installed the keyring of a mirror, with no check, and pass two would trust it.
+
+⚠ For `none`, pass one installed `archlinux-keyring` from a mirror with no check. Compare its master key fingerprints with https://archlinux.org/master-keys/ before you trust the root.
+
+### Pass two, with the signature check
+
+⛔ Do not bind mount the `/dev` of the host. If the `umount` fails, an `rm -rf` of the root deletes the device nodes of the host. Make five device nodes:
+
+```bash
+mknod -m 666 "$ROOT/dev/null" c 1 3
+mknod -m 666 "$ROOT/dev/zero" c 1 5
+mknod -m 666 "$ROOT/dev/random" c 1 8
 mknod -m 666 "$ROOT/dev/urandom" c 1 9
-mknod -m 666 "$ROOT/dev/tty"     c 5 0
+mknod -m 666 "$ROOT/dev/tty" c 5 0
 cp -f /etc/resolv.conf "$ROOT/etc/resolv.conf"
 ```
 
-The keyring to populate is not `archlinux` on every port:
-
-| architecture | keyring package | `--populate` argument |
-| --- | --- | --- |
-| `amd64`, `riscv64` | `archlinux-keyring` | `archlinux` |
-| `arm64`, `armv7` | `archlinuxarm-keyring` | `archlinuxarm` |
-| `loong64` | `archlinux-lcpu-keyring` | `archlinux-lcpu` |
-| `ppc`, `ppc64`, `ppc64le` | `archpower-keyring` | `archpower` |
-
-Each is pinned by `sha256` and by its trusted fingerprints in
-`bootstrap/keyrings/*.pin`, so the keyring can be verified before it is trusted
-rather than after.
+Populate the keyring. Install the shipped config and the server lists of the port. Sync again. An empty `keyring` stops the first command:
 
 ```bash
-chroot "$ROOT" /usr/bin/bash -c 'pacman-key --init && pacman-key --populate archlinux'
-cp rootfs/amd64/etc/pacman.conf "$ROOT/etc/pacman.conf"
-cp rootfs/amd64/etc/pacman.d/mirrorlist "$ROOT/etc/pacman.d/mirrorlist"
-chroot "$ROOT" /usr/bin/bash -c 'pacman -Sy --noconfirm'
+chroot "$ROOT" /usr/bin/bash -c "pacman-key --init && pacman-key --populate ${keyring:?no checked keyring}"
+cp "rootfs/$ARCH/etc/pacman.conf" "$ROOT/etc/pacman.conf"
+cp "rootfs/$ARCH/etc/pacman.d/"mirrorlist* "$ROOT/etc/pacman.d/"
+chroot "$ROOT" /usr/bin/bash -c 'pacman -Syu --noconfirm'
 ```
 
-The shipped config carries `SigLevel = Required DatabaseOptional`, so a second
-sync that succeeds is the proof that verification works.
+The shipped config has `SigLevel = Required DatabaseOptional`. When this sync succeeds, the signature check works in the new root.
 
-### Prove the root runs
+### Check that the root runs
 
 ```bash
 chroot "$ROOT" /usr/bin/bash -c 'echo it-runs'
 chroot "$ROOT" /usr/bin/pacman --version
 ```
 
-⭐ This is the check that means "a working root". It executes the new root's own
-dynamically linked binaries with the new root's own loader. Nothing about the
-static builder is involved any more, including its libc and its architecture.
+⭐ This check runs the dynamically linked binaries of the new root with the loader of the new root. The static binary has no part in it.
 
-## Turn it into an image and test it
+## Make an image and test it
 
-```bash
-tar --numeric-owner -C "$ROOT" -c . | podman import - localhost/archlinux:bootstrapped
-```
+The image gets the labels and the `/etc/os-release` that a build of the Dockerfile gives. `scripts/gen-evidence` reads the commit and the time from the labels.
 
 ```bash
-SOURCE_COMMIT="$(git rev-parse HEAD)" BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  scripts/gen-evidence amd64 localhost/archlinux:bootstrapped linux/amd64 /tmp/ev.json
-IMAGE=localhost/archlinux:bootstrapped PLATFORM=linux/amd64 EVIDENCE=/tmp/ev.json \
+platform="$(scripts/ports get "$ARCH" platform)"
+version="$(date -u +%Y.%m.%d)"
+bootstrap/any/usr/local/bin/write-os-release "$ROOT" "$version"
+tar --numeric-owner -C "$ROOT" -c . | podman import \
+  --change "LABEL org.opencontainers.image.version=$version" \
+  --change "LABEL org.opencontainers.image.revision=$(git rev-parse HEAD)" \
+  --change "LABEL org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  - localhost/archlinux:bootstrapped
+scripts/gen-evidence "$ARCH" localhost/archlinux:bootstrapped "$platform" /tmp/ev.json
+IMAGE=localhost/archlinux:bootstrapped PLATFORM="$platform" EVIDENCE=/tmp/ev.json \
   tests/run.sh image
 ```
 
-## Repair a system whose libc is gone
+⚠ `scripts/gen-evidence` reads the current repository databases, because this root has no database snapshot. It stops when a package moved after pass two.
 
-The job the binary exists for. From rescue media, with the broken root mounted
-at `/mnt`:
+## Repair a system with a broken libc
+
+Start from rescue media. Mount the broken root at `/mnt`.
+
+⛔ `-r /mnt` alone is not enough. It moves only the database, the lock and the log. pacman then reads the config, the keyring, the cache and the hooks of the rescue system. Rescue media with no `/etc/pacman.conf` stops at once: "config file /etc/pacman.conf could not be read".
+
+So give every path. The `Include` lines of the config of the root are absolute, so a copy outside the root points them into `/mnt`. `--hookdir` must exist:
 
 ```bash
-./pacman-static-amd64 -r /mnt -S --noconfirm glibc
-./pacman-static-amd64 -r /mnt -Qkk
+mkdir -p /tmp/rescue /mnt/etc/pacman.d/hooks
+sed 's|^Include = /etc/pacman.d/|Include = /mnt/etc/pacman.d/|' /mnt/etc/pacman.conf > /tmp/rescue/pacman.conf
+rp() {
+  "$PACMAN" --config /tmp/rescue/pacman.conf --root /mnt \
+    --gpgdir /mnt/etc/pacman.d/gnupg --hookdir /mnt/etc/pacman.d/hooks \
+    --cachedir /mnt/var/cache/pacman/pkg "$@"
+}
+rp -S --noconfirm glibc
+rp -Qkk
 ```
 
-⚠ Under `-r` the compiled-in `--gpgdir` and `--hookdir` resolve inside `/mnt`,
-so this case needs no path redirection. It is the empty-directory case above
-where missing one writes on the host.
+⚠ The binary must be for the CPU of the broken system.
 
-⚠ The architecture must match. A `ppc64le` root cannot be repaired with the
-`amd64` binary.
+## What the binary does not remove
 
-## What this does not remove
-
-| still required | why |
+| still necessary | why |
 | --- | --- |
-| a kernel that can execute the binary | it is static, not a bootloader |
-| `/dev/urandom` | OpenSSL and gpg need entropy, and fail in ways that look like a `pacman` bug |
-| `/etc/ssl/certs/ca-certificates.crt` | `curl` was built with that path, not with embedded certificates. Use an `http` mirror if the host has no bundle |
-| a reachable mirror | the binary removes the container image from the trust root, not the network |
+| a kernel that runs the binary | the binary is static, not a boot loader |
+| `/dev/urandom` | OpenSSL and `gpg` need entropy. Without it they fail in ways that look like a `pacman` fault |
+| `/etc/ssl/certs/ca-certificates.crt` | `curl` has this path, not embedded certificates. On a host with no bundle, use an `http` server |
+| a server that answers | the binary removes the container image from the trust root, not the network |
 
-## What the binary is not
+## Limits
 
-⚠ `libcurl` here is built without brotli and without nghttp2, so it negotiates
-HTTP/1.1 and does not accept a `br` content encoding. Neither is needed to fetch
-a package. The evidence file records the whole source set, so the difference is
-a measurement rather than a claim.
+⚠ `libcurl` in the binary has no brotli and no nghttp2. It uses HTTP/1.1 and does not accept the `br` content encoding. An Arch mirror needs neither. The evidence file records the `curl` features in `curl_features`.
 
-⚠ Every non `x86_64` claim in this repository is a `qemu-user` claim. `qemu-user`
-emulates the instruction set and passes syscalls to the host kernel: it does not
-exercise the target's kernel or its page size.
+⚠ Each run of a binary for another CPU than the build host is a `qemu-user` run. `qemu-user` emulates the instructions and passes each system call to the host kernel. It does not test the kernel or the page size of the target.
 
-## Licensing
+⚠ Nobody has run this guide end to end for every port. `tests/static/80-docs-claims.sh` checks that each command block parses.
 
-The binary is `pacman`, which is `GPL-2.0-or-later` however it was built. A
-release asset carries the pinned source tarball beside it, which is the source
-offer. `bootstrap/pacman-static/sources.pin` names every input by URL and
-`sha256`, so the exact sources are recoverable from the pin alone.
+## Licences
+
+`pacman` is GPL-2.0-or-later. Each binary also links OpenSSL 3, which is Apache-2.0, so the binary is distributed under GPL-3.0-or-later. [THIRD-PARTY.md](../THIRD-PARTY.md) gives each licence. Four libraries in the binary use the LGPL, version 2.1: libgpg-error, libassuan, gpgme and libseccomp. A release does not carry the source tarballs. `bootstrap/pacman-static/sources.pin` names each source by URL and `sha256`. `scripts/build-pacman-static --fetch` downloads each one into `WORK/dl` and checks it.

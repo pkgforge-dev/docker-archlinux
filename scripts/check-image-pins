@@ -1,194 +1,338 @@
 #!/usr/bin/env bash
 #
-# Check every container image pinned by digest in this repository against the
-# tag it was cut from.
+# Compare each container image pinned by digest with the digest its tag has
+# now.
 #
-#   scripts/check-image-pins            report only
-#   scripts/check-image-pins --apply    rewrite each stale digest in place
+#   scripts/check-image-pins                  report
+#   scripts/check-image-pins --max-age DAYS   report; exit 3 only for a pin
+#                                             that is behind for more than DAYS
+#   scripts/check-image-pins --max-age DAYS --seen FILE
+#                                             the same, and keep the record of
+#                                             the pins that are behind in FILE
+#   scripts/check-image-pins --apply          write each new digest in place
 #
-# Dependabot watches the docker ecosystem, which means Dockerfiles. It does not
-# read a `docker run image@sha256:...` inside a workflow step, so those pins
-# have no watcher at all. This is that watcher, and it covers the Dockerfile too
-# rather than assuming Dependabot got there first.
+# The files: Dockerfile, .github/workflows/*.yml and every file in scripts/.
+# A pin is name[:tag]@sha256:<64 hex>. Its tag comes from a "# tag: <tag>"
+# marker on the line of the pin or on one of the 3 lines above it:
 #
-# The tag each digest belongs to is read from the comment beside it, so the pin
-# stays self describing:
+#   # tag: latest
+#   ARG BASE_IMAGE=docker.io/library/archlinux:latest@sha256:<64 hex>
 #
-#   docker.io/library/archlinux@sha256:...   # tag: latest
+# ⛔ Every pin has a marker. Renovate (.github/renovate.json) finds the pins by
+# the same marker, so a pin with no marker never moves.
 #
-# Exit status is the result:
-#   0  every pin matches the digest its tag resolves to
-#   3  at least one pin is behind
-#   1  the check itself could not run
+# The registries: docker.io, ghcr.io, mirror.gcr.io, public.ecr.aws and any
+# other registry that lib.sh can read anonymously.
+#
+# --max-age: a pin is overdue when it is behind its tag for more than DAYS.
+# Renovate moves pins, so a pin can be behind for some days. The days behind
+# are a lower bound, the larger of two counts:
+#   - the age of the new digest of the tag. On Docker Hub it is the push time
+#     of the tag. On another registry it is the created time in the image
+#     config.
+#   - with --seen FILE, the days since the first run that saw the pin behind
+#     with the same pinned digest.
+# ⚠ A tag that moves each week (archlinux:latest) always has a new digest that
+# is less than 14 days old. With no --seen FILE, such a pin is never overdue.
+# ⚠ With no --seen FILE, a pin whose age cannot be read counts as older than
+# DAYS.
+#
+# --seen FILE: the record of the pins that are behind, one line per pin:
+#   <first seen, YYYY-MM-DD> <file> <name>:<tag> <pinned digest>
+# The script reads FILE when it exists, and writes it again at the end. A pin
+# that is behind keeps its first day. A pin that is current, or that has a new
+# pinned digest, leaves the record. An UNREAD pin keeps its line.
+# .github/workflows/freshness.yml keeps FILE in the artifact image-pins-seen.
+#
+# Output, one line per pin:
+#   current   FILE:LINE  NAME:TAG
+#   BEHIND    FILE:LINE  NAME:TAG  AGE day(s)    (then the pinned and new digest,
+#                                                 and the first day seen behind)
+#   UNMARKED  FILE:LINE  NAME      the pin has no marker, or a marker for another tag
+#   UNREAD    FILE:LINE  NAME:TAG  the registry did not give a digest
+#
+# Under GitHub Actions the script writes found, behind, overdue and unread to
+# GITHUB_OUTPUT.
+#
+# Exit status:
+#   0  every pin is current (with --max-age: no pin is behind for more than DAYS)
+#   3  a pin is behind (with --max-age: for more than DAYS)
+#   1  a pin has no marker, a registry did not answer, or the check could not run
 set -euo pipefail
 
+PROG=check-image-pins
+# shellcheck source=scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# die MESSAGE [ACTION ...]
-#
-# The first argument says what is wrong. Every argument after it is printed
-# indented below it, and is what the reader does next. A message with no
-# next step leaves the reader to work it out from the source.
-die() {
-  echo "check-image-pins: $1" >&2
-  shift
-  while [ "$#" -gt 0 ]; do
-    echo "  $1" >&2
-    shift
-  done
-  exit 1
-}
-
-need() {
-  command -v "$1" >/dev/null || die "$1 is required"
-}
-need curl
-need jq
-need awk
+need curl jq awk grep sha256sum
 
 apply=0
-case "${1:-}" in
-  "") ;;
-  --apply) apply=1 ;;
-  *) die "usage: check-image-pins [--apply]" ;;
-esac
+max_age=""
+seen_file=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --apply) apply=1 ;;
+    --max-age)
+      max_age="${2:-}"
+      [[ "$max_age" =~ ^[0-9]+$ ]] || die "--max-age needs a whole number of days"
+      shift
+      ;;
+    --seen)
+      seen_file="${2:-}"
+      [ -n "$seen_file" ] || die "--seen needs a file"
+      shift
+      ;;
+    *) die "usage: check-image-pins [--apply] [--max-age DAYS [--seen FILE]]" ;;
+  esac
+  shift
+done
+[ -z "$seen_file" ] || [ -n "$max_age" ] || die "--seen needs --max-age"
 
-ACCEPT='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
 
-# resolve REGISTRY REPO TAG -> the digest that tag points at, or empty
-resolve() {
-  local registry="$1" repo="$2" tag="$3" auth token realm service
+# split NAME -> sets registry and repo. docker.io is the default registry and
+# library/ the default namespace, as docker reads a name.
+split_name() {
+  local name="$1" first="${1%%/*}"
+  registry=docker.io
+  repo="$name"
+  case "$name" in
+    */*)
+      case "$first" in
+        *.* | localhost)
+          registry="$first"
+          repo="${name#*/}"
+          ;;
+      esac
+      ;;
+  esac
   case "$registry" in
-    docker.io | registry-1.docker.io)
-      realm="https://auth.docker.io/token"; service="registry.docker.io"
-      registry="registry-1.docker.io"
-      ;;
-    ghcr.io)
-      realm="https://ghcr.io/token"; service="ghcr.io"
-      ;;
-    *)
-      echo "check-image-pins: no anonymous token flow known for $registry" >&2
-      return 1
-      ;;
-  esac
-  token="$(curl -sS --connect-timeout 15 --max-time 60 \
-    "$realm?service=$service&scope=repository:$repo:pull" | jq -r '.token // .access_token // empty')"
-  [ -n "$token" ] || { echo "check-image-pins: no pull token for $repo" >&2; return 1; }
-
-  auth="$(curl -sS -o /dev/null -D - --connect-timeout 15 --max-time 60 \
-    -H "Authorization: Bearer $token" -H "Accept: $ACCEPT" \
-    "https://$registry/v2/$repo/manifests/$tag")" || return 1
-  printf '%s\n' "$auth" | tr -d '\r' | awk 'tolower($1) == "docker-content-digest:" { print $2; exit }'
-}
-
-# pins_in FILE -> "<lineno>:<text>" per pinned image, empty when there are none
-#
-# A file with no pin is normal. grep exits 1 for that, and exits 2 when it could
-# not read the file at all. Those two must not look the same.
-pins_in() {
-  local out rc=0
-  out="$(grep -nE '@sha256:[0-9a-f]{64}' "$1")" || rc=$?
-  case "$rc" in
-    0) printf '%s\n' "$out" ;;
-    1) ;;
-    *) die "grep exited $rc scanning $1" ;;
+    docker.io) case "$repo" in */*) ;; *) repo="library/$repo" ;; esac ;;
   esac
 }
 
+# tag_date REGISTRY REPO TAG DIGEST -> YYYY-MM-DD when the tag got DIGEST, or
+# nothing when it cannot be read
+tag_date() {
+  local registry="$1" repo="$2" tag="$3" digest="$4" code token mdigest cdigest when=""
+  if [ "$registry" = docker.io ]; then
+    code="$(HTTP_TRIES=2 http_get "https://hub.docker.com/v2/namespaces/${repo%%/*}/repositories/${repo#*/}/tags/$tag" "$work/hub.json")" || code=000
+    if [ "$code" = 200 ]; then
+      when="$(jq -r '.tag_last_pushed // .last_updated // empty' "$work/hub.json")"
+    fi
+  fi
+  if [ -z "$when" ]; then
+    token="$(reg_token "$registry" "$repo")" || return 0
+    code="$(reg_get "$registry" "$repo" "$digest" "$work/m.json" "$token")" || return 0
+    [ "$code" = 200 ] || return 0
+    mdigest="$(jq -r '(.manifests // [])[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' "$work/m.json" | awk 'NR == 1')"
+    if [ -n "$mdigest" ]; then
+      code="$(reg_get "$registry" "$repo" "$mdigest" "$work/m.json" "$token")" || return 0
+      [ "$code" = 200 ] || return 0
+    fi
+    cdigest="$(jq -r '.config.digest // empty' "$work/m.json")"
+    [ -n "$cdigest" ] || return 0
+    code="$(reg_blob "$registry" "$repo" "$cdigest" "$work/c.json" "$token")" || return 0
+    [ "$code" = 200 ] || return 0
+    when="$(jq -r '.created // empty' "$work/c.json")"
+  fi
+  case "$when" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*)
+      # A date before 2001 is a placeholder (reproducible builds set 1970).
+      [ "${when:0:4}" -gt 2000 ] && printf '%s\n' "${when:0:10}"
+      ;;
+  esac
+  return 0
+}
+
 #---------------------------------------------------------------------------#
-# Find every pin. The tag comes from a "# tag: <name>" comment near the line.
+# The files.
 #---------------------------------------------------------------------------#
-files="$REPO_ROOT/Dockerfile
-$(find "$REPO_ROOT/.github/workflows" -type f -name '*.yml' | sort)"
+{
+  [ -f "$REPO_ROOT/Dockerfile" ] && printf '%s\n' "$REPO_ROOT/Dockerfile"
+  find "$REPO_ROOT/.github/workflows" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \)
+  find "$REPO_ROOT/scripts" -maxdepth 1 -type f
+} | LC_ALL=C sort > "$work/files.txt"
+
+today="$(date -u +%Y-%m-%d)"
+
+# The record of --seen, read as data. A line that is not
+# "<YYYY-MM-DD> <file> <name>:<tag> sha256:<64 hex>" is named and left out.
+: > "$work/seen.old"
+: > "$work/seen.new"
+if [ -n "$seen_file" ] && [ -f "$seen_file" ]; then
+  tr -d '\r' < "$seen_file" | awk -v f="$seen_file" '
+    /^[[:space:]]*(#|$)/ { next }
+    NF == 4 && $1 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ && $3 ~ /:/ && $4 ~ /^sha256:[0-9a-f]+$/ && length($4) == 71 { print; next }
+    { printf "check-image-pins: warning: %s:%d is not a record line, left out: %s\n", f, NR, substr($0, 1, 120) > "/dev/stderr" }
+  ' > "$work/seen.old"
+fi
+
+# first_seen REL NAME:TAG DIGEST -> the first day of the record for this pin,
+# or nothing
+first_seen() {
+  awk -v f="$1" -v n="$2" -v d="$3" '$2 == f && $3 == n && $4 == d { day = $1 } END { if (day != "") print day }' "$work/seen.old"
+}
 
 found=0
-stale=0
+behind=0
+overdue=0
+unread=0
+unmarked=0
+
 while IFS= read -r file; do
   [ -n "$file" ] || continue
-  [ -f "$file" ] || continue
   rel="${file#"$REPO_ROOT/"}"
+  rc=0
+  grep -nE '@sha256:[0-9a-f]{64}' "$file" > "$work/hits.txt" || rc=$?
+  case "$rc" in
+    0 | 1) ;;
+    *) die "grep exited $rc on $rel" "reproduce: grep -nE '@sha256:[0-9a-f]{64}' $rel" ;;
+  esac
 
   while IFS= read -r hit; do
     [ -n "$hit" ] || continue
     lineno="${hit%%:*}"
     text="${hit#*:}"
-    # awk, not grep -o piped into head. grep -o exits 1 when nothing matches and
-    # head closing the pipe makes it take SIGPIPE, and pipefail turns either into
-    # a script that stops with no message. A line with no pin is a normal result.
-    ref="$(printf '%s\n' "$text" \
-      | awk 'match($0, /[a-z0-9][a-z0-9._\/-]*@sha256:[0-9a-f]{64}/) {
-               print substr($0, RSTART, RLENGTH) }')"
+    ref="$(printf '%s\n' "$text" | awk '
+      match($0, /[a-z0-9][a-z0-9._\/-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]+/) {
+        print substr($0, RSTART, RLENGTH)
+      }')"
     [ -n "$ref" ] || continue
+    have="${ref##*@}"
+    [ "${#have}" -eq 71 ] || continue
     name="${ref%@*}"
-    have="${ref#*@}"
-    # The marker may sit on the pin's own line, or on one of the three lines
-    # above it. A Dockerfile instruction takes no trailing comment, and a pin
-    # inside a shell line continuation cannot take one either.
-    tag="$(awk -v ln="$lineno" 'NR >= ln - 3 && NR <= ln {
-             if (match($0, /# *tag: *[A-Za-z0-9._-]+/)) {
-               s = substr($0, RSTART, RLENGTH); sub(/# *tag: */, "", s); t = s
-             }
-           } END { print t }' "$file")"
-    if [ -z "$tag" ]; then
-      echo "check-image-pins: $rel:$lineno pins $name with no '# tag:' comment, so it cannot be checked" >&2
-      die "every digest pin needs a '# tag: <name>' comment naming what it was cut from"
+    inline=""
+    case "${name##*/}" in
+      *:*)
+        inline="${name##*:}"
+        name="${name%:*}"
+        ;;
+    esac
+    found=$((found + 1))
+    # The nearest marker at or above the pin. The search stops at the line of
+    # another pin, so one marker never serves two pins.
+    tag="$(awk -v ln="$lineno" '
+      NR >= ln - 3 && NR <= ln { line[NR] = $0 }
+      END {
+        for (i = ln; i >= ln - 3 && i >= 1; i--) {
+          if (match(line[i], /#[[:space:]]*tag:[[:space:]]*[A-Za-z0-9._-]+/)) {
+            s = substr(line[i], RSTART, RLENGTH)
+            sub(/^#[[:space:]]*tag:[[:space:]]*/, "", s)
+            print s
+            exit
+          }
+          if (i < ln && line[i] ~ /@sha256:[0-9a-f]/) exit
+        }
+      }' "$file")"
+    if [ -z "$tag" ] || { [ -n "$inline" ] && [ "$inline" != "$tag" ]; }; then
+      unmarked=$((unmarked + 1))
+      printf 'UNMARKED  %s:%s  %s  marker "%s", tag in the pin "%s"\n' "$rel" "$lineno" "$name" "${tag:-none}" "${inline:-none}"
+      continue
     fi
 
-    registry="docker.io"
-    repo="$name"
-    case "$name" in
-      */*/*) registry="${name%%/*}"; repo="${name#*/}" ;;
-      */*)   case "${name%%/*}" in *.*|localhost) registry="${name%%/*}"; repo="${name#*/}" ;; esac ;;
-    esac
-    case "$registry" in docker.io) case "$repo" in */*) ;; *) repo="library/$repo" ;; esac ;; esac
-
-    found=$((found + 1))
-    want="$(resolve "$registry" "$repo" "$tag")" || die "cannot resolve $name:$tag"
-    [ -n "$want" ] || die "$registry returned no digest for $repo:$tag"
+    split_name "$name"
+    rc=0
+    head="$(reg_head "$registry" "$repo" "$tag" 2> "$work/head.err")" || rc=$?
+    code="${head%% *}"
+    want="${head#* }"
+    if [ "$rc" -ne 0 ] || [ "$code" != 200 ] || [ -z "$want" ]; then
+      unread=$((unread + 1))
+      printf 'UNREAD    %s:%s  %s:%s  HTTP %s; reproduce: scripts/registry-tags %s %s\n' \
+        "$rel" "$lineno" "$name" "$tag" "${code:-000}" "$registry" "$repo"
+      first="$(first_seen "$rel" "$name:$tag" "$have")"
+      [ -z "$first" ] || printf '%s %s %s %s\n' "$first" "$rel" "$name:$tag" "$have" >> "$work/seen.new"
+      continue
+    fi
 
     if [ "$want" = "$have" ]; then
-      echo "current  $rel:$lineno  $name:$tag"
-    else
-      stale=$((stale + 1))
-      echo "BEHIND   $rel:$lineno  $name:$tag"
-      echo "  pinned: $have"
-      echo "  tag now: $want"
-      if [ "$apply" -eq 1 ]; then
-        tmp="$(mktemp)"
-        # index() and substr() rather than gsub(), because gsub takes a regex
-        # and the replacement text is interpreted for & and backslashes. A
-        # digest is a literal and must be treated as one.
-        awk -v ln="$lineno" -v old="$have" -v new="$want" '
-          NR == ln {
-            p = index($0, old)
-            if (p > 0) { $0 = substr($0, 1, p - 1) new substr($0, p + length(old)) }
-          }
-          { print }' "$file" > "$tmp"
-        if grep -qF "$want" "$tmp"; then
-          # The file is replaced in one step, so an interrupted run cannot
-          # leave a half written pin behind.
-          mv "$tmp" "$file"
-          echo "  applied"
-        else
-          rm -f "$tmp"
-          die "rewriting $rel:$lineno did not take, the digest is unchanged" \
-            "nothing was written, so the file is untouched" \
-            "edit it by hand: on $rel line $lineno, replace $have with $want"
-        fi
+      printf 'current   %s:%s  %s:%s\n' "$rel" "$lineno" "$name" "$tag"
+      continue
+    fi
+
+    behind=$((behind + 1))
+    when="$(tag_date "$registry" "$repo" "$tag" "$want")"
+    age=""
+    if [ -n "$when" ]; then
+      age="$("$REPO_ROOT/scripts/date-age" "$when" "$today")"
+    fi
+    first=""
+    if [ -n "$seen_file" ]; then
+      first="$(first_seen "$rel" "$name:$tag" "$have")"
+      [ -n "$first" ] || first="$today"
+      since="$("$REPO_ROOT/scripts/date-age" "$first" "$today")"
+      # A day after today is not the day of a run.
+      if [ "$since" -lt 0 ]; then
+        first="$today"
+        since=0
+      fi
+      printf '%s %s %s %s\n' "$first" "$rel" "$name:$tag" "$have" >> "$work/seen.new"
+      if [ -z "$age" ] || [ "$since" -gt "$age" ]; then
+        age="$since"
       fi
     fi
-    # grep exits 1 when a file holds no pin, which is a normal result here, so
-    # the pattern is matched through a helper that separates "nothing matched"
-    # from "the scan did not run".
-  done < <(pins_in "$file")
-done <<< "$files"
+    if [ -n "$age" ]; then
+      age_text="$age day(s)"
+    else
+      age_text="age unknown"
+    fi
+    if [ -n "$max_age" ] && { [ -z "$age" ] || [ "$age" -gt "$max_age" ]; }; then
+      overdue=$((overdue + 1))
+    fi
+    printf 'BEHIND    %s:%s  %s:%s  %s\n' "$rel" "$lineno" "$name" "$tag" "$age_text"
+    printf '  pinned:  %s\n  tag now: %s\n' "$have" "$want"
+    [ -z "$first" ] || printf '  seen behind since: %s\n' "$first"
 
-[ "$found" -gt 0 ] || die "no digest pinned image found, which means this check is not looking where the pins are"
+    if [ "$apply" -eq 1 ]; then
+      tmp="$work/rewrite"
+      # index() and substr(), not gsub(): a digest is a literal string.
+      awk -v ln="$lineno" -v old="$have" -v new="$want" '
+        NR == ln {
+          p = index($0, old)
+          if (p > 0) { $0 = substr($0, 1, p - 1) new substr($0, p + length(old)) }
+        }
+        { print }' "$file" > "$tmp"
+      rc=0
+      grep -qF "$want" "$tmp" || rc=$?
+      [ "$rc" -eq 0 ] || die "the new digest did not go into $rel:$lineno" \
+        "the file is not changed" \
+        "edit it by hand: on line $lineno of $rel, replace $have with $want"
+      # The file is replaced in one step and keeps its mode.
+      cat "$tmp" > "$file"
+      echo "  applied"
+    fi
+  done < "$work/hits.txt"
+done < "$work/files.txt"
 
-echo "checked $found pinned image(s), $stale behind"
+[ "$found" -gt 0 ] || die "no image pinned by digest in Dockerfile, .github/workflows or scripts" \
+  "the check does not read the files that hold the pins" \
+  "reproduce: grep -rnE '@sha256:[0-9a-f]{64}' Dockerfile .github/workflows scripts"
 
-if [ -n "${GITHUB_OUTPUT:-}" ]; then
-  printf 'found=%s\nstale=%s\n' "$found" "$stale" >> "$GITHUB_OUTPUT"
+echo "checked $found pinned image(s): $behind behind, ${max_age:+$overdue behind for more than $max_age day(s), }$unread not read, $unmarked with no marker"
+
+if [ -n "$seen_file" ]; then
+  LC_ALL=C sort -u "$work/seen.new" > "$work/seen.sorted"
+  {
+    echo "# <first seen> <file> <name>:<tag> <pinned digest>: the image pins that are behind (scripts/check-image-pins --seen)"
+    cat "$work/seen.sorted"
+  } > "$seen_file.new"
+  mv "$seen_file.new" "$seen_file"
+  echo "the record $seen_file holds $(awk 'END { print NR + 0 }' "$work/seen.sorted") pin(s) that are behind"
 fi
 
-[ "$stale" -eq 0 ] || exit 3
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  printf 'found=%s\nbehind=%s\noverdue=%s\nunread=%s\nunmarked=%s\n' \
+    "$found" "$behind" "$overdue" "$unread" "$unmarked" >> "$GITHUB_OUTPUT"
+fi
+
+if [ -n "$max_age" ]; then
+  [ "$overdue" -eq 0 ] || exit 3
+elif [ "$behind" -gt 0 ]; then
+  exit 3
+fi
+if [ "$unread" -gt 0 ] || [ "$unmarked" -gt 0 ]; then
+  exit 1
+fi
+exit 0

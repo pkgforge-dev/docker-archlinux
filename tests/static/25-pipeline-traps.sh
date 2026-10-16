@@ -1,136 +1,97 @@
 #!/usr/bin/env bash
 #
-# No script that sets pipefail may use a pipeline shape that fails on a normal
-# result.
+# Check that no script under pipefail uses a pipeline that fails on a normal
+# input.
 #
-# Two shapes, both measured rather than reasoned about:
+# Two shapes:
+#   producer | head, | grep -q, | grep -m, | awk '... { exit }'
+#       The reader stops early and closes the pipe. A producer that is still
+#       writing gets SIGPIPE, and pipefail turns that into status 141.
+#       Measured: seq 1 2000000 | head -n 40 | tail -1 gives 141.
+#   grep -c
+#       A count of zero is exit status 1, so under set -e an assignment from
+#       it stops the script before the code that handles zero.
+#       Measured: grep -c '^x' /dev/null gives 1.
 #
-#   seq 1 2000000 | head -n 40 | tail -1   rc 141. head closes the pipe, the
-#                                          producer takes SIGPIPE, and pipefail
-#                                          turns that into 141.
-#   grep -c '^x' /dev/null                 rc 1. A count of zero is a failure
-#                                          exit, so under set -e an assignment
-#                                          from it stops the script.
+# Read: each file under scripts, tests (not tests/fixtures), bootstrap and
+# examples that runs set ... pipefail, and each workflow. A workflow run:
+# block runs as bash -eo pipefail (tests/static/51-workflow-policy.sh checks
+# shell: bash). Comments are not read.
 #
-# Both kill a script with no message at all, and both do it on an input that is
-# perfectly normal. The second is worse: it stops the script before it can reach
-# the error path written to handle exactly that case. That is what
-# scripts/gen-mirrorlist did, where a count of zero servers stopped the function
-# three lines above the die that would have explained it.
-#
-# ⚠ This is a text scan, so it reads what a line looks like rather than what the
-# shell would do with it. Comments are stripped first. A pattern inside a
-# diagnostic string is indistinguishable from a command here, so no diagnostic
-# in this repository is written using either shape.
+# ⚠ This reads text. A pattern inside a message string counts as code, so no
+# message uses one of these shapes.
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR/..
 # shellcheck source=lib/harness.sh
 . "$REPO_ROOT/tests/lib/harness.sh"
 
-# The consumer that closes the pipe early.
-#
-# ⚠ head only. tail has to read the whole stream to know which line is last, so
-# it never closes the pipe early and never raises SIGPIPE in the producer.
-early_close="[|][[:space:]]*head([[:space:]]|$)"
+cd "$REPO_ROOT"
 
-# The producer whose normal result is a failure exit. The leading dash is
-# required: without it the flag pattern also matches an ordinary search term
-# that happens to contain the letter c.
-zero_is_failure="grep[[:space:]]+(-[a-zA-Z]*[[:space:]]+)*-[a-zA-Z]*c[a-zA-Z]*([[:space:]]|$)"
+# The readers that stop early. The patterns do not match their own text.
+early_close='[|][[:space:]]*(head([[:space:]]|$)|grep[[:space:]]+(-[A-Za-z]*[[:space:]]+)*-[A-Za-z]*[qm])|[|][[:space:]]*awk[^|]*[{;][[:space:]]*exit[[:space:]]*[};]'
+# grep with -c in its flags. The dash is part of the pattern, so a search
+# term with the letter c does not match.
+zero_is_failure='grep[[:space:]]+(-[a-zA-Z]*[[:space:]]+)*-[a-zA-Z]*c[a-zA-Z]*([[:space:]]|$)'
 
-# strip_comments FILE -> the file with # comments removed, line numbers kept
-strip_comments() {
-  awk '{ sub(/(^|[[:space:]])#.*$/, ""); print }' "$1"
-}
-
-# scan FILE LABEL -> prints "path:line: text" for each trapped line
+# scan FILE...: print "FILE:LINE: TEXT" for each line with a trap.
 scan() {
-  local file="$1" rel="$2"
-  strip_comments "$file" | awk -v rel="$rel" -v a="$early_close" -v b="$zero_is_failure" '
-    $0 ~ a || $0 ~ b {
+  awk -v a="$early_close" -v b="$zero_is_failure" '
+    {
       line = $0
-      sub(/^[[:space:]]+/, "", line)
-      printf "%s:%d: %s\n", rel, NR, line
-    }'
+      sub(/(^|[[:space:]])#.*$/, "", line)
+      if (line ~ a || line ~ b) {
+        t = line
+        sub(/^[[:space:]]+/, "", t)
+        printf "%s:%d: %s\n", FILENAME, FNR, t
+      }
+    }' "$@"
 }
 
 #---------------------------------------------------------------------------#
-# 1. Shell scripts that enable pipefail
+# Shell files that turn pipefail on
 #---------------------------------------------------------------------------#
-shell_files=""
-for d in scripts tests bootstrap examples; do
-  [ -d "$REPO_ROOT/$d" ] || continue
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    # Only files that actually turn pipefail on. A `set` command enabling it,
-    # not the word appearing in prose.
-    grep -qE '^[[:space:]]*set[[:space:]][^#]*pipefail' "$f" || continue
-    shell_files="$shell_files$f
-"
-  done <<< "$(find "$REPO_ROOT/$d" -type f \( -name '*.sh' -o -perm -u+x \) | sort)"
-done
-
-scanned=0
-trapped=""
+shell_files=()
 while IFS= read -r f; do
   [ -n "$f" ] || continue
-  scanned=$((scanned + 1))
-  hits="$(scan "$f" "${f#"$REPO_ROOT/"}")"
-  [ -z "$hits" ] || trapped="$trapped$hits
-"
-done <<< "$shell_files"
+  if grep -Eq '^[[:space:]]*set[[:space:]][^#]*pipefail' "$f"; then
+    shell_files+=("$f")
+  fi
+done <<< "$(for d in scripts tests bootstrap examples; do
+  [ ! -d "$d" ] || find "$d" -path tests/fixtures -prune -o -type f -print
+done | LC_ALL=C sort)"
 
-if [ "$scanned" -eq 0 ]; then
-  fail "at least one script sets pipefail" \
-    "none found, so this test asserted nothing" \
+if [ "${#shell_files[@]}" -eq 0 ]; then
+  fail "at least one script sets pipefail" "found none, so this checked nothing" \
     "reproduce: grep -rlE '^[[:space:]]*set[[:space:]][^#]*pipefail' scripts tests"
-elif [ -z "$trapped" ]; then
-  ok "none of the $scanned pipefail scripts uses a pipeline that fails on a normal result"
 else
-  fail "none of the $scanned pipefail scripts uses a pipeline that fails on a normal result" \
-    "head closing the pipe makes the producer take SIGPIPE, which pipefail reports as 141" \
-    "counting with a grep flag exits 1 on zero, which under set -e stops the script silently" \
-    "count lines with: awk '/pattern/ { n++ } END { print n + 0 }' FILE" \
-    "limit output with: awk -v n=N 'NR <= n' instead of head -n N" \
-    "reproduce: bash tests/run.sh static, which names each file and line"
-  while IFS= read -r t; do
-    [ -n "$t" ] && diag "$t"
-  done <<< "$trapped"
+  trapped="$(scan "${shell_files[@]}")"
+  if [ -z "$trapped" ]; then
+    ok "none of ${#shell_files[@]} pipefail scripts ends a pipeline early or counts with grep -c"
+  else
+    fail "none of ${#shell_files[@]} pipefail scripts ends a pipeline early or counts with grep -c" \
+      "$trapped" \
+      "read the whole stream and decide at the end: awk 'NR == 1' in place of head -n 1" \
+      "count with: awk '/pattern/ { n++ } END { print n + 0 }' FILE" \
+      "reproduce: grep -nE '$early_close' FILE"
+  fi
 fi
 
 #---------------------------------------------------------------------------#
-# 2. Workflow run blocks
-#
-# GitHub Actions runs `shell: bash` as `bash --noprofile --norc -eo pipefail`,
-# so every run block is under both settings whether or not it says so itself.
+# Workflow run: blocks
 #---------------------------------------------------------------------------#
-wf_dir="$REPO_ROOT/.github/workflows"
-wf_scanned=0
-wf_trapped=""
-if [ -d "$wf_dir" ]; then
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    wf_scanned=$((wf_scanned + 1))
-    hits="$(scan "$f" "${f#"$REPO_ROOT/"}")"
-    [ -z "$hits" ] || wf_trapped="$wf_trapped$hits
-"
-  done <<< "$(find "$wf_dir" -type f -name '*.yml' | sort)"
-fi
-
-if [ "$wf_scanned" -eq 0 ]; then
-  fail "at least one workflow was scanned" \
-    "no .yml found under .github/workflows" \
-    "reproduce: ls .github/workflows"
-elif [ -z "$wf_trapped" ]; then
-  ok "none of the $wf_scanned workflows uses a pipeline that fails on a normal result"
+mapfile -t wfs < <(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) | LC_ALL=C sort)
+if [ "${#wfs[@]}" -eq 0 ]; then
+  fail "at least one workflow was read" "no .github/workflows/*.yml" "reproduce: ls .github/workflows"
 else
-  fail "none of the $wf_scanned workflows uses a pipeline that fails on a normal result" \
-    "run blocks execute under -eo pipefail even when the block does not set it" \
-    "count lines with: awk '/pattern/ { n++ } END { print n + 0 }' FILE" \
-    "reproduce: bash tests/run.sh static, which names each file and line"
-  while IFS= read -r t; do
-    [ -n "$t" ] && diag "$t"
-  done <<< "$wf_trapped"
+  trapped="$(scan "${wfs[@]}")"
+  if [ -z "$trapped" ]; then
+    ok "none of ${#wfs[@]} workflows ends a pipeline early or counts with grep -c"
+  else
+    fail "none of ${#wfs[@]} workflows ends a pipeline early or counts with grep -c" \
+      "$trapped" \
+      "a run: block runs under -eo pipefail even when it does not set it" \
+      "reproduce: grep -nE '$early_close' FILE"
+  fi
 fi
 
 summary

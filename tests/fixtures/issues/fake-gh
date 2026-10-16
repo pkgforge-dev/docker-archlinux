@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+#
+# A stand-in for gh, for the tests of the scripts that read the GitHub API
+# and raise or clear issues. It makes no network request.
+#
+#   PATH=<dir with this file as gh>:$PATH FAKE_GH_DIR=DIR scripts/...
+#
+# Each answer comes from a file in FAKE_GH_DIR:
+#   api repos/O/R                                   repo.json; absent: {"default_branch":"main"}
+#   api repos/O/R/issues?state=open...              open.json; absent: []
+#   api repos/O/R/labels/L                          {}
+#   api -X POST repos/O/R/labels                    {}
+#   api -X POST repos/O/R/issues ...                {"number": 101}
+#   api -X PATCH repos/O/R/issues/N ...             {}
+#   api -X POST repos/O/R/issues/N/comments ...     {}
+#   api -X POST repos/O/R/issues/N/labels ...       {}
+#   api repos/O/R/pulls?...                         pulls.json; absent: []
+#   api repos/O/R/commits?...                       commits.json; absent: []
+#   api repos/O/R/actions/workflows?...             workflows.json
+#   api -X PUT repos/O/R/actions/workflows/ID/enable    nothing
+#   api repos/O/R/actions/workflows/F/runs?head_sha=S   runs-F-S.json, else runs-F.json; absent: HTTP 404
+#   api repos/O/R/actions/workflows/F/runs?...      runs-F.json; absent: HTTP 404
+#   api repos/O/R/actions/workflows/F               workflow-F.json; absent: HTTP 404
+#   api -X POST repos/O/R/actions/runs/ID/rerun-failed-jobs   {}
+#   api repos/O/R/commits/SHA/check-runs?...        check-runs-SHA.json, else check-runs.json;
+#                                                   absent: no check run
+#   api repos/O/R/actions/artifacts?...             artifacts.json; absent: no artifact
+#   workflow run F --ref B --repo O/R               nothing
+#   run download RUN --name N --dir D ...           the files of artifacts/RUN/N/ into D;
+#                                                   absent: fails
+#   pr list --head B ...                            the entries of prs.json whose headRefName
+#                                                   is B; absent: []
+#   pr diff N ...                                   diff-N.diff; absent: HTTP 404
+#   pr review | merge | edit | create | close ...   nothing
+# --jq EXPR is applied to the answer. FAKE_GH_FAIL=PATTERN makes each api call
+# whose path matches the shell PATTERN fail with HTTP 500. Any other call
+# fails, and says so.
+#
+# FAKE_GH_DIR/calls.log gets one line for each call that changes something:
+#   open KEY        a new issue whose body has <!-- track: KEY -->
+#   update N KEY    issue N, its body written again
+#   comment N       a comment on issue N
+#   close N         issue N closed
+#   label N         the label put back on issue N
+#   enable ID       workflow ID enabled
+#   rerun ID        the failed jobs of run ID started again
+#   dispatch F B    workflow F started on branch B
+#   approve N       pull request N approved
+#   merge N SHA     pull request N merged, with --match-head-commit SHA
+#   pr-edit N       pull request N, its title and body written again
+#   pr-create B     a new pull request with the head branch B
+#   pr-close N      pull request N closed
+# The body of each open and update goes to FAKE_GH_DIR/body-KEY.md.
+set -euo pipefail
+
+dir="${FAKE_GH_DIR:?FAKE_GH_DIR is not set}"
+
+if [ "${1:-}" = pr ]; then
+  sub="${2:-}"
+  shift 2
+  num=""
+  head=""
+  sha=""
+  jq_expr=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --head) head="$2"; shift 2 ;;
+      --match-head-commit) sha="$2"; shift 2 ;;
+      --jq | -q) jq_expr="$2"; shift 2 ;;
+      --repo | -R | --state | --json | --body | --body-file | --title | --base | --comment) shift 2 ;;
+      -*) shift ;;
+      *) num="$1"; shift ;;
+    esac
+  done
+  case "$sub" in
+    list)
+      if [ -f "$dir/prs.json" ]; then
+        jq --arg h "$head" '[.[] | select((.headRefName // $h) == $h)]' "$dir/prs.json"
+      else
+        echo '[]'
+      fi | if [ -n "$jq_expr" ]; then jq -r "$jq_expr"; else cat; fi
+      ;;
+    diff)
+      if [ -f "$dir/diff-$num.diff" ]; then
+        cat "$dir/diff-$num.diff"
+      else
+        echo "gh: Not Found (HTTP 404)" >&2
+        exit 1
+      fi
+      ;;
+    review) printf 'approve %s\n' "$num" >> "$dir/calls.log" ;;
+    merge) printf 'merge %s %s\n' "$num" "$sha" >> "$dir/calls.log" ;;
+    edit) printf 'pr-edit %s\n' "$num" >> "$dir/calls.log" ;;
+    create)
+      printf 'pr-create %s\n' "$head" >> "$dir/calls.log"
+      echo "https://github.com/test/repo/pull/102"
+      ;;
+    close) printf 'pr-close %s\n' "$num" >> "$dir/calls.log" ;;
+    *)
+      echo "fake-gh: no answer for: gh pr $sub" >&2
+      exit 1
+      ;;
+  esac
+  exit 0
+fi
+
+if [ "${1:-}" = run ] && [ "${2:-}" = download ]; then
+  run_id="${3:-}"
+  name=""
+  dest="."
+  shift 3
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --name | -n) name="$2"; shift 2 ;;
+      --dir | -D) dest="$2"; shift 2 ;;
+      --repo | -R) shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [ ! -d "$dir/artifacts/$run_id/$name" ]; then
+    echo "no valid artifacts found to download" >&2
+    exit 1
+  fi
+  mkdir -p "$dest"
+  cp -R "$dir/artifacts/$run_id/$name/." "$dest/"
+  exit 0
+fi
+
+if [ "${1:-}" = workflow ] && [ "${2:-}" = run ]; then
+  wf="${3:-}"
+  ref=""
+  shift 3
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --ref) ref="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  printf 'dispatch %s %s\n' "$wf" "$ref" >> "$dir/calls.log"
+  exit 0
+fi
+
+if [ "${1:-}" != api ]; then
+  echo "fake-gh: only gh api, gh pr, gh run download and gh workflow run are answered, not: gh $*" >&2
+  exit 1
+fi
+shift
+method=GET
+path=""
+jq_expr=""
+body=""
+state=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -X | --method) method="$2"; shift 2 ;;
+    --jq | -q) jq_expr="$2"; shift 2 ;;
+    -H | --header) shift 2 ;;
+    -f | -F | --raw-field | --field)
+      case "$2" in
+        body=*) body="${2#body=}" ;;
+        state=*) state="${2#state=}" ;;
+      esac
+      shift 2
+      ;;
+    -*) shift ;;
+    *) path="${1#/}"; shift ;;
+  esac
+done
+
+if [ -n "${FAKE_GH_FAIL:-}" ]; then
+  # shellcheck disable=SC2254 # the value is a shell pattern on purpose
+  case "$path" in
+    $FAKE_GH_FAIL)
+      echo "gh: Server Error (HTTP 500)" >&2
+      exit 1
+      ;;
+  esac
+fi
+
+answer() {
+  if [ -n "$jq_expr" ]; then
+    jq -r "$jq_expr"
+  else
+    cat
+  fi
+}
+
+# from FILE: the bytes of FILE as the answer, or HTTP 404 when there is no FILE
+from() {
+  if [ -f "$1" ]; then
+    answer < "$1"
+  else
+    echo "gh: Not Found (HTTP 404)" >&2
+    exit 1
+  fi
+}
+
+key_of() {
+  printf '%s\n' "$1" | sed -n 's/^<!-- track: \([a-z0-9._-]*\) -->$/\1/p' | awk 'NR == 1'
+}
+
+keep_body() {
+  local k
+  k="$(key_of "$body")"
+  printf '%s\n' "$body" > "$dir/body-${k:-none}.md"
+  printf '%s\n' "${k:-none}"
+}
+
+route="${path%%\?*}"
+query=""
+case "$path" in *\?*) query="${path#*\?}" ;; esac
+
+case "$method $route" in
+  "GET repos/"*/*/issues)
+    if [ -f "$dir/open.json" ]; then answer < "$dir/open.json"; else echo '[]' | answer; fi
+    ;;
+  "GET repos/"*/*/labels/*) echo '{}' | answer ;;
+  "POST repos/"*/*/issues/[0-9]*/labels)
+    n="${route%/labels}"
+    printf 'label %s\n' "${n##*/}" >> "$dir/calls.log"
+    echo '{}' | answer
+    ;;
+  "POST repos/"*/*/labels) echo '{}' | answer ;;
+  "POST repos/"*/*/issues)
+    printf 'open %s\n' "$(keep_body)" >> "$dir/calls.log"
+    echo '{"number": 101}' | answer
+    ;;
+  "PATCH repos/"*/*/issues/[0-9]*)
+    n="${route##*/}"
+    if [ -n "$state" ]; then
+      printf 'close %s\n' "$n" >> "$dir/calls.log"
+    else
+      printf 'update %s %s\n' "$n" "$(keep_body)" >> "$dir/calls.log"
+    fi
+    echo '{}' | answer
+    ;;
+  "POST repos/"*/*/issues/[0-9]*/comments)
+    n="${route%/comments}"
+    printf 'comment %s\n' "${n##*/}" >> "$dir/calls.log"
+    echo '{}' | answer
+    ;;
+  "GET repos/"*/*/pulls)
+    if [ -f "$dir/pulls.json" ]; then answer < "$dir/pulls.json"; else echo '[]' | answer; fi
+    ;;
+  "GET repos/"*/*/commits)
+    if [ -f "$dir/commits.json" ]; then answer < "$dir/commits.json"; else echo '[]' | answer; fi
+    ;;
+  "GET repos/"*/*/commits/*/check-runs)
+    sha="${route%/check-runs}"
+    sha="${sha##*/}"
+    if [ -f "$dir/check-runs-$sha.json" ]; then
+      answer < "$dir/check-runs-$sha.json"
+    elif [ -f "$dir/check-runs.json" ]; then
+      answer < "$dir/check-runs.json"
+    else
+      echo '{"total_count": 0, "check_runs": []}' | answer
+    fi
+    ;;
+  "GET repos/"*/*/actions/artifacts)
+    if [ -f "$dir/artifacts.json" ]; then
+      answer < "$dir/artifacts.json"
+    else
+      echo '{"total_count": 0, "artifacts": []}' | answer
+    fi
+    ;;
+  "GET repos/"*/*/actions/workflows) from "$dir/workflows.json" ;;
+  "PUT repos/"*/*/actions/workflows/*/enable)
+    id="${route%/enable}"
+    printf 'enable %s\n' "${id##*/}" >> "$dir/calls.log"
+    ;;
+  "GET repos/"*/*/actions/workflows/*/runs)
+    f="${route%/runs}"
+    f="${f##*/}"
+    sha="$(printf '%s\n' "$query" | tr '&' '\n' | sed -n 's/^head_sha=//p')"
+    if [ -n "$sha" ] && [ -f "$dir/runs-$f-$sha.json" ]; then
+      answer < "$dir/runs-$f-$sha.json"
+    else
+      from "$dir/runs-$f.json"
+    fi
+    ;;
+  "GET repos/"*/*/actions/workflows/*) from "$dir/workflow-${route##*/}.json" ;;
+  "POST repos/"*/*/actions/runs/*/rerun-failed-jobs)
+    id="${route%/rerun-failed-jobs}"
+    printf 'rerun %s\n' "${id##*/}" >> "$dir/calls.log"
+    echo '{}' | answer
+    ;;
+  "GET repos/"*/*)
+    case "$route" in
+      repos/*/*/*) ;;
+      *)
+        if [ -f "$dir/repo.json" ]; then answer < "$dir/repo.json"; else echo '{"default_branch":"main"}' | answer; fi
+        exit 0
+        ;;
+    esac
+    echo "fake-gh: no answer for: $method $path" >&2
+    exit 1
+    ;;
+  *)
+    echo "fake-gh: no answer for: $method $path" >&2
+    exit 1
+    ;;
+esac

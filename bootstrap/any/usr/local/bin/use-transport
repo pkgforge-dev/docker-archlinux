@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+#
+# Set the path the build stage uses to read the GHCR mirror.
+#
+#   use-transport TRANSPORT [ROOT]
+#
+# TRANSPORT is the word scripts/pick-transport prints:
+#   worker  no change. The lists already start with the Cloudflare Worker.
+#   oci     ROOT/etc/pacman.conf gets "XferCommand = /usr/local/bin/pacman-oci %o %u"
+#           in [options], and each list that it includes gets
+#           "Server = oci://ghcr.io/pkgforge-dev/mirror-archlinux/$arch/$repo"
+#           as its first server. pacman-oci gives every other URL to curl, so
+#           the other servers stay the fallback.
+# ROOT is the root of the build stage, default /.
+#
+# ⛔ Only the build stage. The config that ships (/rootfs) never gets an
+# XferCommand or an oci:// server, so this refuses a ROOT named rootfs.
+#
+# A second run changes nothing.
+#
+# Exit status: 0 done, 1 an input is wrong.
+set -euo pipefail
+
+# shellcheck disable=SC2016 # $arch and $repo are for pacman, not the shell
+OCI_SERVER='oci://ghcr.io/pkgforge-dev/mirror-archlinux/$arch/$repo'
+XFER_BIN=/usr/local/bin/pacman-oci
+XFER="XferCommand = $XFER_BIN %o %u"
+
+die() {
+  echo "use-transport: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+  die "usage: use-transport worker|oci [ROOT]"
+fi
+transport="$1"
+root="${2:-/}"
+
+case "$transport" in
+  worker)
+    echo "use-transport: worker, the lists stay as they are" >&2
+    exit 0
+    ;;
+  oci) ;;
+  *) die "TRANSPORT is '$transport'. Use worker or oci." ;;
+esac
+
+root="${root%/}"
+case "$root" in
+  rootfs | */rootfs | */rootfs/*) die "ROOT is $root, a tree named rootfs: the tree that ships" "the config that ships never gets an XferCommand or an oci:// server" ;;
+esac
+
+conf="$root/etc/pacman.conf"
+[ -f "$conf" ] || die "no pacman.conf at $conf" "reproduce: ls -l $conf"
+[ -f "$root$XFER_BIN" ] || die "the client is missing at $root$XFER_BIN" \
+  "the Dockerfile copies it from bootstrap/any" "reproduce: ls -l $root$XFER_BIN"
+
+# 1. XferCommand, in [options]
+other="$(awk -v x="$XFER" '
+  /^[[:space:]]*\[/ { s = $0; next }
+  s ~ /^[[:space:]]*\[options\]/ && /^[[:space:]]*XferCommand[[:space:]]*=/ {
+    v = $0; sub(/[[:space:]]+$/, "", v); if (v != x) print FNR ": " v
+  }' "$conf")"
+[ -z "$other" ] || die "$conf sets another XferCommand" "$other"
+if [ -n "$(awk -v x="$XFER" '{ v = $0; sub(/[[:space:]]+$/, "", v) } v == x' "$conf")" ]; then
+  echo "use-transport: $conf has the XferCommand already" >&2
+else
+  tmp="$(mktemp)"
+  awk -v x="$XFER" '
+    { print }
+    !done && /^[[:space:]]*\[options\][[:space:]]*$/ { print x; done = 1 }
+    END { if (!done) exit 3 }' "$conf" > "$tmp" || {
+    rm -f "$tmp"
+    die "$conf has no [options] section" "reproduce: grep -n options $conf"
+  }
+  cat "$tmp" > "$conf"
+  rm -f "$tmp"
+  echo "use-transport: $conf: $XFER" >&2
+fi
+
+# 2. The oci:// server first, in every list that a section includes
+lists="$(awk '
+  /^[[:space:]]*#/ { next }
+  /^[[:space:]]*\[/ { s = $0; next }
+  s !~ /^[[:space:]]*\[options\]/ && /^[[:space:]]*Include[[:space:]]*=/ {
+    v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]]+$/, "", v)
+    if (!seen[v]++) print v
+  }' "$conf")"
+[ -n "$lists" ] || die "$conf includes no list" "reproduce: grep -n Include $conf"
+
+while IFS= read -r inc; do
+  [ -n "$inc" ] || continue
+  list="$root$inc"
+  [ -f "$list" ] || die "$conf includes $inc, and $list is missing"
+  first="$(awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print; exit }' "$list")"
+  [ -n "$first" ] || die "$list has no Server line"
+  if [ "$first" = "$OCI_SERVER" ]; then
+    echo "use-transport: $list starts with the oci:// server already" >&2
+    continue
+  fi
+  tmp="$(mktemp)"
+  OCI="$OCI_SERVER" awk '
+    !done && /^[[:space:]]*Server[[:space:]]*=/ { print "Server = " ENVIRON["OCI"]; done = 1 }
+    { print }' "$list" > "$tmp"
+  cat "$tmp" > "$list"
+  rm -f "$tmp"
+  echo "use-transport: $list: the first server is $OCI_SERVER" >&2
+done <<< "$lists"

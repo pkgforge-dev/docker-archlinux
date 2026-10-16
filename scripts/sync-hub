@@ -1,0 +1,281 @@
+#!/usr/bin/env bash
+#
+# Copy to Docker Hub each GHCR tag that Docker Hub does not have in step.
+#
+#   scripts/sync-hub [--dry-plan] [--fixtures DIR]
+#
+# GHCR is the source. Docker Hub is a copy. For each tag on SOURCE_IMAGE:
+#   pinned    copied when HUB_TARGET does not have the tag
+#   rolling   copied when HUB_TARGET does not have it, or has another digest
+# The rolling tags are latest and each alias of each port (scripts/ports).
+# Every other tag is pinned. A pinned tag on Docker Hub is never moved.
+#
+# Each copy is by digest: `docker buildx imagetools create` with the source
+# SOURCE_IMAGE@<digest>, one call for each digest and all of its tags. The
+# index tags (latest, v<date>) are copied last. Each tag is read back after.
+# A copy that a run misses, the next run makes. Nothing here writes to GHCR.
+#
+# Environment:
+#   SOURCE_IMAGE   the GHCR image, ghcr.io/OWNER/NAME (required)
+#   HUB_TARGET     the Docker Hub image, docker.io/ORG/NAME (required)
+#   SYNC_TRIES     tries for each copy (default 3)
+#   RETRY_PAUSE    seconds before the second try, doubled after (default 5)
+#   REG_USER_docker_io, REG_PASS_docker_io   read Docker Hub with an account
+#                  (scripts/lib.sh); the copy itself uses the docker login
+#
+# Output: one line for each action, then a summary line:
+#   copy TAG DIGEST pinned|rolling     move TAG FROM TO
+#   summary tags=N in_step=N copy=N move=N failed=N
+#
+# --dry-plan writes nothing and prints the same lines.
+# --fixtures DIR reads every registry fact from DIR, calls no registry, and
+# implies --dry-plan:
+#   DIR/tags.tsv       REGISTRY<TAB>REPO<TAB>TAG
+#   DIR/heads.tsv      REGISTRY<TAB>REPO<TAB>REF<TAB>CODE<TAB>DIGEST
+#   DIR/unreadable     REGISTRY<TAB>REPO, a tag list that cannot be read
+# A HEAD that is not in heads.tsv answers 404.
+#
+# Exit status: 0 Docker Hub is in step (or the plan is printed), 1 a list
+# cannot be read or a copy failed, 2 usage.
+set -euo pipefail
+shopt -s inherit_errexit
+
+PROG=sync-hub
+# shellcheck source=scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORTS="$ROOT/scripts/ports"
+
+usage() {
+  sed -n '5p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  exit 2
+}
+
+dry=0
+FIXTURES=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dry-plan) dry=1 ;;
+    --fixtures)
+      [ "$#" -ge 2 ] || usage
+      FIXTURES="$2"
+      dry=1
+      shift
+      ;;
+    *) usage ;;
+  esac
+  shift
+done
+need awk jq
+
+SOURCE_IMAGE="${SOURCE_IMAGE:-}"
+HUB_TARGET="${HUB_TARGET:-}"
+TRIES="${SYNC_TRIES:-3}"
+PAUSE="${RETRY_PAUSE:-5}"
+[ -n "$SOURCE_IMAGE" ] || die "SOURCE_IMAGE is not set"
+[ -n "$HUB_TARGET" ] || die "HUB_TARGET is not set"
+if [ -n "$FIXTURES" ]; then
+  [ -d "$FIXTURES" ] || die "--fixtures $FIXTURES is not a directory"
+fi
+if [ "$dry" -eq 0 ]; then
+  need docker timeout
+fi
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+#---------------------------------------------------------------------------#
+# Registry reads, from the registry or from fixtures.
+#---------------------------------------------------------------------------#
+
+# split_image IMAGE -> "REGISTRY REPO"
+split_image() {
+  local first="${1%%/*}"
+  case "$first" in
+    *.* | *:* | localhost) printf '%s %s\n' "$first" "${1#*/}" ;;
+    *) printf 'docker.io %s\n' "$1" ;;
+  esac
+}
+
+# read_tags REGISTRY REPO OUT -> 0 read, 1 could not read
+read_tags() {
+  if [ -n "$FIXTURES" ]; then
+    if [ -f "$FIXTURES/unreadable" ] &&
+      awk -F'\t' -v r="$1" -v p="$2" '$1 == r && $2 == p { f = 1 } END { exit f ? 0 : 1 }' "$FIXTURES/unreadable"; then
+      return 1
+    fi
+    : > "$3"
+    if [ -f "$FIXTURES/tags.tsv" ]; then
+      awk -F'\t' -v r="$1" -v p="$2" '$1 == r && $2 == p && NF >= 3 { print $3 }' "$FIXTURES/tags.tsv" > "$3"
+    fi
+    return 0
+  fi
+  reg_tags "$1" "$2" "$3"
+}
+
+# One token for each registry, renewed when the registry answers 401.
+declare -A TOKEN=()
+
+# head_ref REGISTRY REPO REF -> sets HEAD_CODE and HEAD_DIGEST. It runs in this
+# shell, not in a command substitution, so the token cache stays.
+HEAD_CODE=""
+HEAD_DIGEST=""
+head_ref() {
+  local reg="$1" repo="$2" ref="$3" line out
+  if [ -n "$FIXTURES" ]; then
+    line="404 "
+    if [ -f "$FIXTURES/heads.tsv" ]; then
+      line="$(awk -F'\t' -v r="$reg" -v p="$repo" -v f="$ref" \
+        '$1 == r && $2 == p && $3 == f && !done { print $4 " " $5; done = 1 }' "$FIXTURES/heads.tsv")"
+    fi
+    read -r HEAD_CODE HEAD_DIGEST <<< "${line:-404 }"
+    return 0
+  fi
+  if [ -z "${TOKEN[$reg]+set}" ]; then
+    TOKEN[$reg]="$(reg_token "$reg" "$repo")" || TOKEN[$reg]=""
+  fi
+  out="$(reg_head "$reg" "$repo" "$ref" "${TOKEN[$reg]}")" || out="000 "
+  case "$out" in
+    "401 "*)
+      TOKEN[$reg]="$(reg_token "$reg" "$repo")" || TOKEN[$reg]=""
+      out="$(reg_head "$reg" "$repo" "$ref" "${TOKEN[$reg]}")" || out="000 "
+      ;;
+  esac
+  read -r HEAD_CODE HEAD_DIGEST <<< "$out"
+}
+
+read -r s_reg s_repo <<< "$(split_image "$SOURCE_IMAGE")"
+read -r h_reg h_repo <<< "$(split_image "$HUB_TARGET")"
+
+#---------------------------------------------------------------------------#
+# 1. Both tag lists.
+#---------------------------------------------------------------------------#
+read_tags "$s_reg" "$s_repo" "$work/source" || die "the tag list of $SOURCE_IMAGE cannot be read" \
+  "reproduce: scripts/registry-tags $s_reg $s_repo"
+read_tags "$h_reg" "$h_repo" "$work/hub" || die "the tag list of $HUB_TARGET cannot be read" \
+  "reproduce: scripts/registry-tags $h_reg $h_repo"
+n_source="$(awk 'NF' "$work/source" | LC_ALL=C sort -u | awk 'END { print NR + 0 }')"
+note "$SOURCE_IMAGE has $n_source tag(s); $HUB_TARGET has $(awk 'NF' "$work/hub" | LC_ALL=C sort -u | awk 'END { print NR + 0 }')"
+[ "$n_source" -gt 0 ] || die "$SOURCE_IMAGE has no tags, so there is nothing to copy" \
+  "a published image always has latest" \
+  "reproduce: scripts/registry-tags $s_reg $s_repo"
+
+awk 'NF' "$work/source" | LC_ALL=C sort -u > "$work/source-sorted"
+
+# The rolling tags: latest and every alias.
+{
+  printf 'latest\n'
+  for a in $("$PORTS" list); do
+    "$PORTS" aliases "$a"
+  done
+} | awk 'NF' | LC_ALL=C sort -u > "$work/rolling"
+
+#---------------------------------------------------------------------------#
+# 2. What to copy.
+#---------------------------------------------------------------------------#
+: > "$work/copies"
+in_step=0
+n_copy=0
+n_move=0
+failed=0
+while IFS= read -r tag; do
+  [ -n "$tag" ] || continue
+  rolling=0
+  grep -qxF -- "$tag" "$work/rolling" && rolling=1
+  on_hub=0
+  grep -qxF -- "$tag" "$work/hub" && on_hub=1
+  if [ "$rolling" -eq 0 ] && [ "$on_hub" -eq 1 ]; then
+    in_step=$((in_step + 1))
+    continue
+  fi
+  head_ref "$s_reg" "$s_repo" "$tag"
+  code="$HEAD_CODE"
+  digest="$HEAD_DIGEST"
+  if [ "$code" != 200 ] || ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    warn "$SOURCE_IMAGE:$tag answered HTTP $code, so it is not copied in this run"
+    failed=$((failed + 1))
+    continue
+  fi
+  if [ "$rolling" -eq 0 ]; then
+    printf 'copy %s %s pinned\n' "$tag" "$digest"
+    printf '%s\t%s\n' "$digest" "$tag" >> "$work/copies"
+    n_copy=$((n_copy + 1))
+    continue
+  fi
+  hub_digest=""
+  if [ "$on_hub" -eq 1 ]; then
+    head_ref "$h_reg" "$h_repo" "$tag"
+    code="$HEAD_CODE"
+    hub_digest="$HEAD_DIGEST"
+    [ "$code" = 200 ] || warn "$HUB_TARGET:$tag answered HTTP $code, so it is copied again"
+  fi
+  if [ "$hub_digest" = "$digest" ]; then
+    in_step=$((in_step + 1))
+  elif [ -z "$hub_digest" ]; then
+    printf 'copy %s %s rolling\n' "$tag" "$digest"
+    printf '%s\t%s\n' "$digest" "$tag" >> "$work/copies"
+    n_copy=$((n_copy + 1))
+  else
+    printf 'move %s %s %s\n' "$tag" "$hub_digest" "$digest"
+    printf '%s\t%s\n' "$digest" "$tag" >> "$work/copies"
+    n_move=$((n_move + 1))
+  fi
+done < "$work/source-sorted"
+
+#---------------------------------------------------------------------------#
+# 3. Copy, one call for each digest. The index tags go last.
+#---------------------------------------------------------------------------#
+# A digest group that holds latest or v<date> is an index: rank 1, last.
+awk -F'\t' '
+  { tags[$1] = tags[$1] " " $2; if ($2 == "latest" || $2 ~ /^v[0-9]/) idx[$1] = 1 }
+  END { for (d in tags) printf "%d\t%s\t%s\n", (d in idx) ? 1 : 0, d, substr(tags[d], 2) }
+' "$work/copies" | LC_ALL=C sort -t "$(printf '\t')" -k1,1n -k2,2 > "$work/groups"
+
+# retry_write CMD... -> run a registry write with a deadline and retries
+retry_write() {
+  local n=0 rc pause="$PAUSE"
+  while :; do
+    n=$((n + 1))
+    rc=0
+    timeout -k 5 900 "$@" || rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    if [ "$n" -ge "$TRIES" ]; then
+      warn "the copy failed $n times, the last with exit $rc: $*"
+      return 1
+    fi
+    warn "the copy exited $rc, try $((n + 1)) of $TRIES in ${pause}s"
+    sleep "$pause"
+    pause=$((pause * 2))
+  done
+}
+
+if [ "$dry" -eq 0 ]; then
+  while IFS=$'\t' read -r _ digest tags; do
+    [ -n "$digest" ] || continue
+    args=()
+    for t in $tags; do
+      args+=(-t "$HUB_TARGET:$t")
+    done
+    if ! retry_write docker buildx imagetools create "${args[@]}" "$SOURCE_IMAGE@$digest"; then
+      failed=$((failed + 1))
+      continue
+    fi
+    # Read back each tag of the group.
+    for t in $tags; do
+      head_ref "$h_reg" "$h_repo" "$t"
+      code="$HEAD_CODE"
+      got="$HEAD_DIGEST"
+      if [ "$code" != 200 ] || [ "$got" != "$digest" ]; then
+        warn "$HUB_TARGET:$t answered HTTP $code with '$got' after the copy; want $digest"
+        failed=$((failed + 1))
+      fi
+    done
+  done < "$work/groups"
+fi
+
+echo "summary tags=$n_source in_step=$in_step copy=$n_copy move=$n_move failed=$failed"
+if [ "$failed" -gt 0 ]; then
+  die "$failed tag(s) or copies failed; the next run tries them again" \
+    "reproduce: scripts/sync-hub --dry-plan"
+fi

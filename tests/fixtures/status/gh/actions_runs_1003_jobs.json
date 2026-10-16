@@ -1,0 +1,95 @@
+{
+ "total_count": 10,
+ "jobs": [
+  {
+   "id": 100301,
+   "name": "plan",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-16T08:00:10Z",
+   "completed_at": "2026-10-16T08:00:50Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1003/job/100301"
+  },
+  {
+   "id": 100395,
+   "name": "Watch the schedules",
+   "status": "completed",
+   "conclusion": "skipped",
+   "started_at": "2026-10-16T08:00:05Z",
+   "completed_at": "2026-10-16T08:00:05Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1003/job/100395"
+  },
+  {
+   "id": 100310,
+   "name": "Build amd64",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-16T08:01:00Z",
+   "completed_at": "2026-10-16T08:20:00Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1003/job/100310"
+  },
+  {
+   "id": 100311,
+   "name": "Build arm64",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-16T08:01:05Z",
+   "completed_at": "2026-10-16T08:21:00Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1003/job/100311"
+  },
+  {
+   "id": 100312,
+   "name": "Build armv7",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-16T08:01:10Z",
+   "completed_at": "2026-10-16T08:22:00Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1003/job/100312"
+  },
+  {
+   "id": 100313,
+   "name": "Build loong64",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-16T08:01:15Z",
+   "completed_at": "2026-10-16T08:23:00Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1003/job/100313"
+  },
+  {
+   "id": 100314,
+   "name": "Build ppc",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-16T08:01:20Z",
+   "completed_at": "2026-10-16T08:24:00Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1003/job/100314"
+  },
+  {
+   "id": 100315,
+   "name": "Build ppc64",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-16T08:01:25Z",
+   "completed_at": "2026-10-16T08:25:00Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1003/job/100315"
+  },
+  {
+   "id": 100316,
+   "name": "Build ppc64le",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-16T08:01:30Z",
+   "completed_at": "2026-10-16T08:26:00Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1003/job/100316"
+  },
+  {
+   "id": 100317,
+   "name": "Build riscv64",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-16T08:01:35Z",
+   "completed_at": "2026-10-16T08:27:00Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1003/job/100317"
+  }
+ ]
+}

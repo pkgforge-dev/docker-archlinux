@@ -1,129 +1,137 @@
-# The source set scripts/build-pacman-static links a static pacman from.
+# The inputs of the static pacman that scripts/build-pacman-static builds.
 #
-# Every line here is an input to a binary this repository publishes as a release
-# asset, so each one is pinned by content. Policy 10 pins by commit hash and
-# names a content hash as the equivalent for a non-git artefact: pacman is a git
-# checkout at a commit, everything else is a tarball at a sha256.
+# Each record pins one input by content: a tarball by sha256, pacman by
+# commit. The static pacman is a release asset. ⛔ The Dockerfile does not read
+# this file, and no image build fetches anything named here.
 #
-# ⛔ Nothing here is fetched at image build time. The Dockerfile does not read
-# this file. It is read by scripts/build-pacman-static, which runs in its own
-# workflow and produces release assets.
+# Records, one per line, fields separated by white space:
 #
-# Field format, one record per line, whitespace separated:
-#
-#   zig      VERSION  HOST-TRIPLE  URL  SHA256
-#   source   NAME  VERSION  URL  SHA256
-#   pacman   COMMIT  URL
-#   describe VALUE
-#   tag      NAME  TAG-OBJECT-SHA
-#   signer   FINGERPRINT  NAME
+#   zig       VERSION  HOST  URL  SHA256
+#   source    NAME  VERSION  URL  SHA256
+#   mirror =  NAME  URL
+#   pacman    COMMIT  URL
+#   describe  VALUE
+#   tag       NAME  TAG-OBJECT-SHA
+#   signer    FINGERPRINT  NAME
 #   keyserver URL
 #
-# ⛔ The build fails on a sha256 that does not match. It does not warn and
-# continue, and it does not re-fetch from somewhere else.
+# A mirror line gives one more URL for the record NAME. NAME is the name of a
+# source record, or zig-HOST for a zig record. The build tries the URL of the
+# record first, then each mirror line of that record in file order.
 #
-# To re-derive any line:
-#   curl -sSfL --connect-timeout 20 --max-time 300 -o f URL && sha256sum f
+# ⭐ The sha256 is the trust anchor, not the host. The build keeps a download
+# only when its sha256 equals the pin. A download with a different sha256 is
+# deleted, and the build tries the next URL. When no URL gives the pinned
+# bytes, the build stops.
 #
-# Recorded 2026-08-28. Every hash below was measured by fetching the URL beside
-# it on that date, not copied from an upstream checksum file.
+# ⛔ Add a mirror line only after you measure the same sha256 at that URL:
+#   curl -sSfL --connect-timeout 20 --max-time 900 -o f URL && sha256sum f
+#
+# A mirror on distfiles.gentoo.org uses a directory of two hex digits. The two
+# digits are the start of the BLAKE2B hash of the file name:
+#   python3 -I -c 'import hashlib,sys; print(hashlib.blake2b(sys.argv[1].encode()).hexdigest()[:2])' FILE
+#
+# docs/measurements.md gives the date of each measurement.
 
 #---------------------------------------------------------------------------#
 # The toolchain.
 #
-# zig is the C compiler, the linker, the archiver and the musl libc source, in
-# one download. It cross compiles to every architecture below from one host, so
-# there is no per architecture toolchain to build, cache or relocate.
-#
-# ⚠ A mussel or crosstool-NG toolchain bakes its --prefix in at configure time
-# and cannot be moved, so a cached toolchain artefact only works if every runner
-# unpacks it at the identical absolute path. zig has no such constraint: the
-# tree is relocatable and the same one serves all eight targets.
-#
-# ⚠ Two host triples are pinned because the build matrix can run on either.
+# zig is the C compiler, the linker, the archiver and the musl source in one
+# download. One zig cross compiles to every port from one host. The build
+# picks the record whose HOST is the host it runs on.
 #---------------------------------------------------------------------------#
 zig 0.16.0 x86_64-linux https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
 zig 0.16.0 aarch64-linux https://ziglang.org/download/0.16.0/zig-aarch64-linux-0.16.0.tar.xz ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
+mirror = zig-x86_64-linux https://pkg.hexops.org/zig/zig-x86_64-linux-0.16.0.tar.xz
+mirror = zig-x86_64-linux https://zig.linus.dev/zig/zig-x86_64-linux-0.16.0.tar.xz
+mirror = zig-x86_64-linux https://fs.liujiacai.net/zigbuilds/zig-x86_64-linux-0.16.0.tar.xz
+mirror = zig-aarch64-linux https://pkg.hexops.org/zig/zig-aarch64-linux-0.16.0.tar.xz
+mirror = zig-aarch64-linux https://zig.linus.dev/zig/zig-aarch64-linux-0.16.0.tar.xz
+mirror = zig-aarch64-linux https://fs.liujiacai.net/zigbuilds/zig-aarch64-linux-0.16.0.tar.xz
 
 #---------------------------------------------------------------------------#
-# The static dependency stack, in the order it is built.
+# The static libraries, in the order the build makes them.
 #
-# ⛔ Eleven libraries, not thirteen. Both reference recipes also link brotli and
-# nghttp2, which are curl content encoding and HTTP/2. Neither is needed to
-# fetch a package from an Arch mirror, and both cost: brotli selects a code
-# model attribute on a compiler version test rather than a target test and does
-# not compile for loongarch64 under clang, and an OpenSSL built with brotli puts
-# an object needing the brotli encoder inside libcrypto, which then makes curl's
-# configure report that OpenSSL is missing. Leaving both out removes two build
-# failures and no capability this binary needs.
+# scripts/build-pacman-static has one build function per source record, and
+# it builds the records in this order. tests/static/85-pacman-static-pin.sh
+# checks that each record has its function.
 #
-# ⚠ What that costs is written down rather than hidden: the binary negotiates
-# HTTP/1.1 and does not accept a br content encoding. scripts/build-pacman-static
-# records curl's feature and protocol lists in the evidence file, so the
-# difference is a measurement rather than a claim.
+# ⚠ curl has no brotli and no nghttp2. The binary uses HTTP/1.1 and does not
+# accept the br content encoding. An Arch mirror needs neither. brotli does not
+# compile for loongarch64 with zig cc.
 #
-# ⚠ OpenSSL is the 3.5 long term support line, not the newest release. 3.6 and
-# 4.0 both published on the same day as 3.5.8 and all four are the same
-# coordinated fix, so newest buys nothing here and costs a major version.
+# ⚠ OpenSSL is the 3.5 long term support line.
 #---------------------------------------------------------------------------#
 source zlib 1.3.2 https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
+mirror = zlib https://zlib.net/fossils/zlib-1.3.2.tar.gz
+
 source xz 5.8.3 https://github.com/tukaani-project/xz/releases/download/v5.8.3/xz-5.8.3.tar.gz 3d3a1b973af218114f4f889bbaa2f4c037deaae0c8e815eec381c3d546b974a0
+mirror = xz https://downloads.sourceforge.net/project/lzmautils/xz-5.8.3.tar.gz
+mirror = xz https://distfiles.gentoo.org/distfiles/a1/xz-5.8.3.tar.gz
+
 source bzip2 1.0.8 https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269
+mirror = bzip2 https://mirrors.kernel.org/sourceware/bzip2/bzip2-1.0.8.tar.gz
+mirror = bzip2 https://www.mirrorservice.org/sites/sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz
+mirror = bzip2 https://distfiles.gentoo.org/distfiles/1c/bzip2-1.0.8.tar.gz
+
 source zstd 1.5.7 https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+mirror = zstd https://distfiles.gentoo.org/distfiles/49/zstd-1.5.7.tar.gz
+
 source openssl 3.5.8 https://github.com/openssl/openssl/releases/download/openssl-3.5.8/openssl-3.5.8.tar.gz a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2
+mirror = openssl https://distfiles.gentoo.org/distfiles/f1/openssl-3.5.8.tar.gz
+mirror = openssl https://distfiles.alpinelinux.org/distfiles/edge/openssl-3.5.8.tar.gz
+
 source libarchive 3.8.9 https://github.com/libarchive/libarchive/releases/download/v3.8.9/libarchive-3.8.9.tar.gz f5a6539059cf5e597dbeda37bfa4874b1e8dea063c8d93bf85a2b44af90a5bd4
+mirror = libarchive https://www.libarchive.org/downloads/libarchive-3.8.9.tar.gz
+
 source curl 8.21.0 https://github.com/curl/curl/releases/download/curl-8_21_0/curl-8.21.0.tar.gz d9b327997999045a24cda50f3983e69e51c516bd8be6ef9842fc7f99135e33bb
+mirror = curl https://curl.se/download/curl-8.21.0.tar.gz
+
 source libgpg-error 1.61 https://gnupg.org/ftp/gcrypt/libgpg-error/libgpg-error-1.61.tar.bz2 7a85413f2bc354f4f8aa832b718af122e48965e9e0eb9012ee659c13c6385c93
+mirror = libgpg-error https://mirrors.dotsrc.org/gcrypt/libgpg-error/libgpg-error-1.61.tar.bz2
+mirror = libgpg-error https://www.mirrorservice.org/sites/ftp.gnupg.org/gcrypt/libgpg-error/libgpg-error-1.61.tar.bz2
+mirror = libgpg-error https://distfiles.gentoo.org/distfiles/22/libgpg-error-1.61.tar.bz2
+
 source libassuan 3.0.2 https://gnupg.org/ftp/gcrypt/libassuan/libassuan-3.0.2.tar.bz2 d2931cdad266e633510f9970e1a2f346055e351bb19f9b78912475b8074c36f6
+mirror = libassuan https://mirrors.dotsrc.org/gcrypt/libassuan/libassuan-3.0.2.tar.bz2
+mirror = libassuan https://www.mirrorservice.org/sites/ftp.gnupg.org/gcrypt/libassuan/libassuan-3.0.2.tar.bz2
+
 source gpgme 2.1.2 https://gnupg.org/ftp/gcrypt/gpgme/gpgme-2.1.2.tar.bz2 0687a95b299871c4141f507c0f740de6b429c9ac067d0fa4e062e3264df5fb77
+mirror = gpgme https://mirrors.dotsrc.org/gcrypt/gpgme/gpgme-2.1.2.tar.bz2
+mirror = gpgme https://www.mirrorservice.org/sites/ftp.gnupg.org/gcrypt/gpgme/gpgme-2.1.2.tar.bz2
+mirror = gpgme https://distfiles.gentoo.org/distfiles/b8/gpgme-2.1.2.tar.bz2
+
 source libseccomp 2.6.1 https://github.com/seccomp/libseccomp/releases/download/v2.6.1/libseccomp-2.6.1.tar.gz 501f66c667225d53791b97e1d7cf85ab764c297d04881f60f38f451c4b0ee1be
+mirror = libseccomp https://distfiles.gentoo.org/distfiles/ee/libseccomp-2.6.1.tar.gz
+mirror = libseccomp https://distfiles.alpinelinux.org/distfiles/edge/libseccomp-2.6.1.tar.gz
 
 #---------------------------------------------------------------------------#
-# pacman itself.
+# pacman.
 #
-# ⭐ The commit is the one every port of this repository already publishes. The
-# anchor tag family is <arch>-7.1.0.r9.g54d9411-<pkgrel>, and g54d9411 is this
-# commit abbreviated, so the static binary and the image's own pacman are built
-# from the same source. tests/static/85-pacman-static-pin.sh asserts the two
-# strings agree inside this repository, and freshness-pacman-static.yml measures
-# the pin against live upstream.
+# ⭐ The commit is the commit of the pacman that the images ship. The anchor
+# tag family is <alias>-<describe>-<pkgrel>. The describe value ends in g and
+# the start of this commit. tests/static/85-pacman-static-pin.sh checks that
+# the two agree. The freshness workflow compares describe with the live anchor.
 #
-# ⛔ A commit, not the v7.1.0 tag, and the difference is not cosmetic. v7.1.0 is
-# an annotated tag object 208ff2b57e49f2851ce7bca5ac9090c6cb8aa746 pointing at
-# commit 5683f8477a0afcc6b331766175a83445b2dcfe89, which is nine commits behind
-# what Arch ships. Pinning the tag would build a pacman that is not the one in
-# any published image.
+# ⛔ Pin the commit, not the tag. The build checks out the commit. The tag can
+# point at an older commit than the one Arch ships.
 #
-# ⚠ The signed tag is checked as well as the commit, which is the one place this
-# recipe takes both halves of the choice policy 10 describes. The commit is what
-# decides the checkout; the signature is what says upstream published that
-# history under a release manager's key.
+# The tag line pins the signed release tag by its object sha, because a tag
+# name can move. The build fetches that tag object and checks its signature.
+# ⚠ The signature covers the tagged commit. The commits between the tag and the
+# pinned commit have no signature. The commit sha covers them.
 #
-# ⛔ What the tag proves and what it does not, because the two are different and
-# the difference is easy to overstate. v7.1.0 is an annotated tag object whose
-# target is 5683f8477a0afcc6b331766175a83445b2dcfe89, and the pinned build commit
-# is nine commits later. So the signature says a release manager published the
-# 7.1.0 release point. ⚠ It does not say anyone signed the nine commits after
-# it. Those are covered by the commit hash and by nothing else.
+# The signer lines name the keys that may sign the tag. The fingerprint is the
+# identity. The name is a label for the reader. The public key of each signer
+# is in keys/<FINGERPRINT>.asc. The build imports that file first. It tries the
+# keyservers, in file order, only when the file does not give the key.
 #
-# ⛔ The tag object's own sha is pinned, not just its name. A tag name can be
-# moved and re-pushed; an object sha cannot. Policy 10 names dereferencing the
-# tag object as the step that gets this right.
+# ⛔ The build checks the fingerprint of each key it imports, from any source.
+# It requires a VALIDSIG whose primary key fingerprint is a signer line.
 #
-# ⛔ scripts/build-pacman-static fetches the tag, imports the signers by
-# fingerprint from the keyserver below, and requires a VALIDSIG naming one of
-# them. It never continues on a failure and it never skips. Taking a build
-# without it needs PACMAN_TAG_VERIFY=skip, which is a named, deliberate act and
-# is recorded in the evidence file. ⚠ Two keyservers are pinned rather than one,
-# so a single outage does not stop a release. Neither is trusted: what each
-# returns is checked against the fingerprint before it is used.
-#
-# ⚠ The fingerprint decides who a key belongs to, and the name beside it is a
-# label for a reader. ⛔ The two names below were swapped until 2026-08-29, and
-# nothing noticed because nothing read these lines. Re-derived on that date by
-# importing each fingerprint and reading its uid:
-#   gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys <fingerprint>
-#   gpg --list-keys --with-colons <fingerprint>
+# To export a key file again:
+#   gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys FINGERPRINT
+#   gpg --armor --export-options export-minimal --export FINGERPRINT > keys/FINGERPRINT.asc
 #---------------------------------------------------------------------------#
 pacman 54d94116164b0b2202c6061c4a59c6f3e70820d8 https://gitlab.archlinux.org/pacman/pacman.git
 describe 7.1.0.r9.g54d9411
@@ -131,4 +139,4 @@ tag v7.1.0 208ff2b57e49f2851ce7bca5ac9090c6cb8aa746
 signer 6645B0A8C7005E78DB1D7864F99FFE0FEAE999BD Allan McRae
 signer B8151B117037781095514CA7BBDFFC92306B1121 Andrew Gregory
 keyserver hkps://keyserver.ubuntu.com
-keyserver hkps://keys.openpgp.org
+keyserver hkps://pgpkeys.eu

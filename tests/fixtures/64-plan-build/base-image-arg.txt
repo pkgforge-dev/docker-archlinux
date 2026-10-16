@@ -1,0 +1,3 @@
+# The ARG and FROM lines of a Dockerfile, for scripts/pick-base-image.
+ARG BASE_IMAGE=docker.io/library/archlinux:latest@sha256:3c64b538588416593f69a1aebd2f2ec0f2541b29159f32556fa7def2167147a0
+FROM --platform=$BUILDPLATFORM ${BASE_IMAGE} AS bootstrap

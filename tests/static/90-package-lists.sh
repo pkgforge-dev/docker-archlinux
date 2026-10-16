@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 #
-# The bootstrap package lists must hold package names and nothing else.
+# The bootstrap package lists have package names and nothing else, and
+# pacstrap-docker, which installs them, tries a failed download again.
 #
 # The Dockerfile runs `xargs -r -a /etc/bootstrap-packages.txt pacstrap-docker`.
-# xargs has no comment syntax, so a line beginning with # arrives as a package
-# named "#" and the rest of the line as further package names. pacman then fails
-# with "target not found: #", a long way from the file that caused it.
+# xargs has no comment syntax: a line that starts with # gives pacman a package
+# named "#", and pacman stops with "target not found: #".
 #
-# There is one list per architecture and they legitimately differ: a port that
-# signs with its own keyring names that keyring, and the ports Arch itself
-# builds do not.
+#   1. each bootstrap/*/etc/bootstrap-packages.txt has one valid name on each
+#      line that is not blank
+#   2. each port (scripts/ports list) has a list
+#   3. a port whose Architecture a keyring pin names has that keyring package
+#      in its list: the image checks its own updates after the build
+#   4. pacstrap-docker starts pacman again when a download failed on every
+#      server, up to PACSTRAP_TRIES attempts, and stops at once on any other
+#      failure. A fake pacman, id, mknod and sleep are on PATH.
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR/..
 # shellcheck source=lib/harness.sh
@@ -23,9 +28,12 @@ if [ -z "$lists" ]; then
   exit 1
 fi
 
-# A pacman package name. Also allows a group name, which is what base is.
+# A pacman package name, or a group name such as base.
 VALID='^[a-z0-9][a-z0-9@._+-]*$'
 
+#---------------------------------------------------------------------------#
+# 1. Names only
+#---------------------------------------------------------------------------#
 count=0
 while IFS= read -r list; do
   [ -n "$list" ] || continue
@@ -33,7 +41,7 @@ while IFS= read -r list; do
   count=$((count + 1))
 
   if [ ! -s "$list" ]; then
-    fail "$rel is not empty" "an empty list installs nothing and the image has no shell" \
+    fail "$rel is not empty" "an empty list installs nothing, and the image has no shell" \
       "reproduce: cat $rel"
     continue
   fi
@@ -43,47 +51,51 @@ while IFS= read -r list; do
   lineno=0
   while IFS= read -r line || [ -n "$line" ]; do
     lineno=$((lineno + 1))
-    # A blank line is harmless: xargs drops it. Anything else must be a name.
+    # xargs drops a blank line.
     case "$line" in "") continue ;; esac
     n=$((n + 1))
-    if ! printf '%s' "$line" | grep -qE "$VALID"; then
+    if ! [[ "$line" =~ $VALID ]]; then
       bad="$bad $rel:$lineno($line)"
     fi
   done < "$list"
 
   if [ -n "$bad" ]; then
-    fail "$rel holds only package names" \
+    fail "$rel has only package names" \
       "not a package name:$bad" \
-      "xargs has no comment syntax, so a # line becomes a package named #" \
+      "xargs has no comment syntax, so a # line gives pacman a package named #" \
       "reproduce: xargs -r -a $rel echo pacstrap-docker /rootfs"
   elif [ "$n" -eq 0 ]; then
-    fail "$rel names at least one package" "the file has no non-blank line" \
+    fail "$rel names at least one package" "the file has no line that is not blank" \
       "reproduce: cat $rel"
   else
-    ok "$rel names $n package(s), all valid names"
+    ok "$rel names $n package(s), each a valid name"
   fi
 done <<< "$lists"
 
-# One list per architecture the build matrix covers. A missing one means an
-# architecture builds with whatever the previous COPY left behind.
-for arch in amd64 arm64 armv7 loong64 riscv64 ppc ppc64 ppc64le; do
+#---------------------------------------------------------------------------#
+# 2. One list for each port
+#---------------------------------------------------------------------------#
+arches="$("$REPO_ROOT/scripts/ports" list)"
+if [ -z "$arches" ]; then
+  fail "scripts/ports lists at least one port" "it printed nothing" \
+    "reproduce: scripts/ports list"
+fi
+while IFS= read -r arch; do
+  [ -n "$arch" ] || continue
   if [ -f "$REPO_ROOT/bootstrap/$arch/etc/bootstrap-packages.txt" ]; then
     ok "bootstrap/$arch/etc/bootstrap-packages.txt exists"
   else
     fail "bootstrap/$arch/etc/bootstrap-packages.txt exists" \
-      "the build matrix has a $arch entry and there is no list for it" \
+      "ports/$arch.conf names the port, and it has no list" \
       "reproduce: ls bootstrap/$arch/etc/bootstrap-packages.txt"
   fi
-done
+done <<< "$arches"
 
 #---------------------------------------------------------------------------#
-# A port that signs with its own keyring needs that keyring inside the target
-# root as well as on the build host, because the image has to verify its own
-# updates after the build.
+# 3. The keyring package of each pin is in the list of each port it serves.
 #
-# ⛔ Derived from bootstrap/keyrings/*.pin, not listed here. A sixth port is a
-# new pin file, and this picks it up with no edit. That is also why there is no
-# arch-subset marker: no line below names an architecture.
+# ⛔ From bootstrap/keyrings/*.pin, not from a list here: a new pin needs no
+# change to this test.
 #---------------------------------------------------------------------------#
 pin_field() { # FILE KEY -> the value of the first KEY = line
   awk -F= -v k="$2" '
@@ -102,11 +114,11 @@ architecture_of() { # pacman.conf -> its Architecture value
 
 pins="$(find "$REPO_ROOT/bootstrap/keyrings" -type f -name '*.pin' | sort)"
 if [ -z "$pins" ]; then
-  fail "at least one keyring pin exists"     "searched: $REPO_ROOT/bootstrap/keyrings"     "without a pin, no port that signs with its own keys can build under SigLevel = Required"     "reproduce: ls bootstrap/keyrings/*.pin"
+  fail "at least one keyring pin exists" "searched: $REPO_ROOT/bootstrap/keyrings" \
+    "reproduce: ls bootstrap/keyrings/*.pin"
 fi
 
-# ⛔ The floor. A derivation that matched nothing would report no failure and
-# assert nothing, which is the shape this whole file exists to avoid.
+# ⛔ The floor: a match of nothing would check nothing and fail nothing.
 pairs=0
 while IFS= read -r pin; do
   [ -n "$pin" ] || continue
@@ -114,7 +126,9 @@ while IFS= read -r pin; do
   archs="$(pin_field "$pin" arch)"
   pin_rel="${pin#"$REPO_ROOT/"}"
   if [ -z "$keyring" ] || [ -z "$archs" ]; then
-    fail "$pin_rel names a keyring and the architectures it serves"       "keyring: ${keyring:-<unset>}, arch: ${archs:-<unset>}"       "reproduce: cat $pin_rel"
+    fail "$pin_rel names a keyring and its architectures" \
+      "keyring: ${keyring:-<unset>}, arch: ${archs:-<unset>}" \
+      "reproduce: cat $pin_rel"
     continue
   fi
 
@@ -127,21 +141,153 @@ while IFS= read -r pin; do
       list="$REPO_ROOT/bootstrap/$dir/etc/bootstrap-packages.txt"
       pairs=$((pairs + 1))
       if [ ! -f "$list" ]; then
-        fail "bootstrap/$dir names $keyring-keyring"           "there is no bootstrap/$dir/etc/bootstrap-packages.txt at all"           "reproduce: ls bootstrap/$dir/etc/bootstrap-packages.txt"
+        fail "bootstrap/$dir names $keyring-keyring" \
+          "there is no bootstrap/$dir/etc/bootstrap-packages.txt" \
+          "reproduce: ls bootstrap/$dir/etc/bootstrap-packages.txt"
       elif grep -qxF "$keyring-keyring" "$list"; then
         ok "bootstrap/$dir names $keyring-keyring, from $pin_rel"
       else
-        fail "bootstrap/$dir names $keyring-keyring"           "$pin_rel serves Architecture = $pacman_arch, which rootfs/$dir sets"           "without it the image cannot verify its own updates after the build"           "reproduce: cat bootstrap/$dir/etc/bootstrap-packages.txt"
+        fail "bootstrap/$dir names $keyring-keyring" \
+          "$pin_rel has Architecture = $pacman_arch, which rootfs/$dir sets" \
+          "without it the image cannot check its own updates" \
+          "reproduce: cat bootstrap/$dir/etc/bootstrap-packages.txt"
       fi
     done
   done
 done <<< "$pins"
 
 if [ "$pairs" -gt 0 ]; then
-  ok "every pinned keyring was matched to $pairs architecture(s) that ship it"
+  ok "each pinned keyring matched $pairs port(s) that ship it"
 else
-  fail "every pinned keyring was matched to an architecture that ships it"     "no pacman.conf Architecture matched any pin's arch list, so nothing above was checked"     "reproduce: grep -n '^arch' bootstrap/keyrings/*.pin, then grep -n Architecture rootfs/*/etc/pacman.conf"
+  fail "each pinned keyring matches a port that ships it" \
+    "no Architecture of a pacman.conf is in the arch list of a pin" \
+    "reproduce: grep -n '^arch' bootstrap/keyrings/*.pin; grep -n Architecture rootfs/*/etc/pacman.conf"
 fi
+
+#---------------------------------------------------------------------------#
+# 4. pacstrap-docker tries a failed download again, and nothing else
+#
+# The fake pacman reads one step of FAKE_DIR/plan for each call: "ok" exits
+# 0, any other step prints FAKE_DIR/out.STEP and exits 1. The outputs are the
+# lines pacman 7.1 gives for each failure.
+#---------------------------------------------------------------------------#
+STRAP="$REPO_ROOT/bootstrap/any/usr/local/bin/pacstrap-docker"
+STRAP_REPRO="bash tests/static/90-package-lists.sh (the fake pacman is in a temporary directory)"
+work="$(work_dir)"
+trap 'rm -rf "$work"' EXIT
+fake="$work/fake"
+mkdir -p "$fake/bin"
+
+cat > "$fake/bin/pacman" <<'EOF'
+#!/bin/sh
+set -eu
+n=$(($(cat "$FAKE_DIR/calls") + 1))
+echo "$n" > "$FAKE_DIR/calls"
+printf '%s\n' "$*" >> "$FAKE_DIR/args"
+step="$(awk -v n="$n" 'NR == n' "$FAKE_DIR/plan")"
+case "$step" in
+  ok) exit 0 ;;
+  '')
+    echo "fake pacman: the plan has no step $n" >&2
+    exit 99
+    ;;
+esac
+cat "$FAKE_DIR/out.$step"
+exit 1
+EOF
+cat > "$fake/bin/id" <<'EOF'
+#!/bin/sh
+echo 0
+EOF
+cat > "$fake/bin/mknod" <<'EOF'
+#!/bin/sh
+: > "$1"
+EOF
+cat > "$fake/bin/sleep" <<'EOF'
+#!/bin/sh
+printf '%s ' "$1" >> "$FAKE_DIR/sleeps"
+EOF
+chmod +x "$fake/bin/pacman" "$fake/bin/id" "$fake/bin/mknod" "$fake/bin/sleep"
+
+cat > "$fake/out.db-curl" <<'EOF'
+:: Synchronizing package databases...
+error: failed retrieving file 'core.db' from mirror.example : Operation too slow. Less than 1 bytes/sec transferred the last 10 seconds
+error: failed to synchronize all databases (download library error)
+EOF
+cat > "$fake/out.db-xfer" <<'EOF'
+:: Synchronizing package databases...
+error: failed to synchronize all databases (error invoking external downloader)
+EOF
+cat > "$fake/out.pkg-xfer" <<'EOF'
+:: Retrieving packages...
+warning: failed to retrieve some files
+error: failed to commit transaction (error invoking external downloader)
+Errors occurred, no packages were upgraded.
+EOF
+cat > "$fake/out.notfound" <<'EOF'
+error: target not found: nosuch
+EOF
+cat > "$fake/out.db-sig" <<'EOF'
+:: Synchronizing package databases...
+error: core: missing required signature
+error: failed to synchronize all databases (invalid or corrupted database (PGP signature))
+EOF
+cat > "$fake/out.recovered-sig" <<'EOF'
+:: Retrieving packages...
+error: failed retrieving file 'pacman-7.1.0-1-x86_64.pkg.tar.zst' from mirror.example : The requested URL returned error: 404
+error: pacman: signature from "Example <example@example.org>" is invalid
+error: failed to commit transaction (invalid or corrupted package (PGP signature))
+Errors occurred, no packages were upgraded.
+EOF
+
+# strap DESC PLAN WANT_RC WANT_CALLS WANT_SLEEPS [ENV=VALUE ...] -> one run of
+# pacstrap-docker ROOT base pacman. One assertion checks the exit status, the
+# number of pacman calls and the delays.
+strap() {
+  local desc="$1" plan="$2" want_rc="$3" want_calls="$4" want_sleeps="$5" rc=0 calls sleeps
+  shift 5
+  rm -rf "$work/root"
+  tr ' ' '\n' <<< "$plan" > "$fake/plan"
+  echo 0 > "$fake/calls"
+  : > "$fake/args"
+  : > "$fake/sleeps"
+  env PATH="$fake/bin:$PATH" FAKE_DIR="$fake" "$@" \
+    bash "$STRAP" "$work/root" base pacman > "$work/strap.out" 2>&1 || rc=$?
+  calls="$(cat "$fake/calls")"
+  sleeps="$(cat "$fake/sleeps")"
+  if [ "$rc" -eq "$want_rc" ] && [ "$calls" -eq "$want_calls" ] && [ "$sleeps" = "$want_sleeps" ]; then
+    ok "$desc"
+  else
+    fail "$desc" \
+      "want: exit $want_rc, $want_calls pacman call(s), delays '$want_sleeps'" \
+      "got:  exit $rc, $calls pacman call(s), delays '$sleeps'" \
+      "plan: $plan" \
+      "it said: $(tr '\n' '|' < "$work/strap.out")" \
+      "reproduce: $STRAP_REPRO"
+  fi
+}
+
+strap "two failed downloads, then a pass: three attempts, exit 0" \
+  "db-curl db-curl ok" 0 3 "20 40 "
+args_want="-r $work/root -Sy --noconfirm base pacman"
+args_got="$(awk 'END { print }' "$fake/args")"
+check_eq "each attempt gives pacman the root and the packages" "$args_want" "$args_got" "$STRAP_REPRO"
+strap "a database download that fails through the XferCommand is tried again" \
+  "db-xfer ok" 0 2 "20 "
+strap "a package download that fails through the XferCommand is tried again" \
+  "pkg-xfer ok" 0 2 "20 "
+strap "three failed downloads stop after the third attempt, exit 1" \
+  "db-curl db-curl db-curl ok" 1 3 "20 40 "
+strap "PACSTRAP_TRIES=1 makes one attempt" \
+  "db-curl ok" 1 1 "" PACSTRAP_TRIES=1
+strap "a package that no repository has stops at once" \
+  "notfound ok" 1 1 ""
+strap "a database with a bad signature stops at once" \
+  "db-sig ok" 1 1 ""
+strap "a download that the next server gave, then a bad signature, stops at once" \
+  "recovered-sig ok" 1 1 ""
+strap "a PACSTRAP_TRIES that is not a whole number from 1 is refused before pacman starts" \
+  "ok" 1 0 "" PACSTRAP_TRIES=two
 
 diag "checked $count package list(s)"
 summary

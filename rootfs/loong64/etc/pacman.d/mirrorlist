@@ -1,16 +1,15 @@
 ##
-## Arch mirror list for loong64, Architecture = loong64
-## Generated on 2026-10-15 by scripts/gen-mirrorlist
-## Every server below answered 200 for core.db when it was written.
-## The first 2 servers are anchors and are not ranked.
+## Mirror list for loong64, Architecture = loong64.
+## Generated on 2026-10-16 by scripts/gen-mirrorlist.
+## The first 2 servers are the anchors of mirrors/loong64.anchors, in that order.
+## The other servers answered for core.db, the fastest connection first.
 ##
 
 Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo
 Server = https://loongarchlinux.lcpu.dev/loongarch/archlinux/$repo/os/$arch
 
-## Ranked by connection time, fastest first.
 Server = https://mirrors.wsyu.edu.cn/loongarch/archlinux/$repo/os/$arch
-Server = https://mirrors.nju.edu.cn/loongarch/archlinux/$repo/os/$arch
-Server = https://mirrors.pku.edu.cn/loongarch/archlinux/$repo/os/$arch
-Server = https://mirrors.pku.edu.cn/loongarch-lcpu/archlinux/$repo/os/$arch
 Server = https://mirror.iscas.ac.cn/loongarch/archlinux/$repo/os/$arch
+Server = https://mirrors.nju.edu.cn/loongarch/archlinux/$repo/os/$arch
+Server = https://mirrors.pku.edu.cn/loongarch-lcpu/archlinux/$repo/os/$arch
+Server = https://mirrors.pku.edu.cn/loongarch/archlinux/$repo/os/$arch

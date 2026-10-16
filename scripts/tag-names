@@ -1,96 +1,81 @@
 #!/usr/bin/env bash
 #
-# Print the tags for one architecture, or for the multi architecture index.
+# Print the tags for one port, or for the multi-platform index.
 #
-#   scripts/tag-names [--existing FILE] arch <docker-arch> <version> <anchor> <image> [<image>...]
-#   scripts/tag-names [--existing FILE] index <version> <image> [<image>...]
+#   scripts/tag-names [--existing FILE] arch ARCH VERSION ANCHOR IMAGE...
+#   scripts/tag-names [--existing FILE] index VERSION IMAGE...
+#   scripts/tag-names aliases ARCH
 #
-# <version> is the build date, 2026.08.26 shape, written without the leading v.
-# <anchor> is the upstream version the pinned family is named after. It is the
-# pacman version, because pacman exists on every port and its version already
-# carries the commit it was built from. The ports are not in lockstep, so the
-# anchor is resolved per architecture and never shared between them.
+# ARCH is a port (scripts/ports list). VERSION is the build date, for example
+# 2026.08.26, with no leading v. ANCHOR is the pacman version of the port.
+# Each port has its own anchor, because the ports do not release together.
 #
-# Five families come out of this:
+# The tag families:
 #
-#   latest                     rolling, index
-#   v<version>                 pinned by build date, index
-#   <uname -m>                 rolling, single architecture
-#   <docker arch>              rolling, single architecture
-#   <alias>-v<version>         pinned by build date, single architecture
-#   <alias>-<anchor>           pinned by upstream version, single architecture
+#   latest               rolling   index
+#   v<version>           pinned    index
+#   <alias>              rolling   one platform
+#   <alias>-v<version>   pinned    one platform
+#   <alias>-<anchor>     pinned    one platform
 #
-# The uname -m spellings follow the sibling images in the organisation. The
-# docker architecture spellings are this repository's extension. Aliases share
-# one manifest, so x86_64 and amd64 are two names for one digest.
+# The aliases of a port come from ports/<arch>.conf. The first alias is the
+# uname -m name. All aliases of a port name one manifest.
 #
-# ⛔ A pinned tag is created once, by the first build that names it, and is
-# never pointed at another image. A rolling tag moves with every build.
-# --existing FILE leaves out each pinned tag whose name is a line of FILE, and
-# names it on stderr. FILE is the target repository's tag list, from
-# scripts/registry-tags. Without the flag every tag is printed. So a second
-# build on one day, or a second build with one pacman version, moves latest and
-# <alias> only. Before the flag the publish created every tag on every build:
-# v<version> moved on 2026-08-26 and 2026-08-28, and every <alias>-<anchor>
-# moved each day. HISTORY/pinned-tags.md.
+# ⛔ A pinned tag is made once and never points at another image. A rolling
+# tag moves with each build. --existing FILE leaves out each pinned tag that
+# is a line of FILE, and names it on stderr. FILE is the tag list of the
+# target repository (scripts/registry-tags). Without --existing every tag is
+# printed.
+#
+# aliases ARCH prints the aliases of ARCH on one line, separated by spaces.
+#
+# Exit status: 0 printed, 1 an unknown port, a bad tag or a bad argument.
 set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORTS="$ROOT/scripts/ports"
 
 die() {
   echo "tag-names: $*" >&2
   exit 1
 }
 
-# aliases_for <docker arch>
-# The first name is the uname -m spelling. riscv64 is spelled the same in both
-# families, so it is one name and not two.
+# aliases_for ARCH -> the aliases of ARCH, on one line
 aliases_for() {
-  case "$1" in
-    amd64) printf 'x86_64 amd64\n' ;;
-    arm64) printf 'aarch64 arm64\n' ;;
-    armv7) printf 'armv7l armv7h armv7\n' ;;
-    loong64) printf 'loongarch64 loong64\n' ;;
-    riscv64) printf 'riscv64\n' ;;
-    # ⛔ Three architectures, not three spellings of one: powerpc is 32 bit big
-    # endian, powerpc64 is 64 bit big endian and powerpc64le is little endian.
-    # A binary from one runs on none of the others.
-    #
-    # uname -m and the docker architecture agree on all three, so the first
-    # name is both. The second is the spelling ArchPOWER itself uses, which is
-    # what a consumer arriving from that port will look for. Decision 4 says
-    # add what is missing rather than subtract what exists.
-    ppc) printf 'ppc powerpc\n' ;;
-    ppc64) printf 'ppc64 powerpc64\n' ;;
-    ppc64le) printf 'ppc64le powerpc64le\n' ;;
-    *) die "unknown architecture: $1" ;;
-  esac
+  local list
+  list="$("$PORTS" list)"
+  grep -qxF -- "$1" <<< "$list" || die "unknown architecture: $1 (ports: $(tr '\n' ' ' <<< "$list"))"
+  "$PORTS" aliases "$1" | awk 'NF { printf "%s%s", sep, $1; sep = " " } END { printf "\n" }'
 }
 
 valid_tag() {
-  printf '%s' "$1" | grep -qE '^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$'
+  [[ "$1" =~ ^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$ ]]
 }
 
 existing=""
 
-# emit <rolling|pinned> TAG IMAGE...
+# The tags to print. Nothing is printed until each tag is checked.
+OUT=()
+
+# emit rolling|pinned TAG IMAGE...
 emit() {
-  local kind="$1" tag="$2"
+  local kind="$1" tag="$2" image
   shift 2
   valid_tag "$tag" || die "not a valid tag: $tag"
   if [ "$kind" = pinned ] && [ -n "$existing" ] && grep -qxF -- "$tag" "$existing"; then
     echo "tag-names: $tag is pinned and exists, so it stays where it is" >&2
     return 0
   fi
-  local image
   for image in "$@"; do
-    printf '%s:%s\n' "$image" "$tag"
+    OUT+=("$image:$tag")
   done
 }
 
 if [ "${1:-}" = "--existing" ]; then
   existing="${2:-}"
-  [ -n "$existing" ] || die "--existing needs the file of tags the repository already carries"
+  [ -n "$existing" ] || die "--existing needs the file of tags that the repository has"
   # ⛔ A list that cannot be read is not an empty list. Read as empty, it
-  # would move every pinned tag, which is what the flag exists to stop.
+  # would move every pinned tag.
   if [ ! -f "$existing" ] || [ ! -r "$existing" ]; then
     die "--existing $existing is not a readable file"
   fi
@@ -101,17 +86,16 @@ mode="${1:-}"
 case "$mode" in
   arch)
     shift
-    [ "$#" -ge 4 ] || die "usage: tag-names arch <docker-arch> <version> <anchor> <image>..."
-    docker_arch="$1"
+    [ "$#" -ge 4 ] || die "usage: tag-names arch ARCH VERSION ANCHOR IMAGE..."
+    port="$1"
     version="$2"
     anchor="$3"
     shift 3
     [ -n "$version" ] || die "version is empty"
     [ -n "$anchor" ] || die "anchor is empty"
-    # Assigned rather than expanded inline. A die inside a for list runs in a
-    # subshell, so an unknown architecture would leave the list empty and the
-    # script would exit 0 having printed nothing.
-    alias_list="$(aliases_for "$docker_arch")"
+    # An assignment, not a word list in the for line: a die in a command
+    # substitution inside the for line does not stop this script.
+    alias_list="$(aliases_for "$port")"
     for alias in $alias_list; do
       emit rolling "$alias" "$@"
       emit pinned "$alias-v$version" "$@"
@@ -120,7 +104,7 @@ case "$mode" in
     ;;
   index)
     shift
-    [ "$#" -ge 2 ] || die "usage: tag-names index <version> <image>..."
+    [ "$#" -ge 2 ] || die "usage: tag-names index VERSION IMAGE..."
     version="$1"
     shift
     [ -n "$version" ] || die "version is empty"
@@ -129,10 +113,14 @@ case "$mode" in
     ;;
   aliases)
     shift
-    [ "$#" -eq 1 ] || die "usage: tag-names aliases <docker-arch>"
+    [ "$#" -eq 1 ] || die "usage: tag-names aliases ARCH"
     aliases_for "$1"
     ;;
   *)
-    die "usage: tag-names <arch|index|aliases> ..."
+    die "usage: tag-names [--existing FILE] arch|index|aliases ..."
     ;;
 esac
+
+if [ "${#OUT[@]}" -gt 0 ]; then
+  printf '%s\n' "${OUT[@]}"
+fi

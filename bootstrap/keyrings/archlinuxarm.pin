@@ -1,41 +1,38 @@
-# Arch Linux ARM package signing trust root.
+# The package signing trust root of Arch Linux ARM (aarch64, armv7h).
 #
-# Arch Linux ARM signs its packages with a key that archlinux-keyring does not
-# carry, so a build host that only trusts archlinux-keyring rejects every ARM
-# package. Pinning the keyring package, its checksum and its trusted key set
-# here lets SigLevel = Required stay on with no signature weakening.
-#
-# bootstrap/any/usr/local/bin/install-port-keyring reads every .pin in this
-# directory and uses the one whose arch list carries the Architecture of the
-# build. Adding a port means adding a file here, not editing that script.
+# Arch Linux ARM signs with a key that archlinux-keyring does not have. This pin
+# gives the keyring package, its sha256 and its trusted keys, so SigLevel =
+# Required stays on. bootstrap/any/usr/local/bin/install-port-keyring reads
+# each .pin here and uses the one whose arch list has the Architecture of the
+# build. To add a port, add a pin here. Do not change that script.
 #
 # Fields:
-#   keyring   the pacman keyring name, so --populate can be told what to add
-#   arch      the pacman Architecture values this pin serves, space separated
-#   mirror    the directory the package is fetched from
-#   package   the pinned package, name carrying its version. ⛔ The package
-#             itself is carried in this directory under exactly that name,
-#             because a port deletes a superseded keyring from its mirror
-#   sha256    over that package
-#   trusted   one line per fingerprint in the keyring's own -trusted file,
-#             with the primary key's expiry as YYYY-MM-DD or never
+#   keyring   the pacman keyring name, for pacman-key --populate
+#   arch      the pacman Architecture values of this pin, separated by spaces
+#   mirror    a directory that serves the package. There can be more than one
+#             mirror line: install-port-keyring tries them in file order.
+#   package   the pinned package, with its version in the name. ⛔ The package
+#             is in this directory under that name, because a port deletes an
+#             old keyring package from its mirrors.
+#   sha256    of that package
+#   trusted   one line for each fingerprint in the -trusted file of the
+#             keyring, with the expiry of the primary key: YYYY-MM-DD or never
 #
-# ⛔ The trusted lines are a set, and the whole set is asserted. A fingerprint
-# added, removed or re-dated is the trust root moving, and it stops the build
-# rather than passing quietly.
+# ⛔ The trusted lines are a set, and the build checks the whole set. A
+# fingerprint added, removed or with a changed expiry stops the build.
 #
-# To re-derive, from any host:
-#   curl -sSL -o k.pkg.tar.xz http://mirror.archlinuxarm.org/aarch64/core/<package>
+# To read the values again, on a host with bsdtar and gpg:
+#   curl -sSfL --connect-timeout 15 --max-time 120 -o k.pkg.tar.xz <mirror>/<package>
 #   sha256sum k.pkg.tar.xz
 #   bsdtar -xOf k.pkg.tar.xz usr/share/pacman/keyrings/archlinuxarm-trusted
 #   bsdtar -xOf k.pkg.tar.xz usr/share/pacman/keyrings/archlinuxarm.gpg | \
 #     gpg --with-colons --show-keys
 #
-# Adopted 2026-08-26. Trusted set and expiry re-measured 2026-08-28 against
-# http://mirror.archlinuxarm.org/aarch64/core/.
+# Adopted 2026-08-26. Verified on that date against a mirror line below.
 
 keyring = archlinuxarm
 arch    = aarch64 armv7h
+mirror  = https://ghcr.mirror.archlinux.pkgforge.dev/aarch64/core
 mirror  = http://mirror.archlinuxarm.org/aarch64/core
 package = archlinuxarm-keyring-20240419-2-any.pkg.tar.xz
 sha256  = 3cb36869edfe413672a6e932cc55d7f8386e1a9d3b38663cfb3bc6fe0d146e21

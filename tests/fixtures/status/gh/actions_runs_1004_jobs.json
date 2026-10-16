@@ -1,0 +1,23 @@
+{
+ "total_count": 2,
+ "jobs": [
+  {
+   "id": 100410,
+   "name": "Build amd64",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-16T09:01:00Z",
+   "completed_at": "2026-10-16T09:10:00Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1004/job/100410"
+  },
+  {
+   "id": 100412,
+   "name": "Build armv7",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-16T09:01:10Z",
+   "completed_at": "2026-10-16T09:12:10Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1004/job/100412"
+  }
+ ]
+}

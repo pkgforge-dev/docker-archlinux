@@ -1,19 +1,25 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
-# Remove one server from a mirrorlist, for one build.
+# Remove servers from the mirror lists of the build stage.
 #
-#   drop-server <mirrorlist> <server>
+#   drop-server LIST_FILE SERVER
+#   drop-server --pairs DIR PAIRS
 #
-# scripts/check-mirror-lag names a first server that is behind upstream, and
-# the build reads its list without that server. The Dockerfile runs this on the
-# build stage's own /etc/pacman.d/mirrorlist only. The list the image ships is
-# the copy under /rootfs, and it keeps every server: a mirror that is behind
-# today is current again after its next sync, and pacman falls through on its
-# own when a transfer fails.
+# The first form removes the Server line whose value is SERVER from LIST_FILE.
+# The second form does the first once for each LIST=SERVER pair in PAIRS
+# (separated by spaces), on DIR/LIST. Empty PAIRS changes nothing.
 #
-# ⛔ The match is exact, on the value after "Server =". A server that matches no
+# scripts/check-mirror-lag names the pairs, and the Dockerfile passes them as
+# the build argument SKIP_SERVERS. The Dockerfile runs this on the lists of the
+# build stage only. The lists that ship (/rootfs) keep every server: a mirror
+# that is behind today follows upstream again after its next sync, and pacman
+# tries the next server when a transfer fails.
+#
+# ⛔ The match is exact, on the value after "Server =". A SERVER that matches no
 # line is an error, because then the check and the build read two different
-# lists. A list left with no server is an error too.
+# lists. A list with no server left is an error too.
+#
+# Exit status: 0 done, 1 an input is wrong.
 set -euo pipefail
 
 die() {
@@ -21,40 +27,60 @@ die() {
   exit 1
 }
 
-[ "$#" -eq 2 ] || die "usage: drop-server <mirrorlist> <server>"
-list="$1"
-server="$2"
-[ -n "$server" ] || die "the server to drop is empty"
-[ -f "$list" ] || die "$list is not a file"
-
-tmp="$(mktemp)" || die "cannot create a temporary file"
-
-# ENVIRON rather than -v: awk -v reads backslash escapes in the value.
-counts="$(DROP="$server" awk -v out="$tmp" '
-  /^[[:space:]]*Server[[:space:]]*=/ {
-    v = $0
-    sub(/^[^=]*=[[:space:]]*/, "", v)
-    sub(/[[:space:]]+$/, "", v)
-    if (v == ENVIRON["DROP"]) { dropped++; next }
-    kept++
+# drop LIST_FILE SERVER
+drop() {
+  local list="$1" server="$2" tmp counts dropped kept
+  [ -n "$server" ] || die "the server to drop is empty"
+  [ -f "$list" ] || die "$list is not a file"
+  tmp="$(mktemp)" || die "cannot make a temporary file"
+  # ENVIRON, not -v: awk -v reads backslash escapes in the value.
+  counts="$(DROP="$server" awk -v out="$tmp" '
+    /^[[:space:]]*Server[[:space:]]*=/ {
+      v = $0
+      sub(/^[^=]*=[[:space:]]*/, "", v)
+      sub(/[[:space:]]+$/, "", v)
+      if (v == ENVIRON["DROP"]) { dropped++; next }
+      kept++
+    }
+    { print > out }
+    END { printf "%d %d\n", dropped, kept }' "$list")" || {
+    rm -f "$tmp"
+    die "cannot read $list"
   }
-  { print > out }
-  END { printf "%d %d\n", dropped, kept }' "$list")" || {
+  dropped="${counts% *}"
+  kept="${counts#* }"
+  if [ "$dropped" -eq 0 ]; then
+    rm -f "$tmp"
+    die "$server is not a Server line in $list, so the check and the build read two different lists"
+  fi
+  if [ "$kept" -eq 0 ]; then
+    rm -f "$tmp"
+    die "without $server, $list has no server"
+  fi
+  cat "$tmp" > "$list" || die "cannot write $list"
   rm -f "$tmp"
-  die "cannot read $list"
+  echo "drop-server: the build reads $list without $server, $kept server(s) left" >&2
 }
 
-dropped="${counts% *}"
-kept="${counts#* }"
-if [ "$dropped" -eq 0 ]; then
-  rm -f "$tmp"
-  die "$server is not a Server line in $list, so the check and the build read two different lists"
-fi
-if [ "$kept" -eq 0 ]; then
-  rm -f "$tmp"
-  die "dropping $server leaves no server in $list"
+if [ "${1:-}" = --pairs ]; then
+  [ "$#" -eq 3 ] || die "usage: drop-server --pairs DIR PAIRS"
+  dir="$2"
+  [ -d "$dir" ] || die "$dir is not a directory"
+  pairs=()
+  read -r -a pairs <<< "$3"
+  for pair in "${pairs[@]}"; do
+    case "$pair" in
+      ?*=?*) ;;
+      *) die "'$pair' in the pairs is not LIST=SERVER" ;;
+    esac
+    name="${pair%%=*}"
+    case "$name" in
+      */* | . | ..) die "'$name' in the pair '$pair' is not a file name" ;;
+    esac
+    drop "$dir/$name" "${pair#*=}"
+  done
+  exit 0
 fi
 
-cat "$tmp" > "$list" || die "cannot write $list"
-rm -f "$tmp"
-echo "drop-server: the build reads $list without $server, $kept server(s) left" >&2
+[ "$#" -eq 2 ] || die "usage: drop-server LIST_FILE SERVER | drop-server --pairs DIR PAIRS"
+drop "$1" "$2"

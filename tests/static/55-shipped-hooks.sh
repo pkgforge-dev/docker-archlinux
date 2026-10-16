@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 #
-# A shipped pacman hook runs inside every consumer's transaction, so a broken
-# one breaks them and not us.
+# Each pacman hook that ships is complete, and the program it runs is there.
 #
-# alpm reads every file in /etc/pacman.d/hooks/ before it does anything. A hook
-# missing a required directive aborts the transaction with
-#   error: Missing trigger operation in hook
-# and a hook whose Exec is not there aborts it with
-#   error: command failed to execute correctly
-# Either way the consumer's pacman -Syu stops, on a file this repository put in
-# their image. Nothing about that is visible from a build that succeeded.
+# alpm reads each file in /etc/pacman.d/hooks before a transaction. A hook
+# with no trigger operation stops the transaction ("Missing trigger operation
+# in hook"). An Exec that is not there stops it too ("command failed to
+# execute correctly"). The consumer's pacman -Syu then stops on a file of
+# this image.
 #
-# So each shipped hook is checked for the directives alpm requires, and every
-# Exec under /usr/local is checked to be a file this repository actually ships.
+# For each hook in rootfs/any/etc/pacman.d/hooks:
+#   1. Operation, Type, Target, When and Exec are there
+#   2. one [Trigger] and one [Action]
+#   3. When is PreTransaction or PostTransaction
+#   4. a path under /usr/local in Exec is a file in rootfs/any
+#   5. Depends names the package of each program that Exec runs. The table
+#      OWNERS below gives the package of each program; a program that is not
+#      in the table fails, so a new hook adds its line.
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR/..
 # shellcheck source=lib/harness.sh
@@ -21,8 +24,14 @@ set -euo pipefail
 HOOKDIR="$REPO_ROOT/rootfs/any/etc/pacman.d/hooks"
 SHIPPED="$REPO_ROOT/rootfs/any"
 
+# The package that owns each program a hook runs (pacman -Qo on Arch Linux).
+OWNERS="/usr/bin/find findutils
+/bin/sh bash
+/usr/bin/sh bash
+/usr/bin/bash bash"
+
 if [ ! -d "$HOOKDIR" ]; then
-  fail "the shipped hook directory exists" \
+  fail "the hook directory exists" \
     "looked for: rootfs/any/etc/pacman.d/hooks" \
     "reproduce: ls rootfs/any/etc/pacman.d/hooks"
   summary
@@ -32,14 +41,14 @@ fi
 hooks="$(find "$HOOKDIR" -maxdepth 1 -type f -name '*.hook' | sort)"
 if [ -z "$hooks" ]; then
   fail "at least one hook ships" \
-    "the directory is there and holds no .hook file" \
-    "⚠ alpm only reads files whose name ends .hook, so one named otherwise never runs" \
+    "the directory has no .hook file" \
+    "⚠ alpm reads only files whose name ends in .hook" \
     "reproduce: ls rootfs/any/etc/pacman.d/hooks"
   summary
   exit 1
 fi
 
-# directive FILE KEY -> every value of KEY, one per line, comments stripped
+# directive FILE KEY -> each value of KEY, one per line, comments removed
 directive() {
   awk -v k="$2" -F= '
     { sub(/^[[:space:]]*#.*$/, "") }
@@ -57,12 +66,7 @@ while IFS= read -r hook; do
   count=$((count + 1))
   rel="${hook#"$REPO_ROOT/"}"
 
-  #-------------------------------------------------------------------------#
-  # 1. The directives alpm refuses to start without.
-  #
-  # Operation, Type and Target belong to [Trigger]. When and Exec belong to
-  # [Action]. alpm rejects the hook when any of the five is absent.
-  #-------------------------------------------------------------------------#
+  # 1. The directives that alpm needs
   missing=""
   for key in Operation Type Target When Exec; do
     if [ -z "$(directive "$hook" "$key")" ]; then
@@ -70,31 +74,26 @@ while IFS= read -r hook; do
     fi
   done
   if [ -z "$missing" ]; then
-    ok "$rel declares Operation, Type, Target, When and Exec"
+    ok "$rel has Operation, Type, Target, When and Exec"
   else
-    fail "$rel declares Operation, Type, Target, When and Exec" \
+    fail "$rel has Operation, Type, Target, When and Exec" \
       "missing:$missing" \
-      "alpm refuses the whole transaction over one incomplete hook, in the consumer's image" \
+      "alpm stops the transaction of the consumer on an incomplete hook" \
       "reproduce: cat $rel"
   fi
 
-  #-------------------------------------------------------------------------#
-  # 2. Both section headers, since a directive outside its section is ignored.
-  #-------------------------------------------------------------------------#
+  # 2. Both section headers. A directive outside its section is not read.
   sections="$(grep_matches '^[[:space:]]*\[(Trigger|Action)\][[:space:]]*$' "$hook")"
-  found="$(printf '%s\n' "$sections" | awk 'NF' | wc -l | tr -d '[:space:]')"
+  found="$(awk 'NF { n++ } END { print n + 0 }' <<< "$sections")"
   if [ "$found" -eq 2 ]; then
-    ok "$rel carries one [Trigger] and one [Action]"
+    ok "$rel has one [Trigger] and one [Action]"
   else
-    fail "$rel carries one [Trigger] and one [Action]" \
-      "matched $found section header(s)" \
-      "a directive in no section, or in the wrong one, is read as part of the previous section" \
+    fail "$rel has one [Trigger] and one [Action]" \
+      "found $found section header(s)" \
       "reproduce: grep -nE '^\[(Trigger|Action)\]' $rel"
   fi
 
-  #-------------------------------------------------------------------------#
-  # 3. When is a value alpm knows.
-  #-------------------------------------------------------------------------#
+  # 3. When
   when="$(directive "$hook" When)"
   case "$when" in
     PreTransaction | PostTransaction)
@@ -103,22 +102,16 @@ while IFS= read -r hook; do
     *)
       fail "$rel runs PreTransaction or PostTransaction" \
         "found: ${when:-nothing}" \
-        "any other value is rejected when alpm parses the hook" \
+        "alpm refuses any other value" \
         "reproduce: grep -n When $rel"
       ;;
   esac
 
-  #-------------------------------------------------------------------------#
-  # 4. Exec names something. Anything under /usr/local is this repository's,
-  #    so it has to be a file that ships. Anything else comes from a package
-  #    and Depends is what makes that a requirement rather than a hope.
-  #-------------------------------------------------------------------------#
+  # 4. A path under /usr/local belongs to this repository, so it must ship.
   exec_line="$(directive "$hook" Exec)"
-  # The interpreter may come first, so every absolute path on the line is
-  # checked rather than only the first word.
-  local_paths="$(printf '%s\n' "$exec_line" | tr ' ' '\n' | awk '/^\/usr\/local\//')"
+  local_paths="$(tr ' ' '\n' <<< "$exec_line" | awk '/^\/usr\/local\//')"
   if [ -z "$local_paths" ]; then
-    ok "$rel runs only paths that come from packages"
+    ok "$rel runs no path under /usr/local"
   else
     absent=""
     while IFS= read -r p; do
@@ -126,30 +119,33 @@ while IFS= read -r hook; do
       [ -f "$SHIPPED$p" ] || absent="$absent $p"
     done <<< "$local_paths"
     if [ -z "$absent" ]; then
-      ok "$rel runs $(printf '%s' "$local_paths" | tr '\n' ' '), which ships in rootfs/any"
+      ok "$rel runs $(tr '\n' ' ' <<< "$local_paths")and it ships in rootfs/any"
     else
-      fail "every /usr/local path $rel runs ships in rootfs/any" \
-        "not shipped:$absent" \
-        "the hook is in the image and the program it runs is not, so every consumer transaction fails" \
-        "reproduce: ls rootfs/any$(printf '%s' "$absent" | awk '{ print $1 }')"
+      fail "each /usr/local path that $rel runs ships in rootfs/any" \
+        "not in rootfs/any:$absent" \
+        "the hook ships and its program does not, so each transaction of a consumer fails" \
+        "reproduce: ls rootfs/any$(awk '{ print $1 }' <<< "$absent")"
     fi
   fi
 
-  #-------------------------------------------------------------------------#
-  # 5. Depends, so alpm reports a missing tool by name instead of the hook
-  #    failing partway through.
-  #-------------------------------------------------------------------------#
+  # 5. Depends names the package of the program that Exec runs.
   deps="$(directive "$hook" Depends)"
-  if [ -n "$deps" ]; then
-    ok "$rel declares Depends: $(printf '%s' "$deps" | tr '\n' ' ')"
+  program="$(awk '{ print $1 }' <<< "$exec_line")"
+  owner="$(awk -v p="$program" '$1 == p { print $2 }' <<< "$OWNERS")"
+  if [ -z "$owner" ]; then
+    fail "the table OWNERS in this test names the package of $program, which $rel runs" \
+      "add a line: $program <package>, from pacman -Qo $program" \
+      "reproduce: grep -n Exec $rel"
+  elif grep -qxF -e "$owner" <<< "$deps"; then
+    ok "$rel depends on $owner, which owns $program"
   else
-    fail "$rel declares Depends" \
-      "no Depends line" \
-      "without it a hook whose tool was removed fails mid transaction rather than being skipped" \
-      "reproduce: grep -n Depends $rel"
+    fail "$rel depends on $owner, which owns $program" \
+      "Depends: $(tr '\n' ' ' <<< "$deps")" \
+      "alpm skips a hook whose Depends is not installed, and runs a hook whose program is missing" \
+      "reproduce: grep -n 'Depends\|Exec' $rel"
   fi
 done <<< "$hooks"
 
-printf '# checked %d shipped hook(s)\n' "$count"
+printf '# checked %d hook(s)\n' "$count"
 
 summary

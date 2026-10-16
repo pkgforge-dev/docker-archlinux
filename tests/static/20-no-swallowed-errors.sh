@@ -1,74 +1,76 @@
 #!/usr/bin/env bash
 #
-# No build step may hide a failure.
+# Check that no code hides a failure.
 #
-# The published image went 59 days stale behind green runs. Every link in that
-# chain was a construct in this list: continue-on-error on the build step,
-# 2>/dev/null on the bootstrap, and || true making a step that installed
-# nothing report success.
+# The constructs: continue-on-error, "|| true", "set +e", stderr sent to
+# /dev/null, and stdout with stderr sent to /dev/null. Each one can turn a
+# failed step into a green one with no message.
+#
+# Read: the workflows, the Dockerfile, scripts/, bootstrap/any/usr/local/bin,
+# rootfs/any/usr/local/lib/docker-archlinux and tests/ (not tests/fixtures).
+# A comment is not code: a line that starts with # and the text after " #"
+# are not read.
+#
+# tests/policy/swallowed-errors.allow holds the exceptions, each with a
+# reason. An exception that matches no line fails, so a dead one is removed.
+#
+# ⚠ The patterns below are written so this file does not match them.
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR/..
 # shellcheck source=lib/harness.sh
 . "$REPO_ROOT/tests/lib/harness.sh"
 
-ALLOW="$REPO_ROOT/tests/policy/swallowed-errors.allow"
+cd "$REPO_ROOT"
+ALLOW=tests/policy/swallowed-errors.allow
 
-# Patterns that make a failure invisible. Extended regex.
-PATTERNS='continue-on-error|\|\|[[:space:]]*true|set[[:space:]]+\+e|2>[[:space:]]*/dev/null'
+PATTERNS='continue-on[-]error|[|][|][[:space:]]*true([[:space:];)]|$)|set[[:space:]]+[+]e|2>[[:space:]]*/dev[/]null|>[[:space:]]*/dev[/]null[[:space:]]+2>&1|&>[[:space:]]*/dev[/]null'
 
-scan_targets() {
-  if [ -d "$REPO_ROOT/.github/workflows" ]; then
-    find "$REPO_ROOT/.github/workflows" -type f \( -name '*.yml' -o -name '*.yaml' \) | sort
-  fi
-  if [ -f "$REPO_ROOT/Dockerfile" ]; then
-    printf '%s\n' "$REPO_ROOT/Dockerfile"
-  fi
-  # Every executable script, whatever it is named. The scripts in this
-  # repository carry no .sh suffix, so matching on the extension would let them
-  # escape the scan entirely.
+targets() {
+  find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \)
+  [ ! -f Dockerfile ] || printf '%s\n' Dockerfile
   local d
-  for d in scripts bootstrap/any/usr/local/bin; do
-    if [ -d "$REPO_ROOT/$d" ]; then
-      find "$REPO_ROOT/$d" -type f | sort
-    fi
+  for d in scripts bootstrap/any/usr/local/bin rootfs/any/usr/local/lib/docker-archlinux; do
+    [ ! -d "$d" ] || find "$d" -type f
   done
+  find tests -path tests/fixtures -prune -o -type f -name '*.sh' -print
 }
 
-targets="$(scan_targets)"
-if [ -z "$targets" ]; then
-  fail "there is something to scan" "no workflows, Dockerfile or scripts found" \
-    "reproduce: ls .github/workflows Dockerfile scripts"
+work="$(work_dir)"
+trap 'rm -rf "$work"' EXIT
+
+mapfile -t files < <(targets | LC_ALL=C sort)
+if [ "${#files[@]}" -lt 5 ]; then
+  fail "there are files to read" "found ${#files[@]}" "reproduce: ls .github/workflows scripts tests"
   summary
   exit 1
 fi
 
-# Load the allowlist. Track which entries are used so a dead one is caught.
+# The exceptions: path | fixed string in the line | reason.
 allow_paths=()
 allow_needles=()
 allow_used=()
-if [ -f "$ALLOW" ]; then
-  while IFS= read -r raw; do
-    case "$raw" in '' | '#'*) continue ;; esac
-    path="$(printf '%s\n' "$raw" | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$1); print $1}')"
-    needle="$(printf '%s\n' "$raw" | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$2); print $2}')"
-    reason="$(printf '%s\n' "$raw" | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$3); print $3}')"
-    if [ -z "$path" ] || [ -z "$needle" ] || [ -z "$reason" ]; then
-      fail "every allowlist entry has a path, a pattern and a reason" \
-        "malformed: $raw" \
-        "expected: path | fixed string | reason" \
-        "reproduce: cat tests/policy/swallowed-errors.allow"
-      continue
-    fi
-    allow_paths+=("$path")
-    allow_needles+=("$needle")
-    allow_used+=(0)
-  done < "$ALLOW"
-fi
+malformed=""
+while IFS= read -r raw; do
+  case "$raw" in '' | '#'*) continue ;; esac
+  IFS='|' read -r path needle reason <<< "$raw"
+  path="$(printf '%s' "$path" | awk '{ gsub(/^[ \t]+|[ \t]+$/, ""); print }')"
+  needle="$(printf '%s' "$needle" | awk '{ gsub(/^[ \t]+|[ \t]+$/, ""); print }')"
+  reason="$(printf '%s' "$reason" | awk '{ gsub(/^[ \t]+|[ \t]+$/, ""); print }')"
+  if [ -z "$path" ] || [ -z "$needle" ] || [ -z "$reason" ]; then
+    malformed="$malformed [$raw]"
+    continue
+  fi
+  allow_paths+=("$path")
+  allow_needles+=("$needle")
+  allow_used+=(0)
+done < "$ALLOW"
+check_eq "each exception has a path, a fixed string and a reason" "" "$malformed" "grep -v '^#' $ALLOW"
 
-is_allowed() { # rel line -> 0 when an entry covers it, marking that entry used
-  local rel="$1" line="$2" i=0
+# is_allowed PATH LINE: an exception covers LINE of PATH. Marks it used.
+is_allowed() {
+  local i=0
   while [ "$i" -lt "${#allow_paths[@]}" ]; do
-    if [ "${allow_paths[$i]}" = "$rel" ] && [ "${line#*"${allow_needles[$i]}"}" != "$line" ]; then
+    if [ "${allow_paths[$i]}" = "$1" ] && [ "${2#*"${allow_needles[$i]}"}" != "$2" ]; then
       allow_used[i]=1
       return 0
     fi
@@ -77,45 +79,36 @@ is_allowed() { # rel line -> 0 when an entry covers it, marking that entry used
   return 1
 }
 
-violations=0
-while IFS= read -r file; do
-  [ -n "$file" ] || continue
-  rel="${file#"$REPO_ROOT/"}"
-  hits="$(grep_matches "$PATTERNS" "$file")"
-  [ -n "$hits" ] || continue
-  while IFS= read -r hit; do
-    [ -n "$hit" ] || continue
-    lineno="${hit%%:*}"
-    text="${hit#*:}"
-    if is_allowed "$rel" "$text"; then
-      continue
-    fi
-    fail "no swallowed error at $rel:$lineno" \
-      "found: $(printf '%s\n' "$text" | sed 's/^[[:space:]]*//')" \
-      "reproduce: grep -nE '$PATTERNS' $rel"
-    violations=$((violations + 1))
-  done <<< "$hits"
-done <<< "$targets"
+# Each hit as FILE<TAB>LINE<TAB>TEXT, with comments removed first.
+awk -v pat="$PATTERNS" '
+  /^[[:space:]]*#/ { next }
+  {
+    line = $0
+    sub(/[[:space:]]#.*$/, "", line)
+    if (line ~ pat) { t = line; sub(/^[[:space:]]+/, "", t); print FILENAME "\t" FNR "\t" t }
+  }' "${files[@]}" > "$work/hits"
+hits=()
+while IFS=$'\t' read -r f n text; do
+  [ -n "$f" ] || continue
+  is_allowed "$f" "$text" || hits+=("$f:$n: $text")
+done < "$work/hits"
 
-if [ "$violations" -eq 0 ]; then
-  ok "no construct hides a failure in the workflows, the Dockerfile or scripts/"
+if [ "${#hits[@]}" -eq 0 ]; then
+  ok "no construct hides a failure in ${#files[@]} files"
+else
+  fail "no construct hides a failure in ${#files[@]} files" "${hits[@]}" \
+    "capture the status with rc=0; cmd || rc=\$?, and keep stderr where a reader sees it" \
+    "or add an exception with a reason to $ALLOW" \
+    "reproduce: grep -nE '$PATTERNS' FILE"
 fi
 
-# A stale allowlist entry is the same class of silent rot as a stale pin.
+dead=""
 i=0
-stale=0
 while [ "$i" -lt "${#allow_paths[@]}" ]; do
-  if [ "${allow_used[$i]}" -eq 0 ]; then
-    fail "allowlist entry is still needed" \
-      "unused: ${allow_paths[$i]} | ${allow_needles[$i]}" \
-      "the construct is gone, so remove the exception" \
-      "reproduce: remove the line from tests/policy/swallowed-errors.allow"
-    stale=1
-  fi
+  [ "${allow_used[$i]}" -eq 1 ] || dead="$dead [${allow_paths[$i]} | ${allow_needles[$i]}]"
   i=$((i + 1))
 done
-if [ "$stale" -eq 0 ]; then
-  ok "no dead allowlist entry (${#allow_paths[@]} entries)"
-fi
+check_eq "each exception still matches a line (${#allow_paths[@]} exceptions)" "" "$dead" \
+  "grep -nF 'STRING' PATH for each line of $ALLOW"
 
 summary

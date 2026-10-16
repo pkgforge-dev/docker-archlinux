@@ -1,37 +1,43 @@
-# Line endings are normalised to LF in the repository, on every platform. The
-# rule travels with the repository, so a machine configured differently still
-# produces correct commits.
+# The repository keeps LF line ends, on every platform. The rule is part of
+# the repository, so a machine with other git settings still makes correct
+# commits.
 #
-# This matters here because the tree ships files that Linux parses directly.
-# A CRLF in bootstrap/any/usr/local/bin/pacstrap-docker turns its shebang into
-# "/bin/bash\r", which fails inside the image as "bad interpreter". pacman
-# reads the .hook files literally, and pacman.conf and mirrorlist the same way.
+# Linux reads many files of the tree as they are. A CRLF in
+# bootstrap/any/usr/local/bin/pacstrap-docker makes its #! line
+# "/bin/bash\r", and the image says "bad interpreter". pacman reads the .hook
+# files, pacman.conf and the mirror lists as they are too.
 #
-# Verify with `git ls-files --eol`. The INDEX column decides what a commit
-# contains, and every tracked text file should read i/lf. The working-tree
-# column does not have to be uniform.
+# Check with `git ls-files --eol`. The index column decides what a commit
+# holds, and each text file must read i/lf there.
 
 * text=auto eol=lf
 
-# Named so the intent survives any later change to the catch-all above.
+# Each name below keeps its rule if the line above changes.
 Dockerfile      text eol=lf
 pacstrap-docker text eol=lf
+pacman-oci      text eol=lf
 mirrorlist      text eol=lf
+mirrorlist-*    text eol=lf
+*.anchors       text eol=lf
+*.pool          text eol=lf
+*.pin           text eol=lf
 *.hook          text eol=lf
 *.conf          text eol=lf
 *.sh            text eol=lf
 *.yml           text eol=lf
 *.yaml          text eol=lf
 *.json          text eol=lf
+*.jsonl         text eol=lf
+*.tsv           text eol=lf
 *.md            text eol=lf
 *.txt           text eol=lf
+*.asc           text eol=lf
 .gitattributes  text eol=lf
 .gitignore      text eol=lf
 
-# Exact bytes are the content, so no translation may be applied. The pinned
-# keyring packages in bootstrap/keyrings/ are tracked under these rules, and a
-# signature or an archive normalised on the way in is corrupt and looks
-# committed.
+# The bytes are the content: no translation. The keyring packages in
+# bootstrap/keyrings/ follow these rules. A signature or an archive with
+# changed line ends is corrupt, and git still shows it as committed.
 *.sig           binary
 *.gpg           binary
 *.tar           binary

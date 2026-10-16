@@ -1,264 +1,176 @@
-- #### [Docker images of Arch Linux](https://hub.docker.com/r/pkgforge/archlinux/tags) [![Build and Deploy](https://github.com/pkgforge-dev/docker-archlinux/actions/workflows/build-deploy.yml/badge.svg)](https://github.com/pkgforge-dev/docker-archlinux/actions/workflows/build-deploy.yml)
+# docker-archlinux
 
-Unofficial, automated Docker multi-platform images of Arch Linux for the following architectures:
+Multi-platform container images of Arch Linux and its ports, built each day from the signed packages of each distribution.
 
-| Architecture | Docker Platform | Distribution |
-| ------------ | --------------- | ------------ |
-| x86_64 | `linux/amd64` | [Arch Linux](https://archlinux.org) |
-| aarch64 | `linux/arm64` | [Arch Linux ARM](https://archlinuxarm.org) |
-| armv7h | `linux/arm/v7` | [Arch Linux ARM](https://archlinuxarm.org) |
-| loongarch64 | `linux/loong64` | [Arch Linux loong64](https://loongarchlinux.lcpu.dev) |
-| riscv64 | `linux/riscv64` | [Arch Linux RISC-V](https://archriscv.felixc.at) |
-| ppc | `linux/ppc` | [ArchPOWER](https://archlinuxpower.org) |
-| ppc64 | `linux/ppc64` | [ArchPOWER](https://archlinuxpower.org) |
-| ppc64le | `linux/ppc64le` | [ArchPOWER](https://archlinuxpower.org) |
+[![all](https://pkgforge-dev.github.io/docker-archlinux/badges/all.svg)](https://pkgforge-dev.github.io/docker-archlinux/)
+[![latest](https://pkgforge-dev.github.io/docker-archlinux/badges/latest.svg)](https://pkgforge-dev.github.io/docker-archlinux/)
+[![registries](https://pkgforge-dev.github.io/docker-archlinux/badges/registries.svg)](https://pkgforge-dev.github.io/docker-archlinux/)
+[![build](https://pkgforge-dev.github.io/docker-archlinux/badges/build.svg)](https://pkgforge-dev.github.io/docker-archlinux/)
+[![amd64](https://pkgforge-dev.github.io/docker-archlinux/badges/amd64.svg)](https://pkgforge-dev.github.io/docker-archlinux/)
+[![arm64](https://pkgforge-dev.github.io/docker-archlinux/badges/arm64.svg)](https://pkgforge-dev.github.io/docker-archlinux/)
+[![armv7](https://pkgforge-dev.github.io/docker-archlinux/badges/armv7.svg)](https://pkgforge-dev.github.io/docker-archlinux/)
+[![loong64](https://pkgforge-dev.github.io/docker-archlinux/badges/loong64.svg)](https://pkgforge-dev.github.io/docker-archlinux/)
+[![ppc](https://pkgforge-dev.github.io/docker-archlinux/badges/ppc.svg)](https://pkgforge-dev.github.io/docker-archlinux/)
+[![ppc64](https://pkgforge-dev.github.io/docker-archlinux/badges/ppc64.svg)](https://pkgforge-dev.github.io/docker-archlinux/)
+[![ppc64le](https://pkgforge-dev.github.io/docker-archlinux/badges/ppc64le.svg)](https://pkgforge-dev.github.io/docker-archlinux/)
+[![riscv64](https://pkgforge-dev.github.io/docker-archlinux/badges/riscv64.svg)](https://pkgforge-dev.github.io/docker-archlinux/)
 
-- #### Registries
+![Image age per port, against the build interval](https://pkgforge-dev.github.io/docker-archlinux/charts/freshness.svg)
 
-The same images are published to two registries under two organisation names.
-Both are live and both stay working.
+![Compressed and installed size per port](https://pkgforge-dev.github.io/docker-archlinux/charts/size.svg)
 
-```bash
+![Tags per port on GHCR and on Docker Hub](https://pkgforge-dev.github.io/docker-archlinux/charts/coverage.svg)
+
+The status site is at <https://pkgforge-dev.github.io/docker-archlinux/>. It shows each port, the registries, the last builds and the history of the last 30 days. A badge shows the state at the last status run, which runs each hour.
+
+## Architectures
+
+The table comes from `ports/*.conf` (`scripts/ports json`).
+
+| port | platform | tags | distribution |
+| --- | --- | --- | --- |
+| `amd64` | `linux/amd64` | `x86_64`, `amd64` | [Arch Linux](https://archlinux.org) |
+| `arm64` | `linux/arm64` | `aarch64`, `arm64` | [Arch Linux ARM](https://archlinuxarm.org) |
+| `armv7` | `linux/arm/v7` | `armv7l`, `armv7h`, `armv7` | [Arch Linux ARM](https://archlinuxarm.org) |
+| `loong64` | `linux/loong64` | `loongarch64`, `loong64` | [Arch Linux for Loong64 (LCPU)](https://loongarchlinux.lcpu.dev) |
+| `ppc` | `linux/ppc` | `ppc`, `powerpc` | [ArchPOWER](https://archlinuxpower.org) |
+| `ppc64` | `linux/ppc64` | `ppc64`, `powerpc64` | [ArchPOWER](https://archlinuxpower.org) |
+| `ppc64le` | `linux/ppc64le` | `ppc64le`, `powerpc64le` | [ArchPOWER](https://archlinuxpower.org) |
+| `riscv64` | `linux/riscv64` | `riscv64` | [Arch Linux RISC-V](https://archriscv.felixc.at) |
+
+The first tag of a port is its `uname -m` name. All tags of a port name one manifest.
+
+## Registries
+
+The same images are on two registries, under two organisation names:
+
+```text
 ghcr.io/pkgforge-dev/archlinux
 docker.io/pkgforge/archlinux
 ```
 
-- #### Usage
+GHCR is the source. Docker Hub gets a copy of each GHCR tag, by digest.
+
+## Usage
 
 ```bash
-# --rm deletes the container on exit
-# --net=host and --privileged are not required, but --privileged often works
-#   around host DNS and networking problems
-# --platform runs another architecture under QEMU, for example
-#   --platform=linux/arm64 runs the aarch64 image on an x86_64 host
-
-# drops you in a bash shell
-docker run --rm -it docker.io/pkgforge/archlinux:latest
-
-# the same image from GHCR
+# A shell in the image of the host platform.
 docker run --rm -it ghcr.io/pkgforge-dev/archlinux:latest
 
-# a specific architecture, under emulation
-docker run --rm -it --platform=linux/arm64 docker.io/pkgforge/archlinux:aarch64
+# The same image from Docker Hub.
+docker run --rm -it docker.io/pkgforge/archlinux:latest
+
+# Another platform, under emulation. The host needs a user mode emulator in binfmt_misc.
+docker run --rm -it --platform=linux/arm64 ghcr.io/pkgforge-dev/archlinux:aarch64
 ```
 
-More in [`examples/`](examples/).
+⚠ A tag of one port is an index with one platform. A pull of a foreign platform needs `--platform`. With no `--platform`, the runtime looks for the host platform and finds nothing.
 
-- #### Mirrors
+[examples/](examples/) has more.
 
-The first `Server` in `/etc/pacman.d/mirrorlist` is the
-[GHCR mirror](https://github.com/pkgforge-dev/mirror-archlinux) of that
-port's repositories. It serves upstream's own databases and package files from
-GitHub's package storage. The upstream mirrors follow it in the same list.
+## Tags
+
+| tag | names | moves |
+| --- | --- | --- |
+| `latest` | an index over every published platform | each build |
+| `v<YYYY.MM.DD>` | an index, made by the first publish of that UTC day that built a port | never |
+| `<tag>` | one platform, the newest image | each build |
+| `<tag>-v<YYYY.MM.DD>` | one platform, the first image of that day | never |
+| `<tag>-<anchor>` | one platform, the first image with that pacman version | never |
+
+`<tag>` is a name from the column `tags` above. `<anchor>` is the version of the `pacman` package in the image. No port publishes a release version, so pacman names the package set. Each port has its own anchor, because the ports differ in `pkgrel`.
+
+⛔ A tag that never moves is made once, by the first build that names it. A second build on the same day, or with the same pacman version, moves `latest` and `<tag>` only.
+
+⚠ A port that does not build on a day keeps its last image in `latest` and in that day's `v<YYYY.MM.DD>`. Its own `<tag>-v<YYYY.MM.DD>` for that day does not exist. An issue with the label `automation` names the port while it does not publish.
+
+```bash
+# When this image was built. This reads the registry, so no pull is necessary.
+docker buildx imagetools inspect ghcr.io/pkgforge-dev/archlinux:riscv64 \
+  --format '{{ index .Image.Config.Labels "org.opencontainers.image.created" }}'
+
+# The anchor of an image.
+docker run --rm ghcr.io/pkgforge-dev/archlinux:x86_64 pacman -Q pacman
+
+# Pin by digest.
+docker buildx imagetools inspect ghcr.io/pkgforge-dev/archlinux:latest --format '{{ .Manifest.Digest }}'
+```
+
+⚠ A git tag of this repository (`vX.Y.Z`) is a version of the tooling and of the release assets. It is not an image version.
+
+## Mirrors
+
+The first server of each mirror list of each port is the [GHCR mirror](https://github.com/pkgforge-dev/mirror-archlinux). That includes both lists of the PowerPC ports, `mirrorlist` for `[base]` and `mirrorlist-any` for `[base-any]`. The mirror serves upstream's own databases and packages, with upstream's signatures, from GitHub's package storage. The upstream servers follow it in the same list.
 
 ```ini
 Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo
 ```
 
-| case | what happens |
+| case | result |
 | --- | --- |
-| a transfer from it fails | pacman tries the next `Server`, as for any mirror |
-| it is behind upstream | the build compares it with the next server first, and builds without it when it is more than 12 hours behind. The image still ships it |
-| signatures | unchanged. `SigLevel = Required`, and every package carries upstream's own signature |
+| a transfer from the mirror fails | pacman tries the next `Server` |
+| the mirror is behind upstream by more than 12 hours | the build reads the list without each path to the mirror, for that build. The image still ships the mirror |
+| the Worker of the mirror does not answer | the build stage reads the same mirror from the registry, through `pacman-oci`. ⛔ The image never ships that path |
+| signatures | `SigLevel = Required`. Each package has upstream's own signature |
 
-It covers x86_64, aarch64, armv7h, loong64 and riscv64. ⚠ The three PowerPC
-ports are not on it, and their lists are unchanged.
-
-To use only the upstream mirrors, delete the line:
+To use only the upstream servers, delete the mirror from each list:
 
 ```bash
-sed -i '/ghcr\.mirror\.archlinux\.pkgforge\.dev/d' /etc/pacman.d/mirrorlist
+sed -i '/ghcr\.mirror\.archlinux\.pkgforge\.dev/d' /etc/pacman.d/mirrorlist*
 ```
 
-- #### Tags
+The build generates each list from the reviewed anchors in `mirrors/` and a ranked pool. [docs/design.md](docs/design.md#mirrors) gives the rules.
 
-Five families. `latest` and `v<date>` are multi-architecture indexes. The other
-three name one architecture each.
+## What the image contains
 
-| tag | resolves to | moves |
-| --- | --- | --- |
-| `latest` | an index over every platform | every build |
-| `v2026.08.26` | an index over every platform, that day's first build | never |
-| `x86_64` | one platform, newest | every build |
-| `x86_64-v2026.08.26` | one platform, that day's first build | never |
-| `x86_64-7.1.0.r9.g54d9411-2` | one platform, the first build with that `pacman` version | never |
-
-⛔ A tag that never moves is created by the first build that names it, and is
-not pointed at another image after that. A second build on the same day, or
-with the same `pacman` version, moves `latest` and the single-architecture
-rolling tags only.
-
-⚠ An architecture that cannot be built on a given day does not hold the others
-back. Its own tags stay where they are, and `latest` and that day's `v<date>`
-index carry the last image published for it, so they always list every
-platform. Its `<alias>-v<date>` tag for that day does not exist. Every image
-records when it was built, in the `org.opencontainers.image.created` label and
-in `/etc/os-release`. An architecture that is not publishing has an open issue
-labelled `automation` in this repository.
+- **Every file of each package.** There is no `NoExtract` rule. Man pages, documentation, info pages and every locale are on disk. Each path that `pacman -Ql` lists is on disk, but one. ⚠ `/var/lock` is a link to `../run/lock`, which systemd makes. In a container the link has no target.
+- **Signature checks.** `SigLevel = Required DatabaseOptional`. The keyring is populated. The image has no local signing key, so run `pacman-key --init` before `pacman-key --lsign-key`.
+- **No package cache and no sync databases.** Install with `pacman -Syu --noconfirm --needed PACKAGE`. ⚠ `pacman -Sy PACKAGE` is a partial upgrade: the new package can need a newer library than the image has.
+- **An empty `/etc/machine-id`.** Each container writes its own ID.
+- **The PATH of the official image.** A pacman hook links each executable of the perl directories (`/usr/bin/vendor_perl`, `/usr/bin/site_perl`, `/usr/bin/core_perl`) into `/usr/local/bin`. ⛔ It never links a name that already resolves.
+- **The locale `en_US.UTF-8`.** `LANG`, `LC_ALL` and `LANGUAGE` are set. `LC_ALL` overrides `LANG`, and `LANGUAGE` overrides `LC_ALL` for messages, so set all three.
 
 ```bash
-# when this platform's image was built
-docker pull --platform linux/riscv64 ghcr.io/pkgforge-dev/archlinux:riscv64
-docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.created" }}' ghcr.io/pkgforge-dev/archlinux:riscv64
-```
-
-Each architecture answers to more than one spelling. The names share one
-manifest, so `x86_64` and `amd64` are two names for one digest.
-
-| Docker platform | tag names |
-| --- | --- |
-| `linux/amd64` | `x86_64`, `amd64` |
-| `linux/arm64` | `aarch64`, `arm64` |
-| `linux/arm/v7` | `armv7l`, `armv7h`, `armv7` |
-| `linux/loong64` | `loongarch64`, `loong64` |
-| `linux/riscv64` | `riscv64` |
-| `linux/ppc` | `ppc`, `powerpc` |
-| `linux/ppc64` | `ppc64`, `powerpc64` |
-| `linux/ppc64le` | `ppc64le`, `powerpc64le` |
-
-The `uname -m` spellings follow the sibling images in the organisation. ⚠ The
-Docker platform spellings (`amd64`, `arm64`, `armv7`) are this repository's
-extension and are not an organisation convention.
-
-⚠ On the three PowerPC ports `uname -m` and the Docker platform agree, so the
-second name in each pair is neither: it is the spelling ArchPOWER uses in its
-repository paths and in `Architecture`.
-
-⚠ A single-architecture tag still records its platform, so pulling one for a
-foreign architecture needs `--platform`. Without it the runtime looks for the
-host architecture and finds nothing:
-
-```bash
-docker pull ghcr.io/pkgforge-dev/archlinux:aarch64
-# no image found in image index for architecture "amd64", variant "", OS "linux"
-
-docker pull --platform=linux/arm64 ghcr.io/pkgforge-dev/archlinux:aarch64
-```
-
-- #### What the pinned tag is pinned to
-
-`x86_64-7.1.0.r9.g54d9411-2` names the version of `pacman` that image contains.
-It is the first image built with that version, and a later build with the same
-version does not take the tag.
-
-Arch is rolling. No port publishes a `VERSION_ID`, so there is no distribution
-version to name a tag after. `pacman` is used because it exists on every port
-and its version already carries the upstream tag, the commits since it, and the
-commit hash it was built from.
-
-⚠ The ports are not in lockstep and `pacman` has differed by `pkgrel` between
-them, so the anchor is resolved per architecture. Two architectures can carry
-different anchor versions in the same build, and the index tags cover both.
-
-```bash
-# what an image is anchored on
-docker run --rm docker.io/pkgforge/archlinux:x86_64 pacman -Q pacman
-```
-
-- #### Every file a package ships is in the image
-
-There is no `NoExtract` rule. Man pages, info pages, documentation and every
-locale are extracted as upstream ships them, so `pacman -Ql` and the filesystem
-agree: every path the package database lists is on disk.
-
-⚠ That is a change. Earlier images withheld `usr/share/man`, and one build also
-withheld documentation, info pages and the locales. A consumer whose tooling
-validates the paths in a package's file list broke on the second of those. See
-[`HISTORY/noextract-reverted.md`](HISTORY/noextract-reverted.md).
-
-A locale needs only `locale-gen`.
-
-```bash
+# Add a locale.
 echo "de_DE.UTF-8 UTF-8" >> /etc/locale.gen
 locale-gen
-```
 
-⚠ The image sets `LANG`, `LC_ALL` and `LANGUAGE`, and they do not have equal
-weight. `LC_ALL` beats `LANG`, and `LANGUAGE` beats `LC_ALL` for translated
-messages. Setting `LANG` alone changes nothing here. Override all three.
-
-```bash
+# Use it for one container.
 docker run --rm -it -e LANG=de_DE.UTF-8 -e LC_ALL=de_DE.UTF-8 -e LANGUAGE=de ghcr.io/pkgforge-dev/archlinux:latest
-```
 
-[`examples/04-add-a-locale.sh`](examples/04-add-a-locale.sh) shows both.
-
-- #### An installed command is callable by name
-
-Arch puts perl scripts in `/usr/bin/vendor_perl`, `/usr/bin/site_perl` and
-`/usr/bin/core_perl`. None is on `PATH`. The `perl` package adds them through
-`/etc/profile.d/perlbin.sh`, which only a login shell reads, so an installed
-command is not callable without one.
-
-```bash
-docker run --rm ghcr.io/pkgforge-dev/archlinux:latest sh -c 'pacman -Sy --noconfirm perl-image-exiftool >/dev/null 2>&1; exiftool -ver'
-```
-
-That prints a version here. A pacman hook symlinks such a command into
-`/usr/local/bin`, which is on `PATH`.
-
-⛔ `PATH` is unchanged. It is byte for byte the official image's, and nothing
-that resolved before resolves anywhere new: a name already claimed under
-`/usr/bin` is never linked, and a link goes as soon as its target does.
-
-Undo it with:
-
-```bash
+# Remove the linker hook and its links.
 rm /etc/pacman.d/hooks/bindir-links.hook
 find /usr/local/bin -lname '/usr/bin/*_perl/*' -delete
 ```
 
-- #### Provenance
+## Provenance and evidence
 
-Every image carries a build provenance attestation and an SBOM. Each build also
-publishes an evidence file per platform recording every package, its version,
-its download size, its sha256 and its build date.
+Each image has a build provenance attestation and an SBOM. The labels `org.opencontainers.image.version`, `.revision` and `.created` record the version, the source commit and the build time of the image. `/etc/os-release` records the version only, as `VERSION_ID` and `IMAGE_VERSION`.
 
-```bash
-docker buildx imagetools inspect docker.io/pkgforge/archlinux:latest --format '{{ json .Provenance }}'
-```
-
-See [`examples/`](examples/) for consuming the evidence file.
-
-- #### Bootstrapping without a base image
-
-A statically linked `pacman` is built from source for every architecture above.
-It carries its own libc, so it runs on a system whose own libc is missing or
-broken, and it can build an Arch root on a host that has no `pacman`, no
-`libalpm` and no Arch keyring.
+Each build writes an evidence file for each platform: each package, its version, its download and installed size, its sha256 and its build date. The build uploads it as the artifact `evidence-<arch>`, and the status site keeps the newest one at `https://pkgforge-dev.github.io/docker-archlinux/evidence/<arch>.json`.
 
 ```bash
-scripts/build-pacman-static amd64
+docker buildx imagetools inspect ghcr.io/pkgforge-dev/archlinux:latest --format '{{ json .Provenance }}'
+curl -sSfL --connect-timeout 15 --max-time 120 https://pkgforge-dev.github.io/docker-archlinux/evidence/amd64.json | jq '.packages | length'
 ```
 
-⛔ Built here, never downloaded. Every input is pinned by `sha256` or by commit
-in [`bootstrap/pacman-static/sources.pin`](bootstrap/pacman-static/sources.pin),
-and `pacman` itself is pinned at the commit the images above are built from.
+## Release assets
 
-[`docs/bootstrap-with-pacman-static.md`](docs/bootstrap-with-pacman-static.md)
-is the walkthrough: build the binary, build a root with it in two passes, and
-end with an image that passes this repository's image suite.
+A release is made on the first day of each month, and for each pushed `vX.Y.Z` tag. It carries the images as plain files, for a consumer with no container runtime.
 
-- #### Without a container runtime
-
-Every release carries the same images as plain files, so a consumer that never
-runs a registry client can still use them.
-
-| asset | what it is |
+| asset | is |
 | --- | --- |
-| `rootfs-<arch>.tar.gz` | the image filesystem, one gzipped tar. Untar it and `chroot`, or `podman import` it |
+| `rootfs-<arch>.tar.gz` | the file system of the published image, `docker export`, gzip. Untar it and use `chroot`, or `podman import` it |
 | `oci-<arch>.tar.gz` | the same image with its metadata, for `podman load` with no network |
-| `bootstrap-set-<arch>.txt` | the resolved package set as `name version sha256`, so the root can be rebuilt with no tooling from here |
-| `rootfs-<arch>.json` | the evidence file for that image: every package, version, size, `sha256` and release date |
-| `pacman-static-<arch>` | the static `pacman` below, and its evidence file |
-| `manifest.json` | every published tag with its digest, platforms and anchor version |
-| `SHA256SUMS` | covers all of the above |
+| `rootfs-<arch>.json` | the evidence file of that image |
+| `bootstrap-set-<arch>.txt` | the package set as `name version sha256` |
+| `pacman-static-<arch>` | a static pacman, and its evidence file `pacman-static-<arch>.json` |
+| `manifest.json` | each published tag, with its digest, platforms and anchor |
+| `SHA256SUMS` | each asset but itself |
 
-⚠ Only `manifest.json` has a URL that does not change. The rest are under
-`releases/download/<tag>/`, so a consumer who wants the current set resolves the
-latest release first. ⚠ A rootfs tarball carries `/etc/os-release`, which dates
-it; the commit it was built from is in `rootfs-<arch>.json` beside it and
-nowhere else on this path.
+⚠ A port with no published image is left out of the release, and the release notes name it.
+
+⚠ Only `releases/latest/download/<asset>` has a URL that does not change. A rootfs tarball dates itself in `/etc/os-release`. Its source commit and build time are `source_commit` and `built` in `rootfs-<arch>.json`: the revision and created labels of the image.
 
 ```bash
 curl -sSfL --connect-timeout 15 --max-time 120 \
@@ -266,26 +178,63 @@ curl -sSfL --connect-timeout 15 --max-time 120 \
   | jq -r '.tags[] | select(.anchor) | "\(.tag) \(.digest)"'
 ```
 
-⚠ A git tag here is a version of this repository's tooling and assets,
-`v0.1.0` shape. It is not an image version. Images are tagged by date.
+## Static pacman
 
-- #### Project history
+`pacman-static-<arch>` is pacman linked statically against musl. It needs no libc, no libalpm and no Arch keyring on the host, so it can build an Arch root on any Linux host. Each input is pinned by sha256 or by commit in `bootstrap/pacman-static/sources.pin`. pacman is pinned at the commit of the pacman in the images.
 
-The build was rewritten from scratch to get reproducible inputs, pinned
-dependencies, signed packages and published provenance. Tags, registries and
-image names are unchanged.
-
-History before the rewrite is kept on the
-[`history-archive`](https://github.com/pkgforge-dev/docker-archlinux/tree/history-archive)
-branch. [`HISTORY/`](HISTORY/) records what changed and why.
-
-- #### Building and testing
+Get it from a release, and check it:
 
 ```bash
-docker build --platform linux/amd64 --build-arg IMAGE_VERSION="$(date -u +%Y.%m.%d)" -t archlinux:amd64 .
-tests/run.sh static
-IMAGE=archlinux:amd64 PLATFORM=linux/amd64 tests/run.sh image
+base=https://github.com/pkgforge-dev/docker-archlinux/releases/latest/download
+for f in pacman-static-amd64 pacman-static-amd64.json SHA256SUMS; do
+  curl -sSfL --connect-timeout 15 --max-time 300 -o "$f" "$base/$f"
+done
+sha256sum -c --ignore-missing SHA256SUMS
+scripts/build-pacman-static --check-evidence pacman-static-amd64.json
 ```
 
-`IMAGE_VERSION` is required. An image that does not record its version cannot be
-tagged by it. [`tests/README.md`](tests/README.md) lists what every test asserts.
+Or build it from the pin:
+
+```bash
+WORK=/tmp/pacman-static scripts/build-pacman-static --fetch
+WORK=/tmp/pacman-static OUT=/tmp/dist scripts/build-pacman-static amd64
+```
+
+[docs/bootstrap-with-pacman-static.md](docs/bootstrap-with-pacman-static.md) tells how to build a root with it.
+
+## Build and test
+
+```bash
+# Build one port.
+docker build --platform linux/amd64 --build-arg IMAGE_VERSION="$(date -u +%Y.%m.%d)" -t archlinux:amd64 .
+
+# The static suite, with the pinned tools.
+scripts/install-tools /tmp/tools
+PATH="/tmp/tools:$PATH" TESTS_REQUIRE_TOOLS=1 tests/run.sh -j 4 static
+
+# The image suite, against a published image. The evidence takes the commit
+# and the build time from the labels of the image.
+scripts/gen-evidence amd64 ghcr.io/pkgforge-dev/archlinux:x86_64 linux/amd64 /tmp/evidence-amd64.json
+IMAGE=ghcr.io/pkgforge-dev/archlinux:x86_64 PLATFORM=linux/amd64 EVIDENCE=/tmp/evidence-amd64.json tests/run.sh image
+```
+
+`IMAGE_VERSION` is required: an image that does not record its version cannot be tagged by it. [docs/tests.md](docs/tests.md) tells what each test checks, and how to test a local build.
+
+## Documents
+
+| document | contents |
+| --- | --- |
+| [docs/design.md](docs/design.md) | the invariants, the rules, the port table, the build and publish topology, the tags, the mirrors, the trust roots, the image |
+| [docs/operations.md](docs/operations.md) | the workflows, the schedules, the issues, what needs a person, settings, secrets, recovery |
+| [docs/measurements.md](docs/measurements.md) | measured facts, each with its date and source |
+| [docs/tests.md](docs/tests.md) | the suites, each test file, how to run them, the tests seen to fail |
+| [docs/conventions.md](docs/conventions.md) | the code, workflow, test and text conventions |
+| [docs/bootstrap-with-pacman-static.md](docs/bootstrap-with-pacman-static.md) | a root built with the static pacman |
+| [examples/](examples/README.md) | commands for consumers |
+| [THIRD-PARTY.md](THIRD-PARTY.md) | the licences of what the release assets and the tree carry from other projects |
+
+The history before the rewrite is on the branch [history-archive](https://github.com/pkgforge-dev/docker-archlinux/tree/history-archive).
+
+## Licence
+
+MIT, [LICENSE](LICENSE).

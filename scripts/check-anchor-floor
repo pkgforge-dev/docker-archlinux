@@ -1,271 +1,232 @@
 #!/usr/bin/env bash
 #
-# Refuse a build whose anchor version went backwards.
+# Refuse a build when the anchor of a port goes below what is already
+# published for it.
 #
-#   scripts/check-anchor-floor '{"amd64":"7.1.0.r9.g54d9411-2", ...}'
+#   scripts/check-anchor-floor ARCH ANCHOR
 #
-# 20 of the 46 mirrors this repository ships are plain http, all of them on the
-# two ARM ports, because the anchor mirror Arch Linux ARM recommends offers no
-# https at all. Packages are signed and SigLevel is Required, so an on-path
-# attacker there cannot forge one. What they can do is serve a stale but validly
-# signed package set, and the build would take it without complaint. That is a
-# rollback, and signatures do not catch it. HISTORY/arm-rollback.md has the
-# measurement and the decision.
+# ARCH is a port (scripts/ports list). ANCHOR is the pacman version that
+# scripts/resolve-anchor gave for this build.
 #
-# The floor is what this repository already published. Every architecture has a
-# tag family named after its anchor, <alias>-<anchor>, so the highest anchor
-# ever published for an architecture can be read from the registry by anyone,
-# with no token and no state file:
+# The floor is the highest anchor in the published tags <alias>-<anchor> of
+# ARCH, compared with scripts/vercmp. The tag list comes from GHCR first and
+# from Docker Hub when GHCR gives no list or an empty list. With no tag of
+# that shape there is no floor. When no registry gives a list, the check
+# cannot run.
 #
-#   ghcr.io/pkgforge-dev/archlinux:aarch64-7.1.0.r9.g54d9411-2
+# ⛔ A stale package set is validly signed, so signatures do not stop a
+# rollback. Some shipped mirrors are plain http. This check is the guard.
 #
-# A build resolving something older than that is refused.
+# A build below the floor passes in two cases only:
+#   - ALLOW_ANCHOR_DOWNGRADE names ARCH, or is "all".
+#   - An upstream revert: scripts/resolve-anchor --each ARCH shows at least 2
+#     reachable https servers, and each of them serves ANCHOR.
 #
-# ⚠ A legitimate upstream downgrade exists. A port can revert a pkgrel. Set
-# ALLOW_ANCHOR_DOWNGRADE=1 to pass anyway, which the workflow exposes as a
-# workflow_dispatch input, so taking one is a deliberate act with a name against
-# it rather than a silent pass.
+# Environment:
+#   FLOOR_IMAGE             the published GHCR image, ghcr.io/OWNER/NAME (required)
+#   FLOOR_HUB_IMAGE         the published Docker Hub image, docker.io/ORG/NAME
+#   ALLOW_ANCHOR_DOWNGRADE  none (default), all, or a list of ports
+#   FLOOR_TAGS_FILE         read the tag list from this file, not a registry
+#   RESOLVE_ANCHOR          the resolve-anchor command (default scripts/resolve-anchor)
+#   SKIP_SERVERS, TRANSPORT given to resolve-anchor as they are
 #
-# ⛔ vercmp is the only correct way to compare two pacman versions, and no
-# runner has it. It comes from the Arch image already pinned by digest in the
-# Dockerfile, in one container run for every architecture rather than one per
-# comparison. The set comes from the JSON it is handed, so adding a port needs
-# no edit here.
+# Output, one line on stdout, the first word is the verdict:
+#   nofloor ARCH ANCHOR             nothing is published for ARCH
+#   ok      ARCH ANCHOR FLOOR       ANCHOR is at or above the floor
+#   allowed ARCH ANCHOR FLOOR       below, and ALLOW_ANCHOR_DOWNGRADE names ARCH
+#   revert  ARCH ANCHOR FLOOR N     below, and N https servers serve ANCHOR
+#   behind  ARCH ANCHOR FLOOR       below, refused
 #
-# Exit status is the result:
-#   0  every architecture is at or above its floor, or has no floor yet
-#   3  at least one architecture went backwards
-#   1  the check itself could not run
+# Exit status: 0 the build may go on, 3 refused (behind), 1 the check could
+# not run or no tag can carry the anchor, 2 usage.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROG=check-anchor-floor
+# shellcheck source=scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-FLOOR_IMAGE="${FLOOR_IMAGE:-ghcr.io/pkgforge-dev/archlinux}"
-ALLOW_ANCHOR_DOWNGRADE="${ALLOW_ANCHOR_DOWNGRADE:-0}"
-RUNTIME="${CONTAINER_RUNTIME:-}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORTS="$ROOT/scripts/ports"
+VERCMP="$ROOT/scripts/vercmp"
+RESOLVE_ANCHOR="${RESOLVE_ANCHOR:-$ROOT/scripts/resolve-anchor}"
+ALLOW="${ALLOW_ANCHOR_DOWNGRADE:-none}"
 
-# die MESSAGE [ACTION ...]
-#
-# The first argument says what is wrong. Every argument after it is printed
-# indented below it, and is what the reader does next.
-die() {
-  echo "check-anchor-floor: $1" >&2
-  shift
-  while [ "$#" -gt 0 ]; do
-    echo "  $1" >&2
-    shift
-  done
-  exit 1
-}
-
-need() {
-  command -v "$1" >/dev/null || die "$1 is required"
-}
-need curl
-need jq
-need awk
-
-anchors_json="${1:-}"
-[ -n "$anchors_json" ] || die "usage: check-anchor-floor '<anchors json>'" \
-  "the resolve job already builds this object, so pass it through"
-jq -e . >/dev/null 2>&1 <<< "$anchors_json" || die "the argument is not JSON: $anchors_json"
-
-if [ -z "$RUNTIME" ]; then
-  if command -v docker >/dev/null; then
-    RUNTIME=docker
-  elif command -v podman >/dev/null; then
-    RUNTIME=podman
-  else
-    die "no container runtime found, set CONTAINER_RUNTIME" \
-      "vercmp comes from the Arch image pinned in the Dockerfile and no runner ships it"
-  fi
+if [ "$#" -ne 2 ]; then
+  echo "usage: check-anchor-floor ARCH ANCHOR" >&2
+  exit 2
 fi
+arch="$1"
+anchor="$2"
 
-# podman and docker on Windows are native binaries and do not read MSYS paths.
-# Scoped to this wrapper rather than exported: curl in this script takes MSYS
-# paths and breaks if conversion is switched off for it too.
-runtime() {
-  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "$RUNTIME" "$@"
-}
+need awk jq
+[ -n "$anchor" ] || die "the anchor for $arch is empty" \
+  "reproduce: scripts/resolve-anchor $arch"
 
-#---------------------------------------------------------------------------#
-# The image that provides vercmp. The same digest the Dockerfile builds from,
-# read from the Dockerfile rather than repeated here, so there is one pin.
-#---------------------------------------------------------------------------#
-#
-# ⚠ match() with a third argument is a gawk extension and the runners do not
-# all ship gawk, so RSTART and RLENGTH are used instead. Those are POSIX.
-vercmp_image="$(awk '
-  /^FROM/ && match($0, /docker\.io\/library\/archlinux@sha256:[0-9a-f]{64}/) {
-    print substr($0, RSTART, RLENGTH)
-    exit
-  }' "$REPO_ROOT/Dockerfile")"
-[ -n "$vercmp_image" ] || die "no pinned Arch image found in the Dockerfile" \
-  "expected a line naming docker.io/library/archlinux@sha256:<64 hex>" \
-  "reproduce: grep -n 'archlinux@sha256' Dockerfile"
+ports_list="$("$PORTS" list)"
+grep -qxF -- "$arch" <<< "$ports_list" || die "$arch is not a port" \
+  "ports: $(tr '\n' ' ' <<< "$ports_list")" \
+  "reproduce: scripts/ports list"
 
-#---------------------------------------------------------------------------#
-# aliases_for <docker arch>
-#
-# Read from scripts/tag-names rather than repeated, so the two can never
-# disagree about what a tag is called. A sentinel anchor is passed because an
-# alias may contain anything a tag may contain, and splitting on the sentinel
-# is exact where splitting on a dash is a guess.
-#---------------------------------------------------------------------------#
-SENTINEL=ANCHORMARK
-aliases_for() {
-  "$REPO_ROOT/scripts/tag-names" arch "$1" 1970.01.01 "$SENTINEL" x \
-    | awk -v s="-$SENTINEL" 'index($0, s) { sub(/^x:/, ""); sub(s "$", ""); print }'
-}
+# ⛔ Each <alias>-<anchor> must be a tag (valid_tag in scripts/tag-names: no
+# + and no :, at most 128 characters). Else the publish stops at this port.
+alias_list="$("$PORTS" aliases "$arch")"
+while IFS= read -r a; do
+  [ -n "$a" ] || continue
+  [[ "$a-$anchor" =~ ^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$ ]] ||
+    die "the anchor '$anchor' of $arch is not a version that a tag can carry: '$a-$anchor'" \
+      "a tag has only A-Z a-z 0-9 _ . - and at most 128 characters" \
+      "reproduce: scripts/resolve-anchor $arch"
+done <<< "$alias_list"
 
-#---------------------------------------------------------------------------#
-# Every tag on the published repository, read anonymously.
-#---------------------------------------------------------------------------#
-registry="${FLOOR_IMAGE%%/*}"
-repo="${FLOOR_IMAGE#*/}"
-case "$registry" in
-  *.* | localhost) ;;
-  *) die "FLOOR_IMAGE must carry a registry host: $FLOOR_IMAGE" ;;
+# The allow list is data from a dispatch input. Each word is checked.
+allowed=0
+case "$ALLOW" in
+  none | "") ;;
+  all) allowed=1 ;;
+  *)
+    for w in $ALLOW; do
+      case "$w" in
+        none | all) die "ALLOW_ANCHOR_DOWNGRADE mixes '$w' with port names: '$ALLOW'" ;;
+      esac
+      grep -qxF -- "$w" <<< "$ports_list" || die "ALLOW_ANCHOR_DOWNGRADE names '$w', which is not a port" \
+        "it takes none, all, or port names from: $(tr '\n' ' ' <<< "$ports_list")"
+      [ "$w" = "$arch" ] && allowed=1
+    done
+    ;;
 esac
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# ⛔ Every page of the tag list, through scripts/registry-tags. The list grows by
-# about seventeen tags a day and the registry pages it oldest first, so a
-# single page stops holding the newest anchors within weeks. A floor read from
-# the oldest page is a lower floor, which is the rollback guard quietly
-# switching itself off.
-#
-# ⛔ registry-tags refuses a page that is not a tag list naming its repository.
-# An error body read as "no tags" would read as "no floor yet" and pass. A
-# guard that a transient can switch off is not a guard.
-if ! "$REPO_ROOT/scripts/registry-tags" "$registry" "$repo" > "$work/tags.txt" 2> "$work/tags.err"; then
-  sed 's/^/  /' "$work/tags.err" >&2
-  die "the tag list for $repo on $registry cannot be read, so the floor cannot be read" \
-    "⛔ passing here would switch the rollback guard off on a transient" \
-    "reproduce: scripts/registry-tags $registry $repo"
-fi
-tag_count="$(awk 'END { print NR + 0 }' "$work/tags.txt")"
-if [ "$tag_count" -eq 0 ]; then
-  # A real repository with no tags at all is the first run for a new one.
-  echo "check-anchor-floor: $repo answered a tag list naming itself and holding no tags" >&2
-  echo "check-anchor-floor: that is the first publish for a repository, so there is no floor" >&2
-  exit 0
-fi
-echo "check-anchor-floor: read $tag_count tags from $FLOOR_IMAGE" >&2
-
 #---------------------------------------------------------------------------#
-# One line per architecture: arch, the version this build resolved, then every
-# anchor already published for it.
-#
-# ⚠ The dated family shares the prefix. aarch64-v2026.08.26 and
-# aarch64-7.1.0.r9.g54d9411-2 both start aarch64-, and only the second is an
-# anchor. An anchor starts with a digit and the dated one starts with v.
+# The published tags.
 #---------------------------------------------------------------------------#
-: > "$work/compare.tsv"
-for arch in $(jq -r 'keys[]' <<< "$anchors_json" | tr -d '\r'); do
-  resolved="$(jq -r --arg a "$arch" '.[$a]' <<< "$anchors_json" | tr -d '\r')"
-  [ -n "$resolved" ] && [ "$resolved" != null ] || die "no resolved anchor for $arch in the argument"
 
-  candidates=""
-  while IFS= read -r alias_name; do
-    [ -n "$alias_name" ] || continue
-    while IFS= read -r found; do
-      [ -n "$found" ] || continue
-      candidates="$candidates $found"
-    done <<< "$(awk -v p="$alias_name-" '
-        index($0, p) == 1 {
-          v = substr($0, length(p) + 1)
-          if (v ~ /^[0-9]/) print v
-        }' "$work/tags.txt")"
-  done <<< "$(aliases_for "$arch")"
-
-  printf '%s\t%s\t%s\n' "$arch" "$resolved" "${candidates# }" >> "$work/compare.tsv"
-done
-
-#---------------------------------------------------------------------------#
-# One container, every comparison. vercmp prints 1 when the first argument is
-# newer, 0 when they are equal and -1 when it is older.
-#---------------------------------------------------------------------------#
-cat > "$work/compare.sh" <<'CMP'
-set -eu
-while IFS="$(printf '\t')" read -r arch resolved candidates; do
-  [ -n "$arch" ] || continue
-  floor=""
-  for c in $candidates; do
-    if [ -z "$floor" ] || [ "$(vercmp "$c" "$floor")" -gt 0 ]; then
-      floor="$c"
-    fi
-  done
-  if [ -z "$floor" ]; then
-    printf '%s\tnofloor\t-\t%s\n' "$arch" "$resolved"
-    continue
-  fi
-  if [ "$(vercmp "$resolved" "$floor")" -lt 0 ]; then
-    printf '%s\tBEHIND\t%s\t%s\n' "$arch" "$floor" "$resolved"
-  else
-    printf '%s\tok\t%s\t%s\n' "$arch" "$floor" "$resolved"
-  fi
-done
-CMP
-
-# ⚠ The comparison list goes on stdin, so the program cannot. It is passed as
-# an argument to sh -c instead.
-if ! runtime run --rm -i --entrypoint sh "$vercmp_image" \
-     -c "$(cat "$work/compare.sh")" < "$work/compare.tsv" \
-     > "$work/verdict.tsv" 2> "$work/verdict.err"; then
-  echo "check-anchor-floor: the comparison container failed" >&2
-  sed 's/^/  /' < "$work/verdict.err" >&2
-  die "could not run vercmp from $vercmp_image" \
-    "the runtime's error is printed above" \
-    "reproduce: $RUNTIME run --rm -i $vercmp_image sh -c 'vercmp 1-1 1-2'"
-fi
-
-#---------------------------------------------------------------------------#
-# Report.
-#---------------------------------------------------------------------------#
-behind=0
-checked=0
-while IFS=$'\t' read -r arch verdict floor resolved; do
-  [ -n "$arch" ] || continue
-  checked=$((checked + 1))
-  case "$verdict" in
-    nofloor)
-      echo "no floor  $arch  nothing published yet, resolved $resolved"
-      ;;
-    ok)
-      echo "ok        $arch  floor $floor, resolved $resolved"
-      ;;
-    BEHIND)
-      behind=$((behind + 1))
-      echo "BEHIND    $arch  floor $floor, resolved $resolved"
-      ;;
-    *)
-      die "unexpected verdict for $arch: $verdict"
-      ;;
+# split_image IMAGE -> "REGISTRY REPO"
+split_image() {
+  local image="$1" first="${1%%/*}"
+  case "$first" in
+    *.* | *:* | localhost) printf '%s %s\n' "$first" "${image#*/}" ;;
+    *) printf 'docker.io %s\n' "$image" ;;
   esac
-done < "$work/verdict.tsv"
+}
 
-if [ "$checked" -eq 0 ]; then
-  die "the comparison produced no verdicts" \
-    "the container ran and printed nothing, so nothing was checked" \
-    "reproduce: cat the comparison list and run it by hand against $vercmp_image"
+# read_list IMAGE OUT -> 0 read (maybe empty), 1 could not read
+read_list() {
+  local reg repo
+  read -r reg repo <<< "$(split_image "$1")"
+  if reg_tags "$reg" "$repo" "$2"; then
+    note "read $(awk 'END { print NR + 0 }' "$2") tag(s) from $1"
+    return 0
+  fi
+  warn "the tag list of $1 cannot be read. reproduce: scripts/registry-tags $reg $repo"
+  return 1
+}
+
+if [ -n "${FLOOR_TAGS_FILE:-}" ]; then
+  [ -r "$FLOOR_TAGS_FILE" ] || die "FLOOR_TAGS_FILE $FLOOR_TAGS_FILE cannot be read"
+  tr -d '\r' < "$FLOOR_TAGS_FILE" > "$work/tags"
+  note "read $(awk 'END { print NR + 0 }' "$work/tags") tag(s) from $FLOOR_TAGS_FILE"
+else
+  [ -n "${FLOOR_IMAGE:-}" ] || die "FLOOR_IMAGE is not set" \
+    "set it to the published GHCR image, for example ghcr.io/OWNER/archlinux"
+  # ⛔ An empty list is a floor of nothing. It counts only when each registry
+  # that was asked gave a list, and each list is empty.
+  ghcr_rc=0
+  read_list "$FLOOR_IMAGE" "$work/ghcr-tags" || ghcr_rc=$?
+  if [ "$ghcr_rc" -eq 0 ] && [ -s "$work/ghcr-tags" ]; then
+    cp "$work/ghcr-tags" "$work/tags"
+  else
+    hub_rc=0
+    : > "$work/hub-tags"
+    if [ -n "${FLOOR_HUB_IMAGE:-}" ]; then
+      read_list "$FLOOR_HUB_IMAGE" "$work/hub-tags" || hub_rc=$?
+    fi
+    if [ "$hub_rc" -eq 0 ] && [ -s "$work/hub-tags" ]; then
+      cp "$work/hub-tags" "$work/tags"
+    elif [ "$ghcr_rc" -eq 0 ] && [ "$hub_rc" -eq 0 ]; then
+      : > "$work/tags"
+    else
+      die "the floor cannot be read: no registry gave a tag list with tags in it" \
+        "⛔ a guard that a transient can switch off is not a guard" \
+        "reproduce: scripts/registry-tags $(split_image "$FLOOR_IMAGE")"
+    fi
+  fi
 fi
 
-if [ "$behind" -eq 0 ]; then
-  echo "check-anchor-floor: $checked architecture(s) at or above the floor"
+#---------------------------------------------------------------------------#
+# The floor: the highest <alias>-<anchor> over every alias of ARCH.
+#
+# The dated family <alias>-v<date> has the same prefix. An anchor starts
+# with a digit and a date tag starts with v.
+#---------------------------------------------------------------------------#
+"$PORTS" aliases "$arch" > "$work/aliases"
+awk 'NR == FNR { if (NF) a[$1 "-"] = 1; next }
+     {
+       for (p in a) {
+         if (index($0, p) == 1) {
+           v = substr($0, length(p) + 1)
+           if (v ~ /^[0-9]/) print v
+         }
+       }
+     }' "$work/aliases" "$work/tags" | LC_ALL=C sort -u > "$work/anchors"
+
+floor=""
+while IFS= read -r c; do
+  [ -n "$c" ] || continue
+  if [ -z "$floor" ] || [ "$("$VERCMP" "$c" "$floor")" -gt 0 ]; then
+    floor="$c"
+  fi
+done < "$work/anchors"
+
+if [ -z "$floor" ]; then
+  echo "nofloor $arch $anchor"
+  note "no <alias>-<anchor> tag is published for $arch, so there is no floor"
   exit 0
 fi
 
-echo "check-anchor-floor: $behind of $checked architecture(s) went backwards" >&2
-echo "  A published anchor is higher than what this build just resolved." >&2
-echo "  Signatures do not catch this: a stale package set is validly signed." >&2
-echo "  20 of 46 shipped mirrors are plain http, all on the two ARM ports." >&2
-echo "  See HISTORY/arm-rollback.md." >&2
-if [ "$ALLOW_ANCHOR_DOWNGRADE" = "1" ]; then
-  echo "check-anchor-floor: ALLOW_ANCHOR_DOWNGRADE=1, taking it deliberately" >&2
+cmp="$("$VERCMP" "$anchor" "$floor")"
+if [ "$cmp" -ge 0 ]; then
+  echo "ok $arch $anchor $floor"
+  note "$arch: anchor $anchor is at or above the floor $floor"
   exit 0
 fi
-echo "  If upstream really did revert, re-run with allow_anchor_downgrade." >&2
+
+note "$arch: anchor $anchor is below the floor $floor"
+
+if [ "$allowed" -eq 1 ]; then
+  echo "allowed $arch $anchor $floor"
+  warn "ALLOW_ANCHOR_DOWNGRADE='$ALLOW' takes the downgrade of $arch from $floor to $anchor"
+  exit 0
+fi
+
+#---------------------------------------------------------------------------#
+# The revert rule: every reachable https server serves the lower version.
+#---------------------------------------------------------------------------#
+each_rc=0
+"$RESOLVE_ANCHOR" --each "$arch" > "$work/each" 2> "$work/each.err" || each_rc=$?
+sed 's/^/  /' "$work/each.err" >&2
+if [ "$each_rc" -ne 0 ]; then
+  warn "resolve-anchor --each $arch exited $each_rc, so an upstream revert cannot be confirmed"
+fi
+
+read -r reachable same <<< "$(awk -v want="$anchor" '
+  $1 ~ /^https:\/\// && NF >= 2 && $2 != "-" {
+    n++
+    if ($2 == want) s++
+  }
+  END { printf "%d %d\n", n, s }' "$work/each")"
+sed 's/^/  server: /' "$work/each" >&2
+
+if [ "$each_rc" -eq 0 ] && [ "$reachable" -ge 2 ] && [ "$reachable" -eq "$same" ]; then
+  echo "revert $arch $anchor $floor $reachable"
+  warn "$arch goes from $floor to $anchor: all $reachable reachable https servers serve $anchor, so this is an upstream revert"
+  exit 0
+fi
+
+echo "behind $arch $anchor $floor"
+echo "$PROG: $arch is refused: the anchor $anchor is below the published floor $floor" >&2
+echo "  reachable https servers: $reachable, serving $anchor: $same (a revert needs at least 2, all serving it)" >&2
+echo "  if upstream reverted, dispatch the build with allow_anchor_downgrade = $arch" >&2
+echo "  reproduce: scripts/resolve-anchor --each $arch; scripts/vercmp $anchor $floor" >&2
 exit 3

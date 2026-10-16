@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+#
+# Read the port table: ports/<arch>.conf, one file per architecture.
+#
+#   scripts/ports list                   every arch, one per line, sorted
+#   scripts/ports get ARCH KEY           one value
+#   scripts/ports aliases ARCH           the tag aliases, one per line
+#   scripts/ports find KEY VALUE         the arch whose KEY is VALUE
+#   scripts/ports field KEY              "ARCH VALUE" for every arch
+#   scripts/ports json [ARCH ...]        a JSON array of objects, every key
+#   scripts/ports matrix [ARCH ...]      the same, compact, for a workflow
+#   scripts/ports check                  check every file; print each fault
+#
+# ARCH is the docker architecture name: the file name without .conf, and the
+# directory name under rootfs/ and bootstrap/. PORTS_DIR overrides ports/.
+#
+# Exit status: 0 done, 1 an unknown arch or key, or a fault found by check,
+# 2 usage.
+set -euo pipefail
+
+PROG=ports
+# shellcheck source=scripts/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORTS_DIR="${PORTS_DIR:-$ROOT/ports}"
+
+# Every key a port file must have, in the order json prints them.
+KEYS="arch platform pacman_arch aliases distribution homepage repos keyring binfmt qemu zig_triple host_triplet openssl_target elf_machine meson_cpu_family endian"
+
+usage() {
+  sed -n '3,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  exit 2
+}
+
+list() {
+  local f
+  [ -d "$PORTS_DIR" ] || die "no port directory at $PORTS_DIR"
+  for f in "$PORTS_DIR"/*.conf; do
+    [ -e "$f" ] || continue
+    basename "$f" .conf
+  done | LC_ALL=C sort
+}
+
+file_of() {
+  local f="$PORTS_DIR/$1.conf"
+  [ -f "$f" ] || die "unknown arch: $1" "known: $(list | tr '\n' ' ')"
+  printf '%s\n' "$f"
+}
+
+get() {
+  local f rc=0 v
+  f="$(file_of "$1")"
+  v="$(conf_get "$f" "$2")" || rc=$?
+  case "$rc" in
+    0) printf '%s\n' "$v" ;;
+    1) die "$1 has no key $2" "file: $f" ;;
+    *) die "$f has the key $2 more than once, or cannot be read" ;;
+  esac
+}
+
+json() {
+  need jq
+  local arches=("$@") a k v obj all="[]"
+  if [ "${#arches[@]}" -eq 0 ]; then
+    mapfile -t arches < <(list)
+  fi
+  for a in "${arches[@]}"; do
+    obj="{}"
+    for k in $KEYS; do
+      v="$(get "$a" "$k")"
+      case "$k" in
+        aliases | repos)
+          obj="$(jq -c --arg k "$k" --arg v "$v" '. + {($k): ($v | split(" ") | map(select(. != "")))}' <<< "$obj")"
+          ;;
+        *)
+          obj="$(jq -c --arg k "$k" --arg v "$v" '. + {($k): $v}' <<< "$obj")"
+          ;;
+      esac
+    done
+    all="$(jq -c --argjson o "$obj" '. + [$o]' <<< "$all")"
+  done
+  printf '%s\n' "$all"
+}
+
+check() {
+  local faults=0 a f k keys n v seen_pacman="" seen_alias="" al
+  local re_arch='^[a-z0-9]+$' re_platform='^linux/[a-z0-9]+(/v[0-9]+)?$' re_alias='^[a-z0-9][a-z0-9._-]*$'
+  fault() {
+    echo "ports: $1" >&2
+    faults=$((faults + 1))
+  }
+  n=0
+  for a in $(list); do
+    n=$((n + 1))
+    f="$PORTS_DIR/$a.conf"
+    keys="$(conf_keys "$f")"
+    while IFS= read -r k; do
+      [ -n "$k" ] || continue
+      case " $KEYS " in
+        *" $k "*) ;;
+        *) fault "$f: unknown key or line '$k'" ;;
+      esac
+    done <<< "$keys"
+    for k in $KEYS; do
+      v=""
+      if ! v="$(conf_get "$f" "$k")"; then
+        fault "$f: key $k is missing or repeats"
+        continue
+      fi
+      [ -n "$v" ] || fault "$f: key $k is empty"
+    done
+    v="$(conf_get "$f" arch)" || v=""
+    [ "$v" = "$a" ] || fault "$f: arch is '$v'; the file name says '$a'"
+    [[ $a =~ $re_arch ]] || fault "$f: arch '$a' is not [a-z0-9]+"
+    v="$(conf_get "$f" platform)" || v=""
+    [[ $v =~ $re_platform ]] || fault "$f: platform '$v' is not linux/<arch>[/v<n>]"
+    v="$(conf_get "$f" binfmt)" || v=""
+    case "$v" in native | tonistiigi | multiarch) ;; *) fault "$f: binfmt '$v' is not native, tonistiigi or multiarch" ;; esac
+    v="$(conf_get "$f" endian)" || v=""
+    case "$v" in little | big) ;; *) fault "$f: endian '$v' is not little or big" ;; esac
+    v="$(conf_get "$f" keyring)" || v=""
+    if [ "$v" != none ] && [ ! -f "$ROOT/bootstrap/keyrings/$v.pin" ]; then
+      fault "$f: keyring '$v' has no bootstrap/keyrings/$v.pin"
+    fi
+    v="$(conf_get "$f" pacman_arch)" || v=""
+    case " $seen_pacman " in *" $v "*) fault "$f: pacman_arch '$v' is used by another port" ;; esac
+    seen_pacman="$seen_pacman $v"
+    v="$(conf_get "$f" aliases)" || v=""
+    for al in $v; do
+      [[ $al =~ $re_alias ]] || fault "$f: alias '$al' is not a valid tag"
+      case "$al" in latest | v[0-9]*) fault "$f: alias '$al' collides with an index tag" ;; esac
+      case " $seen_alias " in *" $al "*) fault "$f: alias '$al' is used by another port" ;; esac
+      seen_alias="$seen_alias $al"
+    done
+    [ -f "$ROOT/rootfs/$a/etc/pacman.conf" ] || fault "rootfs/$a/etc/pacman.conf is missing"
+    [ -f "$ROOT/bootstrap/$a/etc/bootstrap-packages.txt" ] || fault "bootstrap/$a/etc/bootstrap-packages.txt is missing"
+    [ -f "$ROOT/mirrors/$a.anchors" ] || fault "mirrors/$a.anchors is missing"
+  done
+  [ "$n" -gt 0 ] || fault "no port files in $PORTS_DIR"
+  if [ "$faults" -gt 0 ]; then
+    echo "ports: $faults fault(s)" >&2
+    return 1
+  fi
+  echo "ports: $n port(s), no faults" >&2
+}
+
+cmd="${1:-}"
+[ -n "$cmd" ] || usage
+shift
+case "$cmd" in
+  list)
+    [ "$#" -eq 0 ] || usage
+    list
+    ;;
+  get)
+    [ "$#" -eq 2 ] || usage
+    get "$1" "$2"
+    ;;
+  aliases)
+    [ "$#" -eq 1 ] || usage
+    v="$(get "$1" aliases)"
+    # shellcheck disable=SC2086 # one alias per word
+    printf '%s\n' $v
+    ;;
+  find)
+    [ "$#" -eq 2 ] || usage
+    hit=""
+    for a in $(list); do
+      if [ "$(get "$a" "$1")" = "$2" ]; then
+        hit="$a"
+      fi
+    done
+    [ -n "$hit" ] || die "no port has $1 = $2"
+    printf '%s\n' "$hit"
+    ;;
+  field)
+    [ "$#" -eq 1 ] || usage
+    for a in $(list); do
+      printf '%s %s\n' "$a" "$(get "$a" "$1")"
+    done
+    ;;
+  json)
+    json "$@" | jq .
+    ;;
+  matrix)
+    json "$@"
+    ;;
+  check)
+    [ "$#" -eq 0 ] || usage
+    check
+    ;;
+  -h | --help | help) usage ;;
+  *) usage ;;
+esac

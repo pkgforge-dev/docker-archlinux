@@ -1,0 +1,6 @@
+# The status checks that branch protection on main requires, one per line.
+#
+# The setting lives outside the repository. Each name here must be the name
+# of one job in .github/workflows/ci.yml, with no matrix: a matrix job adds
+# a suffix to its check name. tests/static/99-docs-paths.sh checks this.
+Static suite and linters

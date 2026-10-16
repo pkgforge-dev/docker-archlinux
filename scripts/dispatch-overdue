@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+#
+# Start a workflow on the default branch when its newest run there is older
+# than a limit.
+#
+#   scripts/dispatch-overdue WORKFLOW MAX_MINUTES
+#
+# WORKFLOW is a file name in .github/workflows (build-deploy.yml). MAX_MINUTES
+# is the largest gap that the schedule of the workflow makes, plus a margin.
+#
+# ⛔ GitHub can delay or drop a scheduled run, and a dropped run leaves nothing
+# that can report it. Each scheduled workflow runs this script for the others,
+# so one schedule that fires starts the ones that did not.
+#
+# A run that is queued or in progress counts as fresh: nothing starts twice. A
+# workflow with no run on the default branch is started. A workflow that is not
+# active is not started: GitHub refuses the dispatch. scripts/keep-schedules-enabled
+# enables a workflow that GitHub disabled, and leaves one that a person disabled.
+#
+# ⛔ Only a run of this repository on the default branch, started by
+# schedule, workflow_dispatch or push, counts. A pull request from a fork makes
+# runs here too, and its head branch can have the name of the default branch.
+#
+# Environment: GH_TOKEN with actions: write, GITHUB_REPOSITORY (owner/name).
+# DEFAULT_BRANCH names the default branch; when it is not set, the script reads
+# it from the repository.
+#
+# Exit status: 0 the workflow is fresh or was started, 1 could not tell or
+# could not start it, 2 usage.
+set -euo pipefail
+
+usage() {
+  echo "usage: scripts/dispatch-overdue WORKFLOW MAX_MINUTES" >&2
+  exit 2
+}
+
+die() {
+  echo "dispatch-overdue: $1" >&2
+  shift
+  while [ "$#" -gt 0 ]; do
+    echo "  $1" >&2
+    shift
+  done
+  exit 1
+}
+
+[ "$#" -eq 2 ] || usage
+wf="$1"
+max="$2"
+[[ "$wf" =~ ^[a-z0-9][a-z0-9_.-]*\.ya?ml$ ]] || usage
+[[ "$max" =~ ^[1-9][0-9]*$ ]] || usage
+command -v gh > /dev/null || die "gh is required"
+command -v jq > /dev/null || die "jq is required"
+
+slug="${GITHUB_REPOSITORY:-}"
+case "$slug" in
+  */*) ;;
+  *) die "GITHUB_REPOSITORY is not owner/name: ${slug:-<unset>}" ;;
+esac
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+branch="${DEFAULT_BRANCH:-}"
+if [ -z "$branch" ]; then
+  rc=0
+  gh api "repos/$slug" > "$work/repo.json" || rc=$?
+  [ "$rc" -eq 0 ] || die "could not read the default branch of $slug (gh ended $rc)" \
+    "reproduce: gh api repos/$slug --jq .default_branch"
+  branch="$(jq -r '.default_branch // empty' "$work/repo.json")"
+  [ -n "$branch" ] || die "the repository record of $slug has no default_branch" \
+    "reproduce: gh api repos/$slug --jq .default_branch"
+fi
+
+rc=0
+gh api "repos/$slug/actions/workflows/$wf" > "$work/workflow.json" || rc=$?
+[ "$rc" -eq 0 ] || die "could not read the state of $wf (gh ended $rc)" \
+  "reproduce: gh api repos/$slug/actions/workflows/$wf --jq .state"
+state="$(jq -r '.state // "unknown"' "$work/workflow.json")"
+if [ "$state" != active ]; then
+  echo "dispatch-overdue: $wf is $state; it is not started"
+  exit 0
+fi
+
+rc=0
+gh api "repos/$slug/actions/workflows/$wf/runs?branch=$branch&per_page=100" > "$work/runs.json" || rc=$?
+[ "$rc" -eq 0 ] || die "could not list the runs of $wf (gh ended $rc)" \
+  "reproduce: gh api 'repos/$slug/actions/workflows/$wf/runs?branch=$branch&per_page=100'"
+rc=0
+jq --arg repo "$slug" --arg branch "$branch" '[.workflow_runs[]
+  | select(.head_repository.full_name == $repo and .head_branch == $branch
+           and (.event == "schedule" or .event == "workflow_dispatch" or .event == "push"))]' \
+  "$work/runs.json" > "$work/own.json" || rc=$?
+[ "$rc" -eq 0 ] || die "the runs of $wf are not a run list (jq ended $rc)" \
+  "reproduce: gh api 'repos/$slug/actions/workflows/$wf/runs?branch=$branch&per_page=100' --jq '.workflow_runs[0]'"
+
+# busy: runs that have not ended. age: minutes since the newest run started.
+busy="$(jq '[.[] | select(.status != "completed")] | length' "$work/own.json")"
+age="$(jq 'if length == 0 then -1
+  else ((now - (map(.created_at | fromdateiso8601) | max)) / 60 | floor) end' "$work/own.json")"
+
+if [ "$busy" -gt 0 ]; then
+  echo "dispatch-overdue: $wf has $busy run(s) that did not end; nothing to start"
+  exit 0
+fi
+if [ "$age" -ge 0 ] && [ "$age" -le "$max" ]; then
+  echo "dispatch-overdue: $wf started $age min ago, within $max min"
+  exit 0
+fi
+
+if [ "$age" -lt 0 ]; then
+  why="it has no run on $branch"
+else
+  why="its newest run on $branch started $age min ago, over $max min"
+fi
+echo "::warning::dispatch-overdue: $wf is overdue: $why; starting it"
+rc=0
+gh workflow run "$wf" --ref "$branch" --repo "$slug" || rc=$?
+[ "$rc" -eq 0 ] || die "could not start $wf (gh ended $rc)" \
+  "reproduce: gh workflow run $wf --ref $branch --repo $slug"
+echo "dispatch-overdue: started $wf on $branch"

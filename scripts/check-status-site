@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+#
+# Tell from outside status.yml whether the status record and the status site
+# still move. The watchdog runs this once a day.
+#
+#   scripts/check-status-site [STATUS_JSON]
+#
+# STATUS_JSON is status.json of the branch status. With no argument it is
+# read from the branch status through the GitHub API. A record that is not
+# there (HTTP 404, or a path that does not exist) is a missing record.
+#
+#   status-down  raised when the record is missing or older than
+#                STATUS_SITE_MAX_AGE (21600 s). This sees status.yml stop
+#                running at all, when no check job runs to say so. Only
+#                scripts/check-status-record clears it: a build that
+#                succeeds with a fresh record.
+#   pages-stale  raised when the Pages copy of status.json does not answer
+#                with a record, or its generated time trails the record of
+#                the branch by more than PAGES_MAX_LAG (10800 s). Then the
+#                deploy job fails, or Pages no longer takes a workflow
+#                build, and the README badges show an old state. Cleared
+#                when the copy answers and trails by that much or less.
+#
+# Environment: GITHUB_REPOSITORY (required), GH_TOKEN for gh and
+# scripts/track-issue. STATUS_PAGES_URL, default
+# https://<owner>.github.io/<name>/status.json. GITHUB_SERVER_URL and
+# GITHUB_RUN_ID name the run. STATUS_NOW (seconds) sets the clock, for the
+# tests only.
+#
+# Exit status: 0 nothing raised, 3 an issue raised, 1 the check could not run.
+set -euo pipefail
+
+PROG=check-status-site
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib.sh
+. "$ROOT/scripts/lib.sh"
+
+need curl jq
+
+[ "$#" -le 1 ] || die "usage: scripts/check-status-site [STATUS_JSON]"
+STATUS_SITE_MAX_AGE=21600
+PAGES_MAX_LAG=10800
+
+slug="${GITHUB_REPOSITORY:-}"
+case "$slug" in
+  ?*/?*) ;;
+  *) die "GITHUB_REPOSITORY is not owner/name: '$slug'" ;;
+esac
+owner="${slug%%/*}"
+name="${slug#*/}"
+pages_url="${STATUS_PAGES_URL:-https://$owner.github.io/$name/status.json}"
+server="${GITHUB_SERVER_URL:-https://github.com}"
+run_url="$server/$slug/actions/runs/${GITHUB_RUN_ID:-0}"
+now="${STATUS_NOW:-$(date -u +%s)}"
+[[ "$now" =~ ^[0-9]+$ ]] || die "the clock reads '$now', not seconds"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+track="$ROOT/scripts/track-issue"
+
+# record FILE -> "GENERATED EPOCH" of a status record, or nothing when FILE
+# does not read as one
+record() {
+  local vals rc=0 g e=""
+  vals="$(jq -r '[.generated, .generated_epoch] | map(tostring) | join(" ")' "$1" 2> "$work/jq.err" | tr -d '\r')" || rc=$?
+  read -r g e <<< "$vals"
+  if [ "$rc" -eq 0 ] && [[ "$e" =~ ^[0-9]+$ ]]; then
+    printf '%s %s\n' "$g" "$e"
+  else
+    note "$1 does not read as a status record: $(awk 'NR == 1' "$work/jq.err")"
+  fi
+}
+
+#---------------------------------------------------------------------------#
+# The record on the branch
+#---------------------------------------------------------------------------#
+json="${1:-}"
+if [ -z "$json" ]; then
+  need gh
+  json="$work/branch.json"
+  rc=0
+  timeout -k 5 60 gh api -H 'Accept: application/vnd.github.raw+json' \
+    "repos/$slug/contents/status.json?ref=status" > "$json" 2> "$work/gh.err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if grep -q 'HTTP 404' "$work/gh.err"; then
+      rm -f "$json"
+    else
+      die "could not read status.json of the branch status: gh api ended $rc" "$(awk 'NR == 1' "$work/gh.err")" \
+        "reproduce: gh api -H 'Accept: application/vnd.github.raw+json' 'repos/$slug/contents/status.json?ref=status'"
+    fi
+  fi
+fi
+
+raised=0
+generated=""
+epoch=""
+if [ -f "$json" ]; then
+  read -r generated epoch <<< "$(record "$json")"
+fi
+if [ -n "$epoch" ]; then
+  age=$((now - epoch))
+  said="the record on the branch status was measured $generated, ${age} s before this check"
+else
+  age=""
+  said="the branch status holds no status.json that reads"
+fi
+note "$said"
+if [ -z "$age" ] || [ "$age" -gt "$STATUS_SITE_MAX_AGE" ]; then
+  # shellcheck disable=SC2016 # Markdown backticks, not command substitution
+  {
+    printf '<!-- written by scripts/check-status-site -->\n'
+    printf '`status.yml` has recorded nothing for more than %s s: %s.\n\n' "$STATUS_SITE_MAX_AGE" "$said"
+    printf 'It runs each hour. Its runs fail, or it does not run. Seen by the watchdog: %s\n\n' "$run_url"
+    printf 'reproduce:\n\n```bash\ngh run list --workflow status.yml --limit 5\ngh api repos/%s/actions/workflows/status.yml --jq .state\n```\n\n' "$slug"
+    printf 'This issue closes when a build of `status.yml` succeeds and its record is fresh.\n'
+  } > "$work/status-down.md"
+  rc=0
+  "$track" raise status-down "status.yml does not record the state of the images" "$work/status-down.md" || rc=$?
+  [ "$rc" -eq 0 ] || die "scripts/track-issue could not raise status-down (exit $rc)"
+  raised=1
+fi
+
+#---------------------------------------------------------------------------#
+# The copy on Pages
+#---------------------------------------------------------------------------#
+# A file:// URL is for the tests: it reads a local copy.
+proto='=https'
+case "$pages_url" in
+  file://*) proto='=file' ;;
+esac
+rc=0
+code="$(curl -q --silent --show-error --location --max-redirs 5 --proto "$proto" --proto-redir '=https' \
+  --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 5 --retry-max-time 60 \
+  --output "$work/pages.json" --write-out '%{http_code}' "$pages_url" 2> "$work/curl.err")" || rc=$?
+p_epoch=""
+if [ "$rc" -ne 0 ]; then
+  p_said="$pages_url did not answer (curl $rc: $(awk 'NR == 1' "$work/curl.err"))"
+elif [ "$proto" = '=https' ] && [ "$code" != 200 ]; then
+  p_said="$pages_url answered HTTP $code"
+else
+  read -r p_generated p_epoch <<< "$(record "$work/pages.json")"
+  if [ -n "$p_epoch" ]; then
+    p_said="$pages_url holds the record measured $p_generated"
+  else
+    p_said="$pages_url answered with no status record"
+  fi
+fi
+note "$p_said"
+
+pages=""
+if [ -z "$p_epoch" ]; then
+  pages=stale
+elif [ -n "$epoch" ]; then
+  lag=$((epoch - p_epoch))
+  if [ "$lag" -gt "$PAGES_MAX_LAG" ]; then
+    pages=stale
+    p_said="$p_said, ${lag} s before the record on the branch status"
+  else
+    pages=current
+  fi
+else
+  note "the Pages copy is not compared: the branch status holds no record to compare it with"
+fi
+
+case "$pages" in
+  stale)
+    # shellcheck disable=SC2016 # Markdown backticks, not command substitution
+    {
+      printf '<!-- written by scripts/check-status-site -->\n'
+      printf 'The status site on Pages does not follow the record of `status.yml`.\n\n'
+      printf -- '- Pages: %s\n' "$p_said"
+      printf -- '- branch status: %s\n\n' "$said"
+      printf 'The README badges and the page show an old state. The deploy job of `status.yml` fails, or Pages no longer takes a workflow build. Seen by the watchdog: %s\n\n' "$run_url"
+      printf 'reproduce:\n\n```bash\ncurl -sS --connect-timeout 10 --max-time 30 %s | jq '"'"'{generated}'"'"'\ngh api repos/%s/pages --jq .build_type\ngh run list --workflow status.yml --limit 5\n```\n\n' "$pages_url" "$slug"
+      printf 'This issue closes when the copy on Pages trails the branch by %s s or less.\n' "$PAGES_MAX_LAG"
+    } > "$work/pages-stale.md"
+    rc=0
+    "$track" raise pages-stale "The status site on Pages does not follow status.yml" "$work/pages-stale.md" || rc=$?
+    [ "$rc" -eq 0 ] || die "scripts/track-issue could not raise pages-stale (exit $rc)"
+    raised=1
+    ;;
+  current)
+    rc=0
+    "$track" clear pages-stale "The status site on Pages follows status.yml again: $p_said. Seen by $run_url" || rc=$?
+    [ "$rc" -eq 0 ] || die "scripts/track-issue could not clear pages-stale (exit $rc)"
+    ;;
+esac
+
+if [ "$raised" -eq 1 ]; then
+  exit 3
+fi
+exit 0

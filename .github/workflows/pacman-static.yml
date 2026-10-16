@@ -1,17 +1,20 @@
 name: Static pacman
 
-# Build a statically linked pacman for every architecture, from source, and
-# publish the eight binaries as release assets.
+# Build a static pacman for every port, from bootstrap/pacman-static/sources.pin.
 #
-# ⛔ Nothing here touches an image build. The Dockerfile does not read the source
-# pin and does not fetch these binaries. This produces release assets only, and
-# tests/static/85-pacman-static-pin.sh fails if that ever stops being true.
+# Triggers:
+#   schedule           each Sunday, so a break shows before the monthly release
+#   workflow_dispatch  build and upload the artifacts
+#   workflow_call      release.yml calls this workflow for its assets
 #
-# ⭐ A dispatch builds and uploads for inspection and stops. Nothing here creates
-# a release: release.yml owns the v* tag and calls this workflow for the eight
-# binaries, so a manual run cannot publish one by accident and there is one
-# place that publishes rather than two.
+# Nothing here publishes a release. ⛔ The Dockerfile does not read the pin and
+# does not fetch these binaries. tests/static/85-pacman-static-pin.sh checks it.
+#
+# ⚠ No concurrency group. A run writes only its own artifacts. A group would
+# let a dispatch cancel or replace the pacman jobs of a release run.
 on:
+  schedule:
+    - cron: "20 3 * * 0"
   workflow_dispatch:
   workflow_call:
 
@@ -19,173 +22,160 @@ defaults:
   run:
     shell: bash
 
-permissions:
-  contents: read
-
-concurrency:
-  group: pacman-static-${{ github.ref }}
-  cancel-in-progress: true
+permissions: {}
 
 jobs:
-  #----------------------------------------------------------------------------------#
-  # One job per architecture. fail-fast is off so one run reports every broken
-  # target rather than the first, and the release job needs the whole matrix, so
-  # a run that lost one architecture publishes nothing.
-  #----------------------------------------------------------------------------------#
-  build:
-    name: Build ${{ matrix.docker_arch }}
-    runs-on: ubuntu-latest
+  #--------------------------------------------------------------------------#
+  # The port matrix, and the downloads. Each tarball is downloaded and checked
+  # once here, then the build jobs restore it from the cache. A build job that
+  # gets no cache downloads for itself.
+  #--------------------------------------------------------------------------#
+  setup:
+    name: Ports and downloads
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        # ⚠ arch-subset: this is the whole architecture set and is kept in step
-        # with the build matrix by tests/static/85-pacman-static-pin.sh, which
-        # reads build-deploy.yml and fails when a row here is missing from
-        # scripts/build-pacman-static.
-        docker_arch:
-          - amd64
-          - arm64
-          - armv7
-          - loong64
-          - riscv64
-          - ppc
-          - ppc64
-          - ppc64le
+    outputs:
+      matrix: ${{ steps.ports.outputs.matrix }}
+      cache-key: ${{ steps.key.outputs.key }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # The build runs natively; the emulator is only used to run the finished
-      # binary and print its version. ⛔ Without one the run column reads
-      # NOT MEASURED, so the emulator is what turns a link into a proof.
-      # ⛔ meson comes from pip at a pinned version, not from apt.
-      #
-      # meson detects a linker by its banner, and the branch that recognises
-      # zig's `zig ld` arrived in meson 1.6.0. ubuntu-latest ships 1.3.2 through
-      # apt, so every architecture built all eleven libraries and then stopped
-      # at the pacman step with "Unable to detect linker". Measured 2026-08-29
-      # in run 33208408451.
-      #
-      # ⛔ Pinned rather than floated, for the same reason every other input
-      # here is: the runner image's apt version is upstream's mood, and this
-      # build's output must not depend on it. scripts/build-pacman-static
-      # asserts the minimum separately, so a host with an old meson fails with
-      # the version named rather than with meson's own message.
-      #
-      # ⚠ This pin has no freshness job watching it. HISTORY/pacman-static.md.
+      - name: Read the port table
+        id: ports
+        run: |
+          set -euo pipefail
+          matrix="$(scripts/ports matrix)"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "ports: $(scripts/ports list | tr '\n' ' ')"
+
+      # The key is the sha256 of the pinned sha256 values. A change of a
+      # comment in the pin keeps the key. A file in the cache has its sha256 as
+      # its name, so an older cache from the restore-keys prefix is safe.
+      - name: Make the download cache key
+        id: key
+        run: |
+          set -euo pipefail
+          sum="$(awk '$1 == "zig" || $1 == "source" { print $5 }' bootstrap/pacman-static/sources.pin \
+            | LC_ALL=C sort | sha256sum | awk '{ print $1 }')"
+          echo "key=pacman-static-dl-$sum" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the download cache
+        id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pacman-static/dl
+          key: ${{ steps.key.outputs.key }}
+          restore-keys: pacman-static-dl-
+
+      # Each URL of a record is tried in pin order. The sha256 decides.
+      - name: Download and check every pinned tarball
+        if: steps.restore.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/pacman-static" scripts/build-pacman-static --fetch
+
+      - name: Save the download cache
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pacman-static/dl
+          key: ${{ steps.key.outputs.key }}
+
+  #--------------------------------------------------------------------------#
+  # One job per port. fail-fast is off, so one run shows every broken port.
+  # zig cross compiles each port on this x86_64 runner. qemu-user only runs
+  # the finished binary.
+  #--------------------------------------------------------------------------#
+  build:
+    name: Static pacman ${{ matrix.arch }}
+    needs: setup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore the download cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pacman-static/dl
+          key: ${{ needs.setup.outputs.cache-key }}
+          restore-keys: pacman-static-dl-
+
+      # ⛔ meson comes from scripts/install-tools, at its pinned version and
+      # sha256, never from apt. The apt meson of the runner is older than the
+      # minimum of the build script. scripts/install-tools is the one place
+      # that names the version.
       - name: Install the build tools and the emulators
-        env:
-          MESON_VERSION: "1.10.1"
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
-            cmake ninja-build gperf diffutils qemu-user-static gnupg
+          timeout -k 5 600 sudo apt-get -o Acquire::Retries=3 update -qq
+          timeout -k 5 900 sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+            ninja-build gperf pkg-config gnupg qemu-user-static
+          scripts/install-tools "$RUNNER_TEMP/tools" meson
+          echo "$RUNNER_TEMP/tools" >> "$GITHUB_PATH"
+          echo "meson $("$RUNNER_TEMP/tools/meson" --version), ninja $(ninja --version)"
 
-          # An explicit branch on a capability, not a suppressed failure: the
-          # runner image has pipx, and a host without it still gets a pinned
-          # meson rather than whatever apt holds.
-          if command -v pipx > /dev/null; then
-            pipx install "meson==${MESON_VERSION}"
-            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-            export PATH="$HOME/.local/bin:$PATH"
-          else
-            python3 -m pip install --break-system-packages --quiet "meson==${MESON_VERSION}"
-          fi
-
-          got="$(meson --version)"
-          if [ "$got" != "${MESON_VERSION}" ]; then
-            echo "meson is $got, the pin says ${MESON_VERSION}" >&2
-            echo "an unpinned meson is the runner image's apt version, which was 1.3.2" >&2
-            command -v meson
-            exit 1
-          fi
-          echo "meson $got, ninja $(ninja --version)"
-
-      # ⛔ Asserted, not assumed. The emulator for this target has to be on PATH
-      # before the build starts, because the build treats a missing one as
-      # NOT MEASURED rather than as a failure, and a whole matrix reporting
-      # NOT MEASURED would read like a pass.
-      - name: Check the emulator for this target is installed
+      # ⛔ The build writes NOT MEASURED when the emulator is missing, and
+      # --check-evidence refuses that later. This step names the cause first.
+      - name: Check the emulator of this port
         env:
-          DOCKER_ARCH: ${{ matrix.docker_arch }}
+          QEMU: ${{ matrix.qemu }}
         run: |
           set -euo pipefail
-          case "$DOCKER_ARCH" in
-            amd64) emu=qemu-x86_64-static ;;
-            arm64) emu=qemu-aarch64-static ;;
-            armv7) emu=qemu-arm-static ;;
-            loong64) emu=qemu-loongarch64-static ;;
-            riscv64) emu=qemu-riscv64-static ;;
-            ppc) emu=qemu-ppc-static ;;
-            ppc64) emu=qemu-ppc64-static ;;
-            ppc64le) emu=qemu-ppc64le-static ;;
-            *) echo "no emulator recorded for $DOCKER_ARCH" >&2; exit 1 ;;
-          esac
+          emu="${QEMU}-static"
           if ! command -v "$emu" > /dev/null; then
-            echo "$emu is not installed, so the binary for $DOCKER_ARCH could be built and never run" >&2
-            echo "qemu-user-static supplies it. What is present:" >&2
-            ls /usr/bin/qemu-*-static >&2
+            echo "::error::$emu is not on PATH. The package qemu-user-static installs it."
+            echo "present:"
+            find /usr/bin -maxdepth 1 -name 'qemu-*-static' -printf '  %f\n'
             exit 1
           fi
           echo "$emu: $("$emu" --version | awk 'NR == 1')"
 
       - name: Build
         env:
-          DOCKER_ARCH: ${{ matrix.docker_arch }}
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          WORK="${RUNNER_TEMP}/pacman-static" OUT="${RUNNER_TEMP}/dist" \
-            scripts/build-pacman-static "$DOCKER_ARCH"
+          WORK="$RUNNER_TEMP/pacman-static" OUT="$RUNNER_TEMP/dist" \
+            scripts/build-pacman-static "$ARCH"
 
-      # ⛔ The pin names two pacman release manager fingerprints and the build
-      # requires a signature from one of them. NOT VERIFIED is what an evidence
-      # file carries when that never ran, and SKIPPED is what it carries when
-      # somebody set PACMAN_TAG_VERIFY=skip. Neither may reach a release asset.
-      - name: Refuse an asset whose signed tag was not verified
+      # ⛔ An asset needs a verified signed tag, a binary that ran under its
+      # emulator, and no dynamic loader.
+      - name: Check the evidence
         env:
-          DOCKER_ARCH: ${{ matrix.docker_arch }}
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          ev="${RUNNER_TEMP}/dist/pacman-static-${DOCKER_ARCH}.json"
-          verified="$(jq -r .pacman_tag_verified_by "$ev")"
-          signer="$(jq -r .pacman_tag_signer "$ev")"
-          case "$verified" in
-            "NOT VERIFIED" | SKIPPED | "" | null)
-              echo "the ${DOCKER_ARCH} asset carries tag verification: $verified" >&2
-              echo "an asset whose upstream signature was never checked is not evidence" >&2
-              exit 1
-              ;;
-          esac
-          echo "::notice::${DOCKER_ARCH} signed tag verified by ${signer} (${verified})"
-
-      # ⛔ The build says NOT MEASURED when it could not run the binary. That is
-      # the honest value and it must not reach a release, so it is refused here
-      # rather than shipped with a caveat nobody reads.
-      - name: Refuse an asset whose binary was never run
-        env:
-          DOCKER_ARCH: ${{ matrix.docker_arch }}
-        run: |
-          set -euo pipefail
-          ev="${RUNNER_TEMP}/dist/pacman-static-${DOCKER_ARCH}.json"
-          reported="$(jq -r .reported_version "$ev")"
-          if [ "$reported" = "NOT MEASURED" ]; then
-            echo "the ${DOCKER_ARCH} binary linked and was never executed" >&2
-            echo "an asset nobody has run is not evidence that it works" >&2
-            exit 1
-          fi
-          echo "::notice::${DOCKER_ARCH} reported ${reported}"
+          ev="$RUNNER_TEMP/dist/pacman-static-$ARCH.json"
+          scripts/build-pacman-static --check-evidence "$ev"
+          {
+            echo "### pacman-static-$ARCH"
+            echo
+            jq -r '"| key | value |", "| --- | --- |",
+                   (to_entries[] | select(.key != "sources") | "| \(.key) | \(.value) |")' "$ev"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: pacman-static-${{ matrix.docker_arch }}
+          name: pacman-static-${{ matrix.arch }}
           path: |
-            ${{ runner.temp }}/dist/pacman-static-${{ matrix.docker_arch }}
-            ${{ runner.temp }}/dist/pacman-static-${{ matrix.docker_arch }}.json
+            ${{ runner.temp }}/dist/pacman-static-${{ matrix.arch }}
+            ${{ runner.temp }}/dist/pacman-static-${{ matrix.arch }}.json
           if-no-files-found: error
+          overwrite: true
           retention-days: 7

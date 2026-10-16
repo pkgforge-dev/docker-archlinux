@@ -1,237 +1,147 @@
 #!/usr/bin/env bash
 #
-# A mirror that answers with the wrong thing must be reported and stepped over,
-# never consumed.
+# scripts/resolve-anchor names a mirror that answers with the wrong thing,
+# goes to the next server, and never reads a version from it.
 #
-# ⛔ Every fetch has to assume the response is wrong, not just absent. Absent is
-# the easy case. These are the shapes this project has actually been served:
+# The shapes of a wrong answer:
+#   empty      a zero byte database (a 404 that became a file)
+#   zstd       Zstandard magic bytes with nothing that decompresses
+#   errorpage  an HTML error page as the body (a 403 from one network)
+#   truncated  a gzip header that stops (an interrupted transfer)
+#   missing    no file at all
+# Each of them, then one good mirror, is one list of a fixture port. Then a
+# real Zstandard database, from a repository named base, is read: the shape of
+# ArchPOWER.
 #
-#   a .sig that was 404 and became a zero byte file
-#   a base.db that was Zstandard where every sibling is gzip
-#   a mirror answering 403 for one path, so the body is an error page
-#   a mirror answering 200 from one network and 403 from another
-#   a 301 that -L followed to a 29 second dead end
-#
-# All five arrive at scripts/resolve-anchor as one of two things: the fetch
-# failed, or the body is not the archive it claims to be. Both are fed here.
-# ⚠ The 301 to a dead end is the third, a fetch that never ends, and it is not
-# reproducible from a local file. What bounds it is the transfer policy, which
-# tests/static/65-fetch-policy.sh asserts separately.
-#
-# The mirrors are local files. A test that needs a server would need one inside
-# the image too, where the static suite also runs, and the image ships no
-# python, no nc and no busybox.
+# ⚠ A redirect to a server that never answers is not reproducible from a file.
+# 65-fetch-policy.sh checks that each transfer has a time limit.
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR/..
 # shellcheck source=lib/harness.sh
 . "$REPO_ROOT/tests/lib/harness.sh"
 
+RESOLVE="$REPO_ROOT/scripts/resolve-anchor"
+REPRO="bash tests/static/67-mangled-responses.sh, and read the stderr it prints"
 ANCHOR_VERSION="9.9.9.r1.gfeedface-7"
+SHAPES="empty zstd errorpage truncated missing"
 
-if ! command -v tar >/dev/null; then
-  fail "tar is available" \
-    "the fixtures are gzip archives, the shape a repository database has" \
-    "reproduce: command -v tar"
-  summary
-  exit 1
+if ! need_tool tar gzip curl; then
+  rc=0
+  summary || rc=$?
+  exit "$rc"
 fi
 
 work="$(work_dir)"
 trap 'rm -rf "$work"' EXIT
 
-# file_url PATH -> a file:// URL curl can open on this platform
-#
-# ⚠ curl on Windows is a native binary and does not read an MSYS path, so the
-# path is converted. cygpath -m rather than -w: a URL wants forward slashes.
+# file_url PATH -> a file:// URL for curl on this host
 file_url() {
-  case "$(uname -o 2>/dev/null)" in
+  case "$(uname -o 2>&1)" in
     Msys | Cygwin) printf 'file:///%s\n' "$(cygpath -m "$1")" ;;
     *) printf 'file://%s\n' "$1" ;;
   esac
 }
 
+# port DIR PACMAN_ARCH REPO -> a tree with the port fake and one list
+port() {
+  mkdir -p "$1/ports" "$1/rootfs/fake/etc/pacman.d"
+  printf '[options]\nArchitecture = %s\n\n[%s]\nInclude = /etc/pacman.d/mirrorlist\n' "$2" "$3" \
+    > "$1/rootfs/fake/etc/pacman.conf"
+  printf 'arch = fake\npacman_arch = %s\nrepos = %s\n' "$2" "$3" > "$1/ports/fake.conf"
+}
+
 #---------------------------------------------------------------------------#
-# One directory per mirror, each serving core.db as a different kind of wrong.
+# One directory for each mirror, each with a core.db of one wrong shape
 #---------------------------------------------------------------------------#
 mkdir -p "$work/srv"/{empty,zstd,errorpage,truncated,missing,good}
-
-# 404 that became a zero byte file
 : > "$work/srv/empty/core.db"
-
-# A Zstandard magic number followed by nothing that decompresses.
-#
-# ⚠ This fixture used to mean "Zstandard where every sibling is gzip", and that
-# stopped being a fault on 2026-08-28: ArchPOWER ships Zstandard databases and
-# resolve-anchor now reads both compressions. What it tests now is a body that
-# is neither, which is still a mangled response. A real Zstandard database is
-# fed to the same script further down, so the new path is proved rather than
-# assumed.
 printf '\050\265\057\375\000\130\041\000\000not-gzip\n' > "$work/srv/zstd/core.db"
-
-# 403, or a 200 from one network and a 403 from another. Either way the body is
-# an error page and the status is not what the caller believed.
 printf '<html><head><title>403 Forbidden</title></head><body>Forbidden</body></html>\n' \
   > "$work/srv/errorpage/core.db"
-
-# A gzip header that stops partway, which is what an interrupted transfer that
-# still exits 0 leaves behind.
 mkdir -p "$work/whole/pacman-1.0-1"
 tar -czf "$work/whole.db" -C "$work/whole" pacman-1.0-1
 head -c 20 "$work/whole.db" > "$work/srv/truncated/core.db"
-
-# The one that works, last, so reaching it proves the four above were stepped
-# over rather than fatal.
+rm -rf "$work/srv/missing"
 mkdir -p "$work/good/pacman-$ANCHOR_VERSION" "$work/good/bash-5.3.15-1"
 tar -czf "$work/srv/good/core.db" -C "$work/good" "pacman-$ANCHOR_VERSION" bash-5.3.15-1
 
-#---------------------------------------------------------------------------#
-# A scratch tree holding one fake architecture, and the real script.
-#---------------------------------------------------------------------------#
-mkdir -p "$work/repo/rootfs/fake/etc/pacman.d" "$work/repo/scripts"
-cp "$REPO_ROOT/scripts/resolve-anchor" "$work/repo/scripts/resolve-anchor"
-printf '[options]\nArchitecture = x86_64\n\n[core]\nInclude = /etc/pacman.d/mirrorlist\n' \
-  > "$work/repo/rootfs/fake/etc/pacman.conf"
-
 base="$(file_url "$work/srv")"
+port "$work/tree" x86_64 core
 {
-  for shape in empty zstd errorpage truncated missing; do
+  for shape in $SHAPES good; do
     printf 'Server = %s/%s\n' "$base" "$shape"
   done
-  printf 'Server = %s/good\n' "$base"
-} > "$work/repo/rootfs/fake/etc/pacman.d/mirrorlist"
+} > "$work/tree/rootfs/fake/etc/pacman.d/mirrorlist"
 
-#---------------------------------------------------------------------------#
-# Run it once and judge the whole result.
-#---------------------------------------------------------------------------#
 rc=0
-( cd "$work/repo" && bash scripts/resolve-anchor fake ) \
+PORTS_DIR="$work/tree/ports" ROOTFS_DIR="$work/tree/rootfs" bash "$RESOLVE" fake \
   > "$work/out" 2> "$work/err" || rc=$?
 
 if [ "$rc" -eq 0 ]; then
-  ok "resolve-anchor survives five mangled mirrors and exits 0"
+  ok "resolve-anchor goes past five wrong mirrors and exits 0"
 else
-  fail "resolve-anchor survives five mangled mirrors and exits 0" \
-    "it exited $rc" \
-    "one bad mirror must not decide the version for a whole release" \
-    "it said: $(tr -d '\r' < "$work/err" | awk 'NF { last = $0 } END { print last }')" \
-    "reproduce: bash tests/static/67-mangled-responses.sh, which keeps its fixtures under a temp dir"
+  fail "resolve-anchor goes past five wrong mirrors and exits 0" \
+    "exit $rc" \
+    "it said: $(tr -d '\r' < "$work/err" | tr '\n' '|')" \
+    "reproduce: $REPRO"
 fi
 
-got="$(tr -d '\r' < "$work/out" | awk 'NF { print; exit }')"
+got="$(tr -d '\r' < "$work/out")"
 if [ "$got" = "$ANCHOR_VERSION" ]; then
-  ok "it falls through to the one good mirror and prints $ANCHOR_VERSION"
+  ok "it prints $ANCHOR_VERSION, from the good mirror"
 else
-  fail "it falls through to the one good mirror and prints $ANCHOR_VERSION" \
+  fail "it prints $ANCHOR_VERSION, from the good mirror" \
     "it printed: ${got:-nothing}" \
-    "⛔ a value read out of a mangled database would be worse than no value" \
-    "reproduce: bash tests/static/67-mangled-responses.sh"
+    "⛔ a version from a wrong database is worse than no version" \
+    "reproduce: $REPRO"
 fi
 
 #---------------------------------------------------------------------------#
-# Every bad mirror is named, and every complaint says what was wrong with it.
-#
-# ⛔ The reason is the point. This diagnostic used to print the first line of
-# tar's output, and tar puts a blank line ahead of what gzip said, so the
-# message was empty in every case it exists for.
+# Each wrong mirror is named once, with a reason. The good one is not.
 #---------------------------------------------------------------------------#
-for shape in empty zstd errorpage truncated missing; do
-  hits="$(awk -v s="/$shape/core.db" 'index($0, s) { n++ } END { print n + 0 }' "$work/err")"
-  if [ "$hits" -ge 1 ]; then
-    ok "the $shape mirror is named in the diagnostics"
+for shape in $SHAPES; do
+  lines="$(awk -v s="/$shape/core.db" 'index($0, s)' "$work/err")"
+  n="$(awk 'NF { c++ } END { print c + 0 }' <<< "$lines")"
+  reasonless="$(awk '{ l = $0; sub(/[[:space:]]+$/, "", l) } l ~ /:$/' <<< "$lines")"
+  if [ "$n" -eq 1 ] && [ -z "$reasonless" ]; then
+    ok "the $shape mirror is named once, with a reason"
   else
-    fail "the $shape mirror is named in the diagnostics" \
-      "no line mentions it, so a reader cannot tell which server to stop trusting" \
-      "reproduce: bash tests/static/67-mangled-responses.sh, and read the captured stderr"
+    fail "the $shape mirror is named once, with a reason" \
+      "lines that name it: $n" \
+      "lines that end at the colon: ${reasonless:-none}" \
+      "reproduce: $REPRO"
   fi
 done
 
-# A complaint with nothing after the colon is the defect this guards.
-empty_reason="$(awk '
-  /resolve-anchor: / {
-    line = $0
-    sub(/[[:space:]]+$/, "", line)
-    if (line ~ /:[[:space:]]*$/) { print line; n++ }
-  }
-  END { exit 0 }' "$work/err")"
-if [ -z "$empty_reason" ]; then
-  ok "every complaint names a reason"
+complaint="$(awk -v s="/good/core.db" 'index($0, s)' "$work/err")"
+if [ -z "$complaint" ]; then
+  ok "no line names the good mirror as wrong"
 else
-  fail "every complaint names a reason" \
-    "these end at the colon: $(printf '%s' "$empty_reason" | tr '\n' '|')" \
-    "a diagnostic that is empty in the only cases it runs in is worse than none" \
-    "reproduce: bash tests/static/67-mangled-responses.sh, and read the captured stderr"
+  fail "no line names the good mirror as wrong" \
+    "found: $complaint" \
+    "reproduce: $REPRO"
 fi
 
 #---------------------------------------------------------------------------#
-# The bad mirrors must not be the ones that answered.
-#
-# A run that took the error page and somehow produced a version would satisfy
-# every assertion above. This is the one that says where the answer came from.
+# ⭐ A real Zstandard database, in a repository named base, is read.
 #---------------------------------------------------------------------------#
-complaints="$(awk '/resolve-anchor: / { n++ } END { print n + 0 }' "$work/err")"
-if [ "$complaints" -eq 5 ]; then
-  ok "all five bad mirrors were refused, and exactly five"
-else
-  fail "all five bad mirrors were refused, and exactly five" \
-    "counted $complaints complaints, expected 5" \
-    "fewer means the search stopped early or one was consumed, more means the good mirror was refused too" \
-    "reproduce: bash tests/static/67-mangled-responses.sh, and read the captured stderr"
-fi
-
-#---------------------------------------------------------------------------#
-# ⭐ The other half: a database that is genuinely Zstandard must be read.
-#
-# Three of this repository's eight architectures are served by ArchPOWER, whose
-# databases are Zstandard where every other port ships gzip, and whose primary
-# repository is named base rather than core. A resolver that only refused the
-# wrong shapes would pass every assertion above and still be unable to anchor
-# those three.
-#
-# ⚠ tar reaches zstd through the zstd program, and this suite also runs on a
-# Windows workstation where it is absent. The assertion is skipped there out
-# loud, rather than passing on a host that could not have failed it.
-#---------------------------------------------------------------------------#
-if ! command -v zstd > /dev/null; then
-  diag "zstd is not on PATH, so the Zstandard assertions did not run"
-  diag "  they run in CI and inside the image, both of which have it"
-  diag "  reproduce: command -v zstd"
-else
+if need_tool zstd; then
   mkdir -p "$work/srv/zstdgood" "$work/zgood/pacman-$ANCHOR_VERSION"
   tar --zstd -cf "$work/srv/zstdgood/base.db" -C "$work/zgood" "pacman-$ANCHOR_VERSION"
-
-  # A second scratch tree whose primary repository is named base rather than
-  # core, because the two go together: ArchPOWER is the only port with either.
-  mkdir -p "$work/repo2/rootfs/fake/etc/pacman.d" "$work/repo2/scripts"
-  cp "$REPO_ROOT/scripts/resolve-anchor" "$work/repo2/scripts/resolve-anchor"
-  printf '[options]\nArchitecture = powerpc64le\n\n[base]\nInclude = /etc/pacman.d/mirrorlist\n' \
-    > "$work/repo2/rootfs/fake/etc/pacman.conf"
-  printf 'Server = %s/zstdgood\n' "$(file_url "$work/srv")" \
-    > "$work/repo2/rootfs/fake/etc/pacman.d/mirrorlist"
+  port "$work/tree2" powerpc64le base
+  printf 'Server = %s/zstdgood\n' "$base" > "$work/tree2/rootfs/fake/etc/pacman.d/mirrorlist"
 
   zrc=0
-  ( cd "$work/repo2" && bash scripts/resolve-anchor fake ) \
+  PORTS_DIR="$work/tree2/ports" ROOTFS_DIR="$work/tree2/rootfs" bash "$RESOLVE" fake \
     > "$work/zout" 2> "$work/zerr" || zrc=$?
-
-  zgot="$(tr -d '\r' < "$work/zout" | awk 'NF { print; exit }')"
+  zgot="$(tr -d '\r' < "$work/zout")"
   if [ "$zrc" -eq 0 ] && [ "$zgot" = "$ANCHOR_VERSION" ]; then
-    ok "a Zstandard base.db is read, and the repository name comes from the config"
+    ok "a Zstandard base.db is read, and the repository name comes from the port"
   else
-    fail "a Zstandard base.db is read, and the repository name comes from the config" \
-      "it exited $zrc and printed: ${zgot:-nothing}" \
-      "⛔ three of the eight architectures cannot be anchored without this" \
-      "it said: $(tr -d '\r' < "$work/zerr" | awk 'NF { last = $0 } END { print last }')" \
-      "reproduce: bash tests/static/67-mangled-responses.sh, which keeps its fixtures under a temp dir"
-  fi
-
-  # ⛔ And the mangled one must still be refused. A reader that fell back to
-  # taking whatever zstd produced would pass the assertion above and consume
-  # the zstd fixture from the first run as though it were a database.
-  if awk -v s="/zstd/core.db" 'index($0, s) { n++ } END { exit !(n >= 1) }' "$work/err"; then
-    ok "the Zstandard shaped body that decompresses to nothing is still refused"
-  else
-    fail "the Zstandard shaped body that decompresses to nothing is still refused" \
-      "no complaint named it, so reading zstd made the script less careful, not more" \
-      "reproduce: bash tests/static/67-mangled-responses.sh, and read the captured stderr"
+    fail "a Zstandard base.db is read, and the repository name comes from the port" \
+      "exit $zrc, printed: ${zgot:-nothing}" \
+      "it said: $(tr -d '\r' < "$work/zerr" | tr '\n' '|')" \
+      "reproduce: $REPRO"
   fi
 fi
 

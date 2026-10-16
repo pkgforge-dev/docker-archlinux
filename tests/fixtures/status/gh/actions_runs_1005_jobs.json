@@ -1,0 +1,23 @@
+{
+ "total_count": 2,
+ "jobs": [
+  {
+   "id": 100514,
+   "name": "Build ppc",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-16T10:01:20Z",
+   "completed_at": "2026-10-16T10:05:20Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1005/job/100514"
+  },
+  {
+   "id": 100512,
+   "name": "Build armv7",
+   "status": "completed",
+   "conclusion": "success",
+   "started_at": "2026-10-16T10:01:10Z",
+   "completed_at": "2026-10-16T10:20:10Z",
+   "html_url": "https://github.com/test-owner/docker-archlinux/actions/runs/1005/job/100512"
+  }
+ ]
+}

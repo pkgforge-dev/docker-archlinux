@@ -1,62 +1,106 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
-# Install packages into a new root, for a container build.
+# Install packages into a new root, in a container build.
 #
-# Upstream pacstrap mounts the API filesystems and runs arch-chroot, which needs
-# privileges a container build does not have and would run target architecture
-# binaries the builder cannot execute. This does the parts that apply: create
-# the directory skeleton pacman expects, provide /dev/null, and run
-# pacman -r <root> -Sy.
+#   pacstrap-docker ROOT PACKAGE...
 #
-#   pacstrap-docker <root> <package>...
+# Upstream pacstrap mounts the API file systems and runs arch-chroot. A
+# container build has not the privileges for that, and cannot run binaries of
+# the target architecture. This does the parts that apply: it makes the
+# directories pacman expects, makes /dev/null, and runs pacman -r ROOT -Sy.
 #
-# The architecture and the mirrors come from /etc/pacman.conf of the stage this
-# runs in, not from <root>. pacman -r reads the running host's config, which is
-# why the Dockerfile installs the per architecture config as the build stage's
-# own /etc. That config carries no NoExtract rule, so every file a package
-# ships lands on disk. HISTORY/noextract-reverted.md.
+# pacman -r reads /etc/pacman.conf of the build stage, not ROOT/etc/pacman.conf.
+# That config sets Architecture, the lists and SigLevel. It has no NoExtract
+# rule, so every file of a package goes to disk.
 #
-# No package is installed with a name that came from the network. The list is
-# bootstrap/<arch>/etc/bootstrap-packages.txt, copied into the image.
+# The packages come from bootstrap/<arch>/etc/bootstrap-packages.txt, never
+# from the network. With no PACKAGE, it installs base.
+#
+# Environment:
+#   PACSTRAP_TRIES  the number of attempts when a download fails, default 3
+#
+# Exit status: 0 installed, 1 a step failed.
+set -euo pipefail
 
 info() {
   echo "==> $*"
 }
 
 error() {
-  echo "==> ERROR: $*"
-} >&2
+  echo "==> ERROR: $*" >&2
+}
 
 die() {
   error "$@"
   exit 1
 }
 
-(( $# )) || die "No root directory specified"
-newroot=$1; shift
+[ "$#" -ge 1 ] || die "no root directory given. Usage: pacstrap-docker ROOT PACKAGE..."
+newroot="$1"
+shift
 pacman_args=("${@:-base}")
 
-if [[ $EUID -ne 0 ]]; then
-	die "This script must be run as root"
+tries="${PACSTRAP_TRIES:-3}"
+case "$tries" in
+  '' | *[!0-9]* | 0*) die "PACSTRAP_TRIES is '$tries'. Use a whole number from 1." ;;
+esac
+
+if [ "$(id -u)" -ne 0 ]; then
+  die "run this as root"
 fi
 
-info "Setting up target directory..."
+info "Making the target directories..."
 mkdir -p "$newroot"
 mkdir -p "$newroot"/{var/{cache/pacman/pkg,lib/pacman,log},dev,run,etc,tmp,sys,proc}
 chmod 0755 "$newroot"/{var,var/cache,var/cache/pacman,var/cache/pacman/pkg,var/lib,var/lib/pacman,var/log,dev,run,etc}
 chmod 1777 "$newroot"/tmp
 chmod 0555 "$newroot"/{sys,proc}
 
-info "Setting up /dev/null in new root..."
-mknod "$newroot/dev/null" c 1 3
-trap 'rm -f "$newroot/dev/null"' EXIT
-
-info "Installing packages at $newroot..."
-if ! pacman -r "$newroot" -Sy --noconfirm "${pacman_args[@]}"; then
-  error 'pacman printed the reason above. The three inputs it used, all from this'
-  error 'build stage rather than from the target root:'
-  error '  packages  /etc/bootstrap-packages.txt'
-  error '  mirrors   /etc/pacman.d/mirrorlist'
-  error '  config    /etc/pacman.conf, which sets Architecture and SigLevel'
-  die "Failed to install packages into $newroot"
+info "Making /dev/null in the new root..."
+# ⚠ mknod needs CAP_MKNOD. A docker build step has it, and a rootless podman
+# build step does not. Without the node the install goes on, and the trap
+# removes what a scriptlet writes at that path.
+if ! mknod "$newroot/dev/null" c 1 3; then
+  error "cannot make $newroot/dev/null, so the install goes on without it"
 fi
+log=""
+trap 'rm -f "$newroot/dev/null" ${log:+"$log"}' EXIT
+
+# ⭐ A download that fails on every server gets PACSTRAP_TRIES attempts in
+# all. pacman keeps each file it got in its cache, so the next attempt reads
+# only the files that failed. Any other failure stops at once, for example a
+# bad signature or a package that no repository has.
+#
+# pacman 7 gives one of these lines when no server gave a file:
+#   warning: failed to retrieve some files                (a package)
+#   error: failed to synchronize all databases (REASON)   (a database)
+#   error: failed to commit transaction (REASON)          (a package)
+# REASON is "download library error" through curl, and "error invoking
+# external downloader" through the XferCommand (TRANSPORT=oci).
+# ⚠ "failed retrieving file" names one server only. pacman then tries the
+# next server, so that line alone is not a failed download.
+RETRY_RE='failed to retrieve some files|failed to (synchronize all databases|commit transaction) \((download library error|error invoking external downloader)\)'
+log="$(mktemp)"
+attempt=0
+while :; do
+  attempt=$((attempt + 1))
+  info "Installing packages into $newroot, attempt $attempt of $tries..."
+  rc=0
+  pacman -r "$newroot" -Sy --noconfirm "${pacman_args[@]}" 2>&1 | tee "$log" || rc=$?
+  [ "$rc" -eq 0 ] && break
+  retry=0
+  if grep -Eq -e "$RETRY_RE" "$log"; then
+    retry=1
+  fi
+  if [ "$retry" -eq 1 ] && [ "$attempt" -lt "$tries" ]; then
+    error "a download failed on every server, so the install starts again in $((attempt * 20)) s"
+    sleep "$((attempt * 20))"
+    continue
+  fi
+  error 'pacman gives the reason above. It read these inputs from the build stage,'
+  error 'not from the target root:'
+  error '  packages  /etc/bootstrap-packages.txt'
+  error '  mirrors   the lists that /etc/pacman.conf includes, in /etc/pacman.d'
+  error '  config    /etc/pacman.conf: Architecture, SigLevel, XferCommand'
+  die "the packages did not install into $newroot (pacman exit $rc, attempt $attempt of $tries)"
+done

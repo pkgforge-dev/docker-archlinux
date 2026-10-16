@@ -1,25 +1,30 @@
 #!/usr/bin/env bash
 #
-# Keep every workflow in the tree enabled on GitHub.
+# Keep every workflow of the tree enabled on GitHub.
 #
 #   scripts/keep-schedules-enabled
 #
-# ⛔ GitHub disables the scheduled workflows of a repository that has had no
-# activity for 60 days, and a disabled schedule leaves no run behind that could
-# notice. A workflow in state disabled_inactivity is enabled again here, and an
-# active one is enabled again too, which GitHub accepts as a no-op. Run daily by
-# build-deploy.yml and freshness-publish.yml, so either one firing keeps both.
+# ⛔ GitHub disables the scheduled workflows of a repository after 60 days with
+# no activity. A disabled schedule makes no run, so no run can report it. This
+# script enables each workflow in state disabled_inactivity. It also enables
+# each active workflow; GitHub accepts that and changes nothing.
 #
-# ⚠ A workflow disabled by hand is left disabled and named. That is a decision
-# somebody made, and undoing it daily would be overruling them.
+# ⚠ A workflow that a person disabled stays disabled. The script prints it on a
+# line that starts with "manual". scripts/watch-schedules reads that line and
+# raises the issue schedules-stopped.
 #
-# Only workflows whose file is in this tree are touched. GitHub keeps a record
-# for a deleted workflow file, and enabling that record does nothing useful.
+# Only workflows whose file is in this tree are read. GitHub keeps a record of a
+# deleted workflow file, and the script leaves that record alone.
 #
-# Needs GH_TOKEN with actions: write, and GITHUB_REPOSITORY.
+# Output, one line per workflow of the tree:
+#   enabled   PATH  was STATE
+#   manual    PATH  disabled by a person, left disabled
+#   skipped   PATH  state STATE
 #
-# Exit status: 0 every workflow in the tree is enabled or deliberately
-# disabled, 1 could not.
+# Environment: GH_TOKEN with actions: write, GITHUB_REPOSITORY (owner/name).
+#
+# Exit status: 0 every workflow of the tree is enabled or disabled by a person,
+# 1 could not read or enable.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,7 +40,7 @@ die() {
 }
 
 need() {
-  command -v "$1" >/dev/null || die "$1 is required"
+  command -v "$1" > /dev/null || die "$1 is required"
 }
 need gh
 need jq
@@ -49,8 +54,8 @@ esac
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-gh api --paginate "repos/$slug/actions/workflows?per_page=100" \
-  | jq -r '.workflows[] | "\(.id)\t\(.state)\t\(.path)"' | tr -d '\r' > "$work/workflows.tsv"
+gh api --paginate "repos/$slug/actions/workflows?per_page=100" > "$work/workflows.json"
+jq -r '.workflows[] | "\(.id)\t\(.state)\t\(.path)"' "$work/workflows.json" | tr -d '\r' > "$work/workflows.tsv"
 
 [ -s "$work/workflows.tsv" ] || die "GitHub listed no workflow for $slug" \
   "the token needs actions: read at least" \
@@ -67,7 +72,7 @@ while IFS=$'\t' read -r id state path; do
       printf 'enabled   %-48s was %s\n' "$path" "$state"
       ;;
     disabled_manually)
-      echo "::warning::$path was disabled by hand and is left disabled"
+      printf 'manual    %-48s disabled by a person, left disabled\n' "$path"
       ;;
     *)
       printf 'skipped   %-48s state %s\n' "$path" "$state"
@@ -75,6 +80,6 @@ while IFS=$'\t' read -r id state path; do
   esac
 done < "$work/workflows.tsv"
 
-[ "$seen" -gt 0 ] || die "none of the workflows GitHub listed is in this tree" \
+[ "$seen" -gt 0 ] || die "no workflow that GitHub listed is in this tree" \
   "reproduce: gh api repos/$slug/actions/workflows --jq '.workflows[].path'"
-echo "keep-schedules-enabled: $seen workflow(s) in the tree checked"
+echo "keep-schedules-enabled: $seen workflow(s) of the tree read"

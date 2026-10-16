@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+#
+# Raise or clear status-down and registry-drift from the record that the
+# build job of status.yml pushes to the branch status. The check job of
+# status.yml runs this after each build, also after a build that failed.
+#
+#   scripts/check-status-record BUILD_RESULT STATUS_JSON
+#
+# BUILD_RESULT is the result of the build job: success, failure, cancelled or
+# skipped. STATUS_JSON is status.json of the branch status. A path that does
+# not exist is a record that does not exist.
+#
+#   status-down     raised when build did not succeed, or when the record is
+#                   missing or older than STATUS_MAX_AGE (10800 s, three
+#                   hourly runs). Cleared when build succeeded and the record
+#                   is fresh. scripts/check-status-site raises it too, when
+#                   status.yml stops.
+#   registry-drift  judged from a fresh record only. Raised when Docker Hub
+#                   parity is below 1 in DRIFT_RUNS (2) runs in a row
+#                   (registries.drift_runs). Cleared when parity is 1. With
+#                   parity unknown, nothing changes.
+#
+# ⛔ A build that fails pushes no record. So this runs whatever build did: a
+# status page that stops changing is an issue, not only a red run.
+#
+# Environment: GITHUB_REPOSITORY (required) and GH_TOKEN for
+# scripts/track-issue. GITHUB_SERVER_URL and GITHUB_RUN_ID name the run.
+# STATUS_NOW (seconds) sets the clock, for the tests only.
+#
+# Exit status: 0 done; 1 the record is missing or too old, or an issue could
+# not be updated.
+set -euo pipefail
+
+PROG=check-status-record
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib.sh
+. "$ROOT/scripts/lib.sh"
+
+need jq
+
+[ "$#" -eq 2 ] || die "usage: scripts/check-status-record BUILD_RESULT STATUS_JSON"
+build="$1"
+json="$2"
+STATUS_MAX_AGE=10800
+DRIFT_RUNS=2
+
+slug="${GITHUB_REPOSITORY:-}"
+case "$slug" in
+  ?*/?*) ;;
+  *) die "GITHUB_REPOSITORY is not owner/name: '$slug'" ;;
+esac
+server="${GITHUB_SERVER_URL:-https://github.com}"
+run_url="$server/$slug/actions/runs/${GITHUB_RUN_ID:-0}"
+record_url="$server/$slug/blob/status/status.json"
+now="${STATUS_NOW:-$(date -u +%s)}"
+[[ "$now" =~ ^[0-9]+$ ]] || die "the clock reads '$now', not seconds"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+track="$ROOT/scripts/track-issue"
+
+# The record: its time, and its age in seconds
+generated=""
+age=""
+if [ -f "$json" ]; then
+  rc=0
+  vals="$(jq -r '[.generated, .generated_epoch] | map(tostring) | join(" ")' "$json" 2> "$work/jq.err" | tr -d '\r')" || rc=$?
+  epoch=""
+  read -r generated epoch <<< "$vals"
+  if [ "$rc" -eq 0 ] && [[ "$epoch" =~ ^[0-9]+$ ]]; then
+    age=$((now - epoch))
+  else
+    warn "$json does not read as a status record: $(awk 'NR == 1' "$work/jq.err")" \
+      "reproduce: jq '{generated, generated_epoch}' $json"
+    generated=""
+  fi
+fi
+fresh=0
+if [ -n "$age" ] && [ "$age" -le "$STATUS_MAX_AGE" ]; then
+  fresh=1
+fi
+if [ -n "$age" ]; then
+  said="the record on the branch status was measured $generated, ${age} s before this check"
+else
+  said="the branch status holds no status.json that reads"
+fi
+note "build $build; $said"
+
+#---------------------------------------------------------------------------#
+# status-down
+#---------------------------------------------------------------------------#
+# shellcheck disable=SC2016 # Markdown backticks, not command substitution
+{
+  printf '<!-- written by scripts/check-status-record -->\n'
+  if [ "$build" != success ]; then
+    printf 'The build job of `status.yml` ended `%s`, so it pushed no record: %s\n\n' "$build" "$run_url"
+  else
+    printf 'The record of `status.yml` is too old to tell the state of the images.\n\n'
+  fi
+  printf -- '- %s: %s\n' "$said" "$record_url"
+  printf -- '- a fresh record is %s s old or less. Each hourly run writes one.\n\n' "$STATUS_MAX_AGE"
+  printf 'While this lasts, the status page, the badges and the `registry-drift` check show an old state.\n\n'
+  printf 'reproduce:\n\n```bash\ngh run list --workflow status.yml --limit 5\ngit fetch origin status && git show FETCH_HEAD:status.json | jq '"'"'{generated, summary}'"'"'\n```\n\n'
+  printf 'This issue closes when a build of `status.yml` succeeds and its record is fresh.\n'
+} > "$work/status-down.md"
+
+rc=0
+if [ "$build" != success ] || [ "$fresh" -eq 0 ]; then
+  "$track" raise status-down "status.yml does not record the state of the images" "$work/status-down.md" || rc=$?
+else
+  "$track" clear status-down "\`status.yml\` records the state again, measured $generated: $run_url" || rc=$?
+fi
+[ "$rc" -eq 0 ] || die "scripts/track-issue could not update status-down (exit $rc)"
+
+#---------------------------------------------------------------------------#
+# registry-drift, from a fresh record only
+#---------------------------------------------------------------------------#
+if [ "$fresh" -eq 1 ]; then
+  read -r parity runs <<< "$(jq -r '[.registries.parity, .registries.drift_runs] | map(tostring) | join(" ")' "$json" | tr -d '\r')"
+  note "Docker Hub parity $parity, below 1 in $runs run(s) in a row"
+  if [ "$parity" = null ]; then
+    note "registry-drift is not judged: the parity is unknown in this record"
+  elif [ "$parity" = 1 ]; then
+    rc=0
+    "$track" clear registry-drift "Docker Hub carries every GHCR tag again, measured $generated: $record_url" || rc=$?
+    [ "$rc" -eq 0 ] || die "scripts/track-issue could not clear registry-drift (exit $rc)"
+  elif [[ "$runs" =~ ^[0-9]+$ ]] && [ "$runs" -ge "$DRIFT_RUNS" ]; then
+    # shellcheck disable=SC2016 # Markdown backticks inside a jq program
+    jq -r --arg url "$record_url" --arg run "$run_url" '
+      .registries as $r
+      | "<!-- written by scripts/check-status-record -->",
+        "Docker Hub carries \($r.parity * 1000 | floor / 10)% of the GHCR tags, below 100% in \($r.drift_runs) runs in a row. A rolling tag counts with the same digest, a pinned tag when it exists.",
+        "",
+        "- GHCR: `\($r.ghcr.image)`, \($r.ghcr.tags) tags",
+        "- Docker Hub: `\($r.hub.image)`, \($r.hub.tags) tags",
+        "- rolling tags with another digest: \(if ($r.rolling.differs | length) == 0 then "none" else ($r.rolling.differs | map("`\(.)`") | join(", ")) end)",
+        "- pinned tags missing: \($r.pinned.missing)\(if ($r.pinned.missing_names | length) > 0 then ": " + ($r.pinned.missing_names | map("`\(.)`") | join(", ")) else "" end)",
+        "",
+        "The hub job of `build-deploy.yml` copies each missing or moved tag in its next run. Record: \($url). Seen by: \($run)",
+        "",
+        "reproduce:",
+        "",
+        "```bash",
+        "scripts/registry-tags \($r.ghcr.image | split("/") | .[0]) \($r.ghcr.image | split("/") | .[1:] | join("/")) | sort > ghcr.tags",
+        "scripts/registry-tags \($r.hub.image | split("/") | .[0]) \($r.hub.image | split("/") | .[1:] | join("/")) | sort > hub.tags",
+        "comm -23 ghcr.tags hub.tags",
+        "```",
+        "",
+        "This issue closes when Docker Hub carries every GHCR tag."' "$json" | tr -d '\r' > "$work/registry-drift.md"
+    rc=0
+    "$track" raise registry-drift "Docker Hub does not carry every GHCR tag" "$work/registry-drift.md" || rc=$?
+    [ "$rc" -eq 0 ] || die "scripts/track-issue could not raise registry-drift (exit $rc)"
+  else
+    note "registry-drift is not raised yet: it opens at parity below 1 in $DRIFT_RUNS runs in a row"
+  fi
+else
+  note "registry-drift is not judged: $said"
+fi
+
+if [ "$fresh" -eq 0 ]; then
+  die "status.yml has stopped recording: $said" \
+    "reproduce: git fetch origin status && git show FETCH_HEAD:status.json | jq '{generated, summary}'"
+fi
+exit 0

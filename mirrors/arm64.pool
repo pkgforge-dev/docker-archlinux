@@ -1,0 +1,9 @@
+# Candidate servers for arm64. scripts/gen-mirrorlist probes them and writes the
+# fastest after the anchors.
+#
+# A `source` line names where to read candidates. gen-mirrorlist reads the
+# sources in order and uses the first that gives candidates. The format is in
+# mirrors/amd64.pool. The mirrorlist of Arch Linux ARM is the same for aarch64
+# and armv7h, and a commented Server line in it is also a candidate.
+source = mirrorlist https://raw.githubusercontent.com/archlinuxarm/PKGBUILDs/master/core/pacman-mirrorlist/mirrorlist
+source = mirrorlist-package https://ghcr.mirror.archlinux.pkgforge.dev/aarch64/core/core.db pacman-mirrorlist etc/pacman.d/mirrorlist

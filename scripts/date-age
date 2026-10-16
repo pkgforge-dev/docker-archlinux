@@ -1,29 +1,25 @@
 #!/usr/bin/env bash
 #
-# Whole days between two dates.
+# Print the number of whole days between two dates.
 #
-#   scripts/date-age 2026-07-13              days from then until today, in UTC
-#   scripts/date-age 2026-07-13 2026-08-27   days between the two, here 45
+#   scripts/date-age 2026-01-01              days from that date to today (UTC)
+#   scripts/date-age 2026-01-01 2026-02-15   days between the two dates: 45
 #
-# Either argument may be a full ISO timestamp; only the date part is read. That
-# is the resolution the callers work in: a published tag is named for a date,
-# and a cron tolerance is counted in days.
+# Each argument is YYYY-MM-DD or an ISO timestamp. Only the date part is read.
+# The callers work in days: a dated tag has a date, and a cron tolerance is in
+# days.
 #
-# ⛔ This exists so the calendar arithmetic has one home. It was written twice,
-# once in scripts/check-publish-recency and once in
-# scripts/check-schedules-fired, and two copies of a date routine is two places
-# for an off by one to live in only one of them.
+# ⭐ This is the only calendar routine for check-publish-recency,
+# check-schedules-fired and check-keyring-pin. Do not write a second copy.
 #
-# ⛔ No date -d, no strftime and no mktime. GNU date's -d is not on every host
-# this runs on, and strftime and mktime are gawk extensions while the runners
-# ship mawk, which is the same reason scripts/check-anchor-floor avoids match()
-# with a third argument. Integer arithmetic on the civil calendar instead, which
-# is exact.
+# ⛔ Do not use date -d, strftime or mktime. GNU date -d is not on every host,
+# and strftime and mktime are gawk extensions that mawk does not have. The
+# script uses integer arithmetic on the civil calendar.
 #
-# Prints one integer. Negative when the first date is later than the second.
+# The result is negative when the first date is later than the second.
 #
 # Exit status:
-#   0  a difference was printed
+#   0  the difference was printed
 #   1  an argument is not a date
 set -euo pipefail
 
@@ -54,9 +50,8 @@ for d in "$from" "$to"; do
 done
 
 awk -v a="$from" -v b="$to" '
-  # Days since 1970-01-01, by the civil calendar. March is treated as the first
-  # month of the year, which is what makes the leap day fall at the end and
-  # removes every special case for February.
+  # Days since 1970-01-01 on the civil calendar. The year starts in March, so
+  # the leap day is the last day of the year and February needs no special case.
   function days(y, m, d,   era, yoe, doy, doe) {
     y -= (m <= 2)
     era = int((y >= 0 ? y : y - 399) / 400)

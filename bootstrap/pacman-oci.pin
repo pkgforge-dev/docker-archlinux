@@ -1,0 +1,21 @@
+# The vendored copy of client/pacman-oci from pkgforge-dev/mirror-archlinux.
+#
+# The copy is bootstrap/any/usr/local/bin/pacman-oci, byte for byte. The build
+# stage uses it as XferCommand when TRANSPORT=oci, and the host scripts use it
+# to read an oci:// Server.
+#
+#   source  the file on GitHub at the commit the copy came from
+#   raw     the same file as plain bytes
+#   sha256  over the copy
+#
+# tests/static/47-pacman-oci-pin.sh checks the sha256. The freshness job
+# compares the copy with mirror-archlinux main.
+#
+# To update: put the file from the new commit in place, then set all three
+# values from it:
+#   curl -sSfL --connect-timeout 15 --max-time 60 -o bootstrap/any/usr/local/bin/pacman-oci <raw URL>
+#   sha256sum bootstrap/any/usr/local/bin/pacman-oci
+
+source = https://github.com/pkgforge-dev/mirror-archlinux/blob/89d9e70521ad6dc2e23bf341f3d55f45a1ac3db5/client/pacman-oci
+raw    = https://raw.githubusercontent.com/pkgforge-dev/mirror-archlinux/89d9e70521ad6dc2e23bf341f3d55f45a1ac3db5/client/pacman-oci
+sha256 = 80e7a87dfffb86deb2a335d8e814f587006b3f4aa512036aa56b10e862d98cd3

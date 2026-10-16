@@ -1,0 +1,222 @@
+{
+ "schema": 1,
+ "generated": "2026-10-16T11:47:00Z",
+ "targets": [
+  {
+   "target": "x86_64-core",
+   "current": true,
+   "lag_seconds": 0,
+   "age_seconds": 3600,
+   "coverage": {
+    "ratio_files": 1
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "x86_64-extra",
+   "current": false,
+   "lag_seconds": 17766,
+   "age_seconds": 3600,
+   "coverage": {
+    "ratio_files": 0.9917
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "aarch64-core",
+   "current": false,
+   "lag_seconds": 173110,
+   "age_seconds": 7200,
+   "coverage": {
+    "ratio_files": 0.9808
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "aarch64-extra",
+   "current": false,
+   "lag_seconds": 32392,
+   "age_seconds": 7200,
+   "coverage": {
+    "ratio_files": 0.9837
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "aarch64-alarm",
+   "current": true,
+   "lag_seconds": 0,
+   "age_seconds": 7200,
+   "coverage": {
+    "ratio_files": 1
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "aarch64-aur",
+   "current": true,
+   "lag_seconds": 0,
+   "age_seconds": 7200,
+   "coverage": {
+    "ratio_files": 1
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "armv7h-core",
+   "current": true,
+   "lag_seconds": 0,
+   "age_seconds": 5400,
+   "coverage": {
+    "ratio_files": 1
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "armv7h-extra",
+   "current": true,
+   "lag_seconds": 0,
+   "age_seconds": 5400,
+   "coverage": {
+    "ratio_files": 1
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "armv7h-alarm",
+   "current": true,
+   "lag_seconds": 0,
+   "age_seconds": 5400,
+   "coverage": {
+    "ratio_files": 1
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "armv7h-aur",
+   "current": true,
+   "lag_seconds": 0,
+   "age_seconds": 5400,
+   "coverage": {
+    "ratio_files": 1
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "loong64-core",
+   "current": true,
+   "lag_seconds": 0,
+   "age_seconds": 34560,
+   "coverage": {
+    "ratio_files": 1
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "loong64-extra",
+   "current": true,
+   "lag_seconds": 0,
+   "age_seconds": 34560,
+   "coverage": {
+    "ratio_files": 1
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "powerpc-base",
+   "current": true,
+   "lag_seconds": 0,
+   "age_seconds": 12240,
+   "coverage": {
+    "ratio_files": 1
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "powerpc-base-any",
+   "current": true,
+   "lag_seconds": 0,
+   "age_seconds": 50040,
+   "coverage": {
+    "ratio_files": 1
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "powerpc64le-base",
+   "current": true,
+   "lag_seconds": 0,
+   "age_seconds": 43920,
+   "coverage": {
+    "ratio_files": 1
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "powerpc64le-base-any",
+   "current": true,
+   "lag_seconds": 0,
+   "age_seconds": 43920,
+   "coverage": {
+    "ratio_files": 1
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "riscv64-core",
+   "current": false,
+   "lag_seconds": 48116,
+   "age_seconds": 9000,
+   "coverage": {
+    "ratio_files": 0.9932
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  },
+  {
+   "target": "riscv64-extra",
+   "current": false,
+   "lag_seconds": 8676,
+   "age_seconds": 9000,
+   "coverage": {
+    "ratio_files": 0.9884
+   },
+   "mirror": {
+    "state": "promoted"
+   }
+  }
+ ]
+}

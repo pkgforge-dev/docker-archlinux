@@ -1,0 +1,8 @@
+# What scripts/gen-manifest gives for manifest-tags.txt. Each line is
+# KEY<TAB>TAGS: the tags of that kind, sorted, with one space between them.
+#   port    the tags that name a port
+#   anchor  the tags that have an anchor
+#   index   the tags that name no port
+port	aarch64-v2030.01.01 powerpc64le ppc64le-7.1.0.r9.g54d9411-2.2 x86_64
+anchor	ppc64le-7.1.0.r9.g54d9411-2.2
+index	latest v2030.01.01

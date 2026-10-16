@@ -1,87 +1,122 @@
 name: Release
 
-# Everything this project produces that is not a container tag, in one release.
+# Publish the release assets of this repository. For each port of scripts/ports:
 #
-# ⭐ The framing: other tools import, extract and reuse these images without
-# container tooling. ArchPOWER, Arch Linux ARM and Arch RISC-V all publish a
-# rootfs tarball and this project did not. Five asset families answer that:
+#   pacman-static-<arch>, .json   a static pacman and its evidence file
+#   rootfs-<arch>.tar.gz          the filesystem of the published image
+#   rootfs-<arch>.json            the evidence file of that image
+#   bootstrap-set-<arch>.txt      its package set: name version sha256
+#   oci-<arch>.tar.gz             the image, for docker load or podman load
 #
-#   pacman-static-<arch>              a static pacman, and its evidence file
-#   rootfs-<arch>.tar.gz              the image filesystem, and its evidence file
-#   bootstrap-set-<arch>.txt          the resolved package set, name version sha256
-#   oci-<arch>.tar                    loadable by podman or docker with no network
-#   manifest.json                     every published tag, digest, platform, anchor
-#   SHA256SUMS                        one file covering all of the above
+# and manifest.json (every published tag) and SHA256SUMS (every asset).
 #
-# ⛔ A v* tag whose commit never reached the default branch publishes nothing,
-# and that is checked before any build starts rather than after eight of them.
+# Triggers:
+#   push of a v* tag   publish that tag
+#   schedule           day 1 of each month: publish the next patch tag after
+#                      the newest vX.Y.Z tag. The release makes the tag.
+#   workflow_dispatch  build the assets and stop. Nothing is published.
 #
-# ⭐ A workflow_dispatch run builds and uploads for inspection and stops. Only a
-# tag reaches the publish job, so a manual run cannot create a release.
+# ⭐ A run is idempotent. A new release starts as a draft at the commit of the
+# run. Each asset is uploaded with --clobber, then the draft is published,
+# which makes the tag. A second run at the same commit finishes the draft. A
+# draft at another commit is deleted and made again at the commit of the run.
 #
-# ⛔ The body is generated from the evidence files by scripts/release-notes, so
-# the release notes and the assets cannot disagree. A hand written body is a
-# second record that goes stale on the first bump.
+# ⛔ A run never changes a published release. To make one again, delete it
+# first: gh release delete TAG.
 #
-# ⚠ What a release is not. build-deploy.yml tags images by date; a git tag here
-# is a version of this repository's own tooling and assets, and the two
-# namespaces are deliberately different shapes: v0.1.0 against v2026.08.28.
-# HISTORY/releases.md.
+# ⛔ A port with no published image is left out, and the notes name it. Any
+# other failure publishes nothing.
+#
+# ⚠ A git tag (vX.Y.Z) is a version of the tooling and the assets. Image tags
+# are dates. The two namespaces are separate.
 on:
-  workflow_dispatch:
   push:
     tags:
-      - 'v*'
+      - "v*"
+  schedule:
+    - cron: "15 6 1 * *"
+  workflow_dispatch:
 
 defaults:
   run:
     shell: bash
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  #----------------------------------------------------------------------------------#
-  # ⛔ First, and everything needs it. Eight image builds and eight cross
-  # compiled pacmans is most of an hour of runner time, and a tag pointing at a
-  # commit that never reached the default branch must cost none of it.
-  #----------------------------------------------------------------------------------#
+  #--------------------------------------------------------------------------#
+  # ⛔ First. Choose the tag, refuse a tag that is not on the default branch,
+  # and run the static suite before any build.
+  #--------------------------------------------------------------------------#
   guard:
     name: Check the tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      publish: ${{ steps.tag.outputs.publish }}
+      matrix: ${{ steps.ports.outputs.matrix }}
     steps:
-      # fetch-depth 0 because the tag has to be checked against the default
-      # branch, and a shallow checkout cannot answer that.
+      # fetch-depth 0: the tag check reads the history and every tag.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Refuse a tag whose commit is not on the default branch
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Choose the tag
+        id: tag
         env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if ! git merge-base --is-ancestor HEAD "origin/${DEFAULT_BRANCH}"; then
-            echo "this tag is not an ancestor of origin/${DEFAULT_BRANCH}" >&2
-            echo "assets would be built from a commit that never reached the default branch" >&2
-            exit 1
-          fi
-          echo "::notice::tag commit is on ${DEFAULT_BRANCH}"
+          case "$EVENT" in
+            push)
+              tag="$GITHUB_REF_NAME"
+              default="$(timeout -k 5 60 gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)"
+              if ! git merge-base --is-ancestor HEAD "origin/$default"; then
+                echo "::error::$tag is not on origin/$default. A release builds only from the default branch."
+                echo "reproduce: git merge-base --is-ancestor $tag origin/$default"
+                exit 1
+              fi
+              publish=true
+              ;;
+            schedule)
+              # A draft has no git tag, so a later run gets the same tag. The
+              # publish job deletes a draft at another commit and makes it
+              # again.
+              tag="$(git tag -l 'v*' | scripts/release-notes --next-tag)"
+              publish=true
+              ;;
+            *)
+              tag=""
+              publish=false
+              ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "::notice::tag $tag, publish $publish"
 
-      - name: Check the repository before building anything from it
-        run: tests/run.sh static
+      - name: Read the port table
+        id: ports
+        run: |
+          set -euo pipefail
+          echo "matrix=$(scripts/ports matrix)" >> "$GITHUB_OUTPUT"
 
-  #----------------------------------------------------------------------------------#
-  # The eight static pacman binaries, built by the workflow that owns that
-  # recipe rather than by a second copy of it here.
-  #----------------------------------------------------------------------------------#
+      - name: Run the static suite
+        id: static
+        run: tests/run.sh -j 4 static
+
+  #--------------------------------------------------------------------------#
+  # The static pacman binaries, from the workflow that owns the recipe.
+  #--------------------------------------------------------------------------#
   pacman:
     name: Static pacman
     needs: guard
@@ -89,240 +124,215 @@ jobs:
     permissions:
       contents: read
 
-  #----------------------------------------------------------------------------------#
-  # One job per architecture: build the image, then take four things out of it.
+  #--------------------------------------------------------------------------#
+  # One job per port: take four assets out of the published image.
   #
-  # ⛔ One build, four artefacts. Building twice would let the tarball and the
-  # evidence describe different images, which is the class of defect
-  # HISTORY/evidence-race.md records.
-  #----------------------------------------------------------------------------------#
+  # ⛔ The published image, never a new build: the assets are the bytes that
+  # consumers pull, and the digest is the digest of the registry.
+  #--------------------------------------------------------------------------#
   rootfs:
-    name: Rootfs ${{ matrix.docker_arch }}
+    name: Rootfs ${{ matrix.arch }}
     needs: guard
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        # ⚠ arch-subset: this is the whole architecture set, and
-        # tests/static/75-architecture-set.sh fails when it stops matching
-        # build-deploy.yml.
-        include:
-          - docker_arch: amd64
-            platform: linux/amd64
-          - docker_arch: arm64
-            platform: linux/arm64
-          - docker_arch: armv7
-            platform: linux/arm/v7
-          - docker_arch: loong64
-            platform: linux/loong64
-          - docker_arch: riscv64
-            platform: linux/riscv64
-          - docker_arch: ppc
-            platform: linux/ppc
-          - docker_arch: ppc64
-            platform: linux/ppc64
-          - docker_arch: ppc64le
-            platform: linux/ppc64le
+        include: ${{ fromJSON(needs.guard.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-
-      # ⛔ docker/setup-qemu-action registers no big endian PowerPC emulator and
-      # says nothing about it. Ubuntu's qemu-user-static ships no binfmt
-      # descriptions either. This image does, and the F flag is asserted
-      # afterwards rather than assumed. HISTORY/powerpc.md.
-      #
-      # ⚠ The digest is the same pin build-deploy.yml carries, and
-      # scripts/check-image-pins reads the marker above it in both files, so the
-      # two move together.
-      - name: Register the big endian PowerPC emulators
-        if: matrix.docker_arch == 'ppc' || matrix.docker_arch == 'ppc64'
+      # GHCR <first alias> is the rolling tag of the port. 404 means that the
+      # port has no published image: the port is left out. Any other answer
+      # that is not 200 stops the job.
+      - name: Find the published image
+        id: image
         env:
-          DOCKER_ARCH: ${{ matrix.docker_arch }}
+          ARCH: ${{ matrix.arch }}
+          OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          handler="qemu-${DOCKER_ARCH}"
-          # tag: latest
-          docker run --rm --privileged \
-            docker.io/multiarch/qemu-user-static@sha256:fe60359c92e86a43cc87b3d906006245f77bfc0565676b80004cc666e4feb9f0 \
-            --reset -p yes
+          PROG=release
+          . scripts/lib.sh
+          mkdir -p assets meta
+          alias="$(scripts/ports aliases "$ARCH" | awk 'NR == 1')"
+          repo="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')/archlinux"
+          rc=0
+          res="$(reg_head ghcr.io "$repo" "$alias")" || rc=$?
+          [ "$rc" -eq 0 ] || die "no answer from ghcr.io for $repo:$alias" \
+            "reproduce: curl -sSI --connect-timeout 15 --max-time 60 https://ghcr.io/v2/$repo/manifests/$alias"
+          read -r code digest <<< "$res"
+          case "$code" in
+            200)
+              echo "state=published" >> "$GITHUB_OUTPUT"
+              echo "image=ghcr.io/$repo@$digest" >> "$GITHUB_OUTPUT"
+              echo "digest=$digest" >> "$GITHUB_OUTPUT"
+              echo "::notice::$ARCH is ghcr.io/$repo:$alias at $digest"
+              ;;
+            404)
+              echo "state=absent" >> "$GITHUB_OUTPUT"
+              jq -n --arg arch "$ARCH" --arg reason "ghcr.io/$repo:$alias does not exist" \
+                '{arch: $arch, reason: $reason}' > "meta/absent-$ARCH.json"
+              echo "::warning::$ARCH has no published image at ghcr.io/$repo:$alias. The release leaves it out."
+              ;;
+            *)
+              die "ghcr.io answered HTTP $code for $repo:$alias" \
+                "only 404 means that no image is published" \
+                "reproduce: curl -sSI --connect-timeout 15 --max-time 60 https://ghcr.io/v2/$repo/manifests/$alias"
+              ;;
+          esac
 
-          reg="/proc/sys/fs/binfmt_misc/${handler}"
-          if [ ! -f "$reg" ]; then
-            echo "${handler} is not registered after the binfmt image ran" >&2
-            ls /proc/sys/fs/binfmt_misc >&2
-            exit 1
-          fi
-          cat "$reg"
-
-          # ⚠ The F flag is what makes the handler usable from inside a
-          # container. Without it the kernel opens the interpreter in the
-          # container's own filesystem, where the emulator does not exist.
-          if ! awk '/^flags:/ && $2 ~ /F/ { found = 1 } END { exit !found }' "$reg"; then
-            echo "${handler} is registered without the F flag" >&2
-            exit 1
-          fi
-          echo "::notice::${handler} registered with the F flag"
-
-      # ⛔ The published image, not a fresh build of it.
-      #
-      # The first attempt built its own image and exported that. Two things were
-      # wrong with it and the second is the one that matters:
-      #
-      #   1. a never-pushed image has no RepoDigests, so
-      #      tests/image/40-evidence.sh assertion 10 fails with "the image
-      #      digest is known locally". Measured in run 33212195947.
-      #   2. ⛔ the asset then corresponded to nothing. Its evidence recorded the
-      #      digest of a local build, which matches no entry in manifest.json
-      #      and nothing on either registry, so a consumer comparing the two
-      #      found no match with no way to know that was expected. Review 25.
-      #
-      # Pulling the published tag fixes both: the digest is the one in the
-      # registry, the rootfs is the bytes consumers already pull, and there is
-      # no second build that could differ from the first.
-      #
-      # ⚠ It makes the release depend on a publish having happened. A repository
-      # that has never published cannot cut a release, and that failure is loud.
-      - name: Resolve and pull the published image
-        id: pull
+      - name: Register the emulator
+        if: steps.image.outputs.state == 'published'
         env:
-          PLATFORM: ${{ matrix.platform }}
-          DOCKER_ARCH: ${{ matrix.docker_arch }}
-        run: |
-          set -euo pipefail
-          repo="${GITHUB_REPOSITORY_OWNER}/archlinux"
+          ARCH: ${{ matrix.arch }}
+        run: scripts/binfmt-register "$ARCH"
 
-          # ⚠ The digest comes from the registry's own Docker-Content-Digest
-          # header, not from a client's idea of it. The tag list and the anchor
-          # floor are read the same way, anonymously, so this adds no credential.
-          token="$(curl -sS --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
-            "https://ghcr.io/token?scope=repository:${repo}:pull&service=ghcr.io" \
-            | jq -r '.token // empty')"
-          [ -n "$token" ] || { echo "no anonymous pull token for ${repo}" >&2; exit 1; }
-
-          digest="$(curl -sSI --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
-            -H "Authorization: Bearer $token" \
-            -H 'Accept: application/vnd.oci.image.index.v1+json' \
-            -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
-            -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
-            -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
-            "https://ghcr.io/v2/${repo}/manifests/${DOCKER_ARCH}" \
-            | awk 'tolower($1) == "docker-content-digest:" { print $2 }' | tr -d '\r')"
-
-          if [ -z "$digest" ]; then
-            echo "no digest for ghcr.io/${repo}:${DOCKER_ARCH}" >&2
-            echo "a release exports what was published, so that tag has to exist" >&2
-            echo "reproduce: curl -sSI -H 'Authorization: Bearer <token>' https://ghcr.io/v2/${repo}/manifests/${DOCKER_ARCH}" >&2
-            exit 1
-          fi
-          img="ghcr.io/${repo}@${digest}"
-          echo "image=$img" >> "$GITHUB_OUTPUT"
-
-          # --platform is required. provenance and sbom wrap the pushed manifest
-          # in an index, so a bare pull selects the runner's own architecture
-          # and fails with "no matching manifest for linux/amd64".
-          docker pull --platform "$PLATFORM" "$img"
-          echo "::notice::${DOCKER_ARCH} is ${digest}"
-
-      # The evidence file first, because everything below describes the image it
-      # describes, and a mismatch has to be impossible rather than unlikely.
-      #
-      # ⛔ CONTAINER_RUNTIME is not optional here. The runner image carries both
-      # docker and podman, and gen-evidence prefers podman when it finds one.
-      # The image is in docker's store, so podman tries to pull it again and
-      # fails. Measured in run 33211181473, which failed on all eight.
-      - name: Record the evidence
+      # --platform is necessary: the pushed image is an index with an
+      # attestation, and a pull with no platform picks the runner's.
+      - name: Pull the published image
+        if: steps.image.outputs.state == 'published'
         env:
-          IMAGE: ${{ steps.pull.outputs.image }}
+          IMAGE: ${{ steps.image.outputs.image }}
           PLATFORM: ${{ matrix.platform }}
-          DOCKER_ARCH: ${{ matrix.docker_arch }}
+        run: timeout -k 10 900 docker pull --platform "$PLATFORM" "$IMAGE"
+
+      # The evidence file of the build comes from the status branch when its
+      # digest is the published digest. Else gen-evidence makes it again from
+      # the current databases, and the notes say so. ⚠ That can fail when the
+      # databases moved after the build.
+      #
+      # ⛔ CONTAINER_RUNTIME=docker: the image is in the docker store, and
+      # gen-evidence picks podman when it finds one.
+      - name: Get the evidence file
+        id: evidence
+        if: steps.image.outputs.state == 'published'
+        env:
+          ARCH: ${{ matrix.arch }}
+          IMAGE: ${{ steps.image.outputs.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
           CONTAINER_RUNTIME: docker
         run: |
           set -euo pipefail
-          mkdir -p assets
-          SOURCE_COMMIT="${GITHUB_SHA}" BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            scripts/gen-evidence "$DOCKER_ARCH" "$IMAGE" "$PLATFORM" \
-              "assets/rootfs-${DOCKER_ARCH}.json"
+          ev="assets/rootfs-$ARCH.json"
+          source=""
+          reason=""
+          rc=0
+          timeout -k 5 120 git fetch -q --depth 1 origin status || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            reason="git fetch origin status exited $rc"
+          elif ! git cat-file -e "FETCH_HEAD:evidence/$ARCH.json"; then
+            reason="the status branch has no evidence/$ARCH.json"
+          else
+            git show "FETCH_HEAD:evidence/$ARCH.json" > "$ev"
+            got="$(jq -r '.digest // "-"' "$ev")"
+            if [ "$got" = "$DIGEST" ]; then
+              source=status-branch
+            else
+              reason="evidence/$ARCH.json is for $got, the published digest is $DIGEST"
+              rm -f "$ev"
+            fi
+          fi
+          if [ -z "$source" ]; then
+            echo "::warning::$ARCH: $reason. Making the evidence again without a database snapshot."
+            # ⛔ No SOURCE_COMMIT and no BUILD_DATE: gen-evidence then reads
+            # them from the labels of the image. The commit and the time of
+            # this run are not the build of the image.
+            env -u SOURCE_COMMIT -u BUILD_DATE scripts/gen-evidence "$ARCH" "$IMAGE" "$PLATFORM" "$ev"
+            source=regenerated
+          fi
+          jq -n --arg arch "$ARCH" --arg image "$IMAGE" --arg digest "$DIGEST" \
+            --arg evidence "$source" --arg reason "$reason" \
+            '{arch: $arch, image: $image, digest: $digest, evidence: $evidence, reason: $reason}' \
+            > "meta/rootfs-$ARCH.json"
+          echo "::notice::$ARCH evidence: $source"
 
-      - name: Test the image the assets are taken from
+      - name: Test the image
+        if: steps.image.outputs.state == 'published'
         env:
-          IMAGE: ${{ steps.pull.outputs.image }}
+          ARCH: ${{ matrix.arch }}
+          IMAGE: ${{ steps.image.outputs.image }}
           PLATFORM: ${{ matrix.platform }}
-          DOCKER_ARCH: ${{ matrix.docker_arch }}
         run: |
           set -euo pipefail
           IMAGE="$IMAGE" PLATFORM="$PLATFORM" CONTAINER_RUNTIME=docker \
-            EVIDENCE="assets/rootfs-${DOCKER_ARCH}.json" tests/run.sh image
+            EVIDENCE="assets/rootfs-$ARCH.json" tests/run.sh image
 
-      # ⛔ docker export, not docker save. export writes the container's
-      # filesystem, which is what a consumer with no container tooling can
-      # untar; save writes an image with its layers and metadata, which is the
-      # oci asset below. They are different artefacts and both are asked for.
-      - name: Export the rootfs and an OCI archive
+      # docker export writes the filesystem of a container. docker save writes
+      # the image with its layers and metadata. Both are assets.
+      - name: Export the rootfs and the OCI archive
+        if: steps.image.outputs.state == 'published'
         env:
-          IMAGE: ${{ steps.pull.outputs.image }}
+          ARCH: ${{ matrix.arch }}
+          IMAGE: ${{ steps.image.outputs.image }}
           PLATFORM: ${{ matrix.platform }}
-          DOCKER_ARCH: ${{ matrix.docker_arch }}
         run: |
           set -euo pipefail
           cid="$(docker create --platform "$PLATFORM" "$IMAGE" true)"
-          docker export "$cid" | gzip -9 > "assets/rootfs-${DOCKER_ARCH}.tar.gz"
+          docker export "$cid" | gzip -9 > "assets/rootfs-$ARCH.tar.gz"
           docker rm -f "$cid" > /dev/null
-          docker save "$IMAGE" | gzip -9 > "assets/oci-${DOCKER_ARCH}.tar.gz"
+          docker save "$IMAGE" | gzip -9 > "assets/oci-$ARCH.tar.gz"
 
-          # ⛔ An empty or truncated archive is a green step with a broken asset.
-          # gzip -t reads the whole stream, and the tar listing proves it is a
-          # root and not an arbitrary archive that happens to decompress.
-          for f in "assets/rootfs-${DOCKER_ARCH}.tar.gz" "assets/oci-${DOCKER_ARCH}.tar.gz"; do
+          # ⛔ gzip -t reads the whole stream. A small or broken archive stops
+          # the job.
+          for f in "assets/rootfs-$ARCH.tar.gz" "assets/oci-$ARCH.tar.gz"; do
             gzip -t "$f"
             bytes="$(stat -c %s "$f")"
             if [ "$bytes" -lt 1000000 ]; then
-              echo "$f is only $bytes bytes, which is not a root filesystem" >&2
+              echo "::error::$f has $bytes bytes, too small for a root filesystem"
               exit 1
             fi
             echo "$f: $bytes bytes"
           done
-
-          if ! tar -tzf "assets/rootfs-${DOCKER_ARCH}.tar.gz" etc/os-release > /dev/null; then
-            echo "the rootfs archive has no etc/os-release, so it is not this image" >&2
+          members="$(tar -tzf "assets/rootfs-$ARCH.tar.gz" | awk '$0 == "etc/os-release" || $0 == "./etc/os-release" { n++ } END { print n + 0 }')"
+          if [ "$members" -eq 0 ]; then
+            echo "::error::assets/rootfs-$ARCH.tar.gz has no etc/os-release"
+            echo "reproduce: tar -tzf assets/rootfs-$ARCH.tar.gz | grep os-release"
             exit 1
           fi
 
-      - name: Write the bootstrap set
+      - name: Write the package set
+        if: steps.image.outputs.state == 'published'
         env:
-          DOCKER_ARCH: ${{ matrix.docker_arch }}
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          scripts/gen-bootstrap-set "assets/rootfs-${DOCKER_ARCH}.json" \
-            "assets/bootstrap-set-${DOCKER_ARCH}.txt"
-          awk 'NR <= 14' "assets/bootstrap-set-${DOCKER_ARCH}.txt"
+          scripts/gen-bootstrap-set "assets/rootfs-$ARCH.json" "assets/bootstrap-set-$ARCH.txt"
+          awk 'NR <= 14' "assets/bootstrap-set-$ARCH.txt"
 
-      - name: Upload
+      - name: Upload the assets
+        if: steps.image.outputs.state == 'published'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: rootfs-${{ matrix.docker_arch }}
+          name: rootfs-${{ matrix.arch }}
           path: assets/*
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
 
-  #----------------------------------------------------------------------------------#
-  # Every published tag, its digest, its platforms and its anchor.
-  #
-  # ⛔ Read from the registries, never assembled from what a build believed it
-  # pushed. Both are generated: they are two registries and they can disagree,
-  # and a manifest for one of them would hide that.
-  #----------------------------------------------------------------------------------#
+      - name: Upload the notes
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: meta-${{ matrix.arch }}
+          path: meta/*
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+  #--------------------------------------------------------------------------#
+  # Every published tag with its digest, read from the registry.
+  #--------------------------------------------------------------------------#
   manifest:
-    name: Manifest of manifests
+    name: Manifest of tags
     needs: guard
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -332,11 +342,13 @@ jobs:
           persist-credentials: false
 
       - name: Generate
+        env:
+          OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
           mkdir -p assets
-          SOURCE_COMMIT="${GITHUB_SHA}" \
-            scripts/gen-manifest "ghcr.io/${GITHUB_REPOSITORY_OWNER}/archlinux" assets/manifest.json
+          owner="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          SOURCE_COMMIT="$GITHUB_SHA" scripts/gen-manifest "ghcr.io/$owner/archlinux" assets/manifest.json
           jq '{schema, image, tag_count, resolved_count, generated}' assets/manifest.json
 
       - name: Upload
@@ -345,81 +357,212 @@ jobs:
           name: manifest
           path: assets/*
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
 
-  #----------------------------------------------------------------------------------#
-  # Publish. Only for a v* tag, and only when every job above succeeded.
-  #
-  # ⛔ needs: over all of them is what makes a partial failure publish nothing. A
-  # release missing one architecture is worse than no release: it looks complete.
-  #----------------------------------------------------------------------------------#
+  #--------------------------------------------------------------------------#
+  # Publish. Only when guard chose to publish and every job above succeeded.
+  # ⛔ contents: write is on this job only.
+  #--------------------------------------------------------------------------#
   publish:
     name: Publish the release
     needs: [guard, pacman, rootfs, manifest]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    if: needs.guard.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     permissions:
       contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
 
+      # Each artifact in its own directory: dl/<artifact name>/.
       - name: Download every artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: assets
-          merge-multiple: true
+          path: dl
 
-      # ⛔ Counted, not trusted. download-artifact merging several uploads into
-      # one directory is exactly where a missing architecture becomes invisible.
-      - name: Check every architecture is present
+      - name: Sort the assets and the notes
         run: |
           set -euo pipefail
-          ls -la assets
-          missing=""
-          arches="$(awk '
-            /^[[:space:]]*-[[:space:]]+docker_arch:/ {
-              s = $0; sub(/^[^:]*:[[:space:]]*/, "", s); sub(/[[:space:]]*$/, "", s); print s
-            }' .github/workflows/build-deploy.yml | sort -u)"
-          n=0
-          for a in $arches; do
-            n=$((n + 1))
-            for f in "pacman-static-$a" "pacman-static-$a.json" \
-                     "rootfs-$a.tar.gz" "rootfs-$a.json" \
-                     "bootstrap-set-$a.txt" "oci-$a.tar.gz"; do
-              [ -f "assets/$f" ] || missing="$missing $f"
-            done
+          mkdir -p assets meta
+          for d in dl/*/; do
+            case "$(basename "$d")" in
+              meta-*) cp -- "$d"* meta/ ;;
+              *) cp -- "$d"* assets/ ;;
+            esac
           done
-          [ -f assets/manifest.json ] || missing="$missing manifest.json"
-          if [ -n "$missing" ]; then
-            echo "the release is missing:$missing" >&2
-            echo "a release with a hole in it looks complete, which is worse than no release" >&2
-            exit 1
-          fi
-          echo "::notice::$n architectures, every asset present"
+          ls -l assets meta
 
-      - name: Generate the release body and SHA256SUMS
+      # ⛔ release-notes refuses a release with a hole. Each port of the port
+      # table has every asset, or meta/absent-<arch>.json says it has no image.
+      - name: Write the notes and SHA256SUMS
+        id: notes
+        env:
+          TAG: ${{ needs.guard.outputs.tag }}
         run: |
           set -euo pipefail
-          scripts/release-notes assets "${GITHUB_REF_NAME}" > body.md
-          cat body.md
+          RELEASE_ARCHES="$(scripts/ports list | tr '\n' ' ')" \
+            scripts/release-notes assets "$TAG" meta > body.md
+          cat body.md >> "$GITHUB_STEP_SUMMARY"
 
+      # A new release starts as a draft. A draft has no git tag. The tag
+      # comes when the draft is published, after every asset is in place.
+      #
+      # The output state: "draft" when the draft has every asset of this run,
+      # "published" when the release is published already. ⛔ Then nothing is
+      # uploaded and the steps below do not run.
+      #
+      # ⛔ A draft at another commit is from an older run: its assets and its
+      # target are not this run. It is deleted and made again. gh release
+      # delete with no --cleanup-tag removes no git tag.
       - name: Publish
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.guard.outputs.tag }}
+          TARGET: ${{ github.sha }}
         run: |
           set -euo pipefail
-          gh release create "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$TAG" \
-            --notes-file body.md \
-            assets/pacman-static-* \
-            assets/rootfs-* \
-            assets/bootstrap-set-* \
-            assets/oci-* \
-            assets/manifest.json \
-            assets/SHA256SUMS
+          rc=0
+          view="$(timeout -k 5 120 gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,targetCommitish 2> view.err)" || rc=$?
+          make=1
+          if [ "$rc" -ne 0 ]; then
+            if ! awk 'index($0, "release not found") { hit = 1 } END { exit hit ? 0 : 1 }' view.err; then
+              echo "::error::gh release view $TAG exited $rc: $(tr '\n' ' ' < view.err)"
+              exit 1
+            fi
+          else
+            draft="$(jq -r '.isDraft' <<< "$view")"
+            at="$(jq -r '.targetCommitish' <<< "$view")"
+            if [ "$draft" != true ]; then
+              echo "state=published" >> "$GITHUB_OUTPUT"
+              echo "::notice::$TAG is published already, at $at. This run does not change it. To make it again, delete it first: gh release delete $TAG"
+              exit 0
+            fi
+            if [ "$at" = "$TARGET" ]; then
+              make=0
+              echo "::notice::$TAG is a draft at $TARGET. This run finishes it."
+            else
+              echo "::warning::$TAG is a draft at $at, and this run is at $TARGET. Deleting the draft to make it again."
+              timeout -k 5 120 gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+            fi
+          fi
+          if [ "$make" -eq 1 ]; then
+            timeout -k 5 300 gh release create "$TAG" --draft --repo "$GITHUB_REPOSITORY" \
+              --target "$TARGET" --title "$TAG" --notes-file body.md
+            echo "::notice::made the draft release $TAG at $TARGET"
+          fi
+          # ⛔ An asset that this run did not make is removed. SHA256SUMS
+          # covers only the assets of this run.
+          timeout -k 5 120 gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' > remote-names.txt
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            if [ ! -f "assets/$name" ]; then
+              echo "::notice::removing $name from the draft $TAG: this run did not make it"
+              timeout -k 5 120 gh release delete-asset "$TAG" "$name" --repo "$GITHUB_REPOSITORY" --yes
+            fi
+          done < remote-names.txt
+          for n in 1 2 3; do
+            rc=0
+            timeout -k 10 3600 gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/* || rc=$?
+            [ "$rc" -eq 0 ] && break
+            echo "::warning::gh release upload exited $rc (try $n of 3)"
+            [ "$n" -lt 3 ] && sleep $((n * 30))
+          done
+          [ "$rc" -eq 0 ] || { echo "::error::the upload failed 3 times. Run the workflow again to finish $TAG."; exit 1; }
+          timeout -k 5 300 gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file body.md
+          echo "state=draft" >> "$GITHUB_OUTPUT"
+
+      # ⛔ The draft has each local asset with the same size, and no other
+      # asset, before it is published.
+      - name: Check the uploaded assets
+        id: verify
+        if: steps.publish.outputs.state == 'draft'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.guard.outputs.tag }}
+        run: |
+          set -euo pipefail
+          timeout -k 5 120 gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[] | "\(.name) \(.size)"' > remote.txt
+          missing=""
+          for f in assets/*; do
+            want="$(basename "$f") $(stat -c %s "$f")"
+            if ! awk -v w="$want" '$0 == w { hit = 1 } END { exit hit ? 0 : 1 }' remote.txt; then
+              missing="$missing $(basename "$f")"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::these assets are missing on $TAG or have another size:$missing"
+            echo "reproduce: gh release view $TAG --json assets"
+            exit 1
+          fi
+          extra="$(awk 'NR == FNR { local[$1] = 1; next } !($1 in local) { printf "%s ", $1 }' \
+            <(find assets -maxdepth 1 -type f -printf '%f\n') remote.txt)"
+          if [ -n "$extra" ]; then
+            echo "::error::$TAG also has assets that this run did not make: $extra"
+            echo "reproduce: gh release view $TAG --json assets"
+            exit 1
+          fi
+          echo "::notice::$(awk 'END { print NR }' remote.txt) assets on $TAG"
+
+      - name: Publish the draft
+        id: undraft
+        if: steps.publish.outputs.state == 'draft'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.guard.outputs.tag }}
+        run: |
+          set -euo pipefail
+          timeout -k 5 300 gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "::notice::published https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+
+  #--------------------------------------------------------------------------#
+  # ⭐ A scheduled run fires once a month, so one failure raises
+  # failing-release. scripts/watch-schedules raises the same key only after 3
+  # failed runs, and leaves it open while the newest run failed. A scheduled
+  # run that succeeds clears it.
+  #--------------------------------------------------------------------------#
+  report:
+    name: Report
+    needs: [guard, pacman, rootfs, manifest, publish]
+    if: ${{ always() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Raise or clear failing-release
+        id: report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEEDS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          results="$(jq -r 'to_entries | map("\(.key) \(.value.result)") | join(", ")' <<< "$NEEDS")"
+          failed="$(jq -r '[.[].result | select(. == "failure" or . == "cancelled")] | length' <<< "$NEEDS")"
+          if [ "$failed" -eq 0 ]; then
+            scripts/track-issue clear failing-release "The scheduled release run succeeded: $RUN_URL"
+            exit 0
+          fi
+          body="$RUNNER_TEMP/failing-release.md"
+          {
+            echo "The scheduled release run failed: $RUN_URL"
+            echo
+            echo "Job results: $results"
+            echo
+            echo "reproduce: gh run view ${RUN_URL##*/} --log-failed"
+          } > "$body"
+          scripts/track-issue raise failing-release "release: the scheduled run failed" "$body"

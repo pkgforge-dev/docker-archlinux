@@ -1,29 +1,57 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": [
-    "Renovate is the one dependency bot here. Every pull request it opens that only moves pins is approved and merged by .github/workflows/bot-merge.yml once CI passes, so pins do not wait for a person.",
-    "Pins stay pins: actions by commit hash with the version in a comment, images by digest. tests/static/50-supply-chain.sh and tests/static/10-bootstrap-not-circular.sh fail a pull request that turns one back into a tag."
+    "Renovate moves the pins of this repository: actions by commit hash with the version in a comment, images by digest under a '# tag: <tag>' marker, and runner labels.",
+    "The tool pins of scripts/install-tools, meson too, have a sha256 that Renovate cannot write. The job tools of freshness.yml reports a tool that is behind.",
+    "Digest, pin, pinDigest, patch and minor updates merge with no person: .github/workflows/bot-merge.yml approves and merges them when CI passes. A major update waits for a person.",
+    "platformAutomerge is false: the merge goes through bot-merge.yml, which checks that the diff only moves pins.",
+    "The regex manager reads Dockerfile, .github/workflows and scripts. The Dockerfile manager is off, because the base image is an ARG under a marker. scripts/check-image-pins reads the same markers. tests/static/89-bot-merge-guard.sh fails when a pin is not matched here, or when a rule merges a major update."
   ],
-  "extends": ["config:recommended", ":disableDependencyDashboard"],
+  "extends": ["config:recommended", ":disableDependencyDashboard", "helpers:pinGitHubActionDigests"],
+  "ignorePaths": ["**/node_modules/**"],
   "labels": ["dependencies"],
-  "automerge": true,
   "platformAutomerge": false,
+  "automergeType": "pr",
+  "automergeStrategy": "squash",
+  "dockerfile": {
+    "enabled": false
+  },
   "packageRules": [
     {
-      "description": "Actions move weekly in one pull request, and only to a release at least three days old, so a release that is pulled or hijacked upstream has time to be noticed before it lands here.",
+      "description": "Actions move one time each week in one pull request, and only to a release that is at least 3 days old.",
       "matchManagers": ["github-actions"],
       "groupName": "github actions",
-      "schedule": ["before 6am on monday"],
+      "schedule": ["* 0-5 * * 1"],
       "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "Small updates merge when CI passes.",
+      "matchUpdateTypes": ["digest", "pin", "pinDigest", "patch", "minor"],
+      "automerge": true
+    },
+    {
+      "description": "A major update waits for a person.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    },
+    {
+      "description": "A runner label (runs-on) waits for a person: a new runner image changes the tools of every job.",
+      "matchDatasources": ["github-runners"],
+      "automerge": false
+    },
+    {
+      "description": "Each pin of the Arch Linux base image moves in one pull request.",
+      "matchDepNames": ["docker.io/library/archlinux", "mirror.gcr.io/library/archlinux", "public.ecr.aws/docker/library/archlinux"],
+      "groupName": "archlinux base image"
     }
   ],
   "customManagers": [
     {
       "customType": "regex",
-      "description": "An image run from a workflow step, pinned by digest under a '# tag: <tag>' marker. scripts/check-image-pins reads the same marker.",
-      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "description": "An image pinned by digest under a '# tag: <tag>' marker, at most 3 lines above the pin.",
+      "managerFilePatterns": ["/^Dockerfile$/", "/^\\.github/workflows/[^/]+\\.ya?ml$/", "/^scripts/[^/]+$/"],
       "matchStrings": [
-        "#\\s*tag:\\s*(?<currentValue>[A-Za-z0-9._-]+)\\s*\\n(?:[^\\n]*\\n){0,3}?[^\\n]*?(?<depName>docker\\.io/[a-z0-9._/-]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+        "#\\s*tag:\\s*(?<currentValue>[A-Za-z0-9._-]+)\\s*\\n(?:[^\\n]*\\n){0,3}?[^\\n]*?(?<depName>(?:docker\\.io|ghcr\\.io|mirror\\.gcr\\.io|public\\.ecr\\.aws)/[a-z0-9._/-]+?)(?::[A-Za-z0-9._-]+)?@(?<currentDigest>sha256:[a-f0-9]{64})"
       ],
       "datasourceTemplate": "docker"
     }
