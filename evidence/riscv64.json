@@ -1,0 +1,1097 @@
+{
+  "image": "ghcr.io/pkgforge-dev/archlinux@sha256:b7265da3f0624aa1caca973112c188ced4bddbf68133bcfa394444d0e039619b",
+  "platform": "linux/riscv64",
+  "digest": "sha256:b7265da3f0624aa1caca973112c188ced4bddbf68133bcfa394444d0e039619b",
+  "built": "2026-10-17T09:30:42Z",
+  "source_commit": "1e976bd04d14564b367cf51cd940ebadf582489a",
+  "version_id": "2026.10.17",
+  "architecture": "riscv64",
+  "docker_architecture": "riscv64",
+  "anchor": {
+    "name": "pacman",
+    "version": "7.1.0.r9.g54d9411-2.1"
+  },
+  "packages": [
+    {
+      "name": "acl",
+      "version": "2.4.0-1",
+      "size": 151582,
+      "installed_size": 333024,
+      "sha256": "737ed754afc7be2cee631036e4949923d9233edde9479a5f3553969d3e7a8019",
+      "released": "2026-07-01"
+    },
+    {
+      "name": "archlinux-keyring",
+      "version": "20260909-1",
+      "size": 1273507,
+      "installed_size": 1817333,
+      "sha256": "27b6ef8fe11ca54f5904872695afc5577d428614b12fb1ab0e0326048a271fa1",
+      "released": "2026-09-09"
+    },
+    {
+      "name": "attr",
+      "version": "2.6.0-1",
+      "size": 75550,
+      "installed_size": 211630,
+      "sha256": "47b02d9221a50182869963efdf8ec51e220c7e268f8feb087888b4aa724d0ea1",
+      "released": "2026-06-30"
+    },
+    {
+      "name": "audit",
+      "version": "4.2.1-1",
+      "size": 425997,
+      "installed_size": 1036618,
+      "sha256": "b45fa710cf5c82e59725fa1477174eb0d82ca4c277912032338dfb0189b713a7",
+      "released": "2026-08-21"
+    },
+    {
+      "name": "base",
+      "version": "3-3",
+      "size": 2400,
+      "installed_size": 0,
+      "sha256": "5fbcd81078e1c91749a35bf09d9bf03957e0052394784b6abad5f39aaba89dc2",
+      "released": "2026-02-10"
+    },
+    {
+      "name": "bash",
+      "version": "5.3.20-1",
+      "size": 2020997,
+      "installed_size": 9787296,
+      "sha256": "ef1d5e23cfad28eb12c5b2f708aa43f6dce9c8c32dd1fd6e70cc223fea4337d7",
+      "released": "2026-09-20"
+    },
+    {
+      "name": "binutils",
+      "version": "2.47-4.1",
+      "size": 12794292,
+      "installed_size": 99501104,
+      "sha256": "9c8fdfc67d109c591a3d8aec8ea66d571653952cb23fd27ab3058c62636813e1",
+      "released": "2026-08-21"
+    },
+    {
+      "name": "brotli",
+      "version": "1.2.0-1",
+      "size": 481455,
+      "installed_size": 1090447,
+      "sha256": "f2c55bc10059f30872ba37a68c7a2018228167b982e429115ae38053a007c30b",
+      "released": "2026-01-24"
+    },
+    {
+      "name": "bzip2",
+      "version": "1.0.8-6",
+      "size": 65625,
+      "installed_size": 128143,
+      "sha256": "d9873421aa9d078040b95fdd86cdd96a5eddc783a7b3acb1be2363da5919114e",
+      "released": "2024-03-18"
+    },
+    {
+      "name": "ca-certificates",
+      "version": "20240618-1",
+      "size": 2151,
+      "installed_size": 0,
+      "sha256": "61d7f9bbe49deef86d774978194fea542874a41312c720e8ff50798fde04366a",
+      "released": "2024-06-20"
+    },
+    {
+      "name": "ca-certificates-mozilla",
+      "version": "3.131-1",
+      "size": 391577,
+      "installed_size": 1071211,
+      "sha256": "f619b43c8531f780393e675e32a1a1224c4bedcce0accfa6bf2742cc2936054d",
+      "released": "2026-10-07"
+    },
+    {
+      "name": "ca-certificates-utils",
+      "version": "20240618-1",
+      "size": 11071,
+      "installed_size": 13956,
+      "sha256": "0dcbebbb96b162b6cbfb909f0c231c3921641c6629cffba77f220ce440e2a082",
+      "released": "2024-06-20"
+    },
+    {
+      "name": "coreutils",
+      "version": "9.12-2",
+      "size": 3163148,
+      "installed_size": 18030578,
+      "sha256": "5df1fd23c990da9654a34f2225e16b033e555c8c16cecaebf19da474ff0726d5",
+      "released": "2026-09-28"
+    },
+    {
+      "name": "cryptsetup",
+      "version": "2.8.8-1",
+      "size": 898885,
+      "installed_size": 3715410,
+      "sha256": "cbd2101b7f843336ada9b365f51ec8a29e583ad30f106ed93411748e66539a32",
+      "released": "2026-09-08"
+    },
+    {
+      "name": "curl",
+      "version": "8.23.0-1",
+      "size": 1390641,
+      "installed_size": 2265829,
+      "sha256": "2e1114f5d812969eaf042c446a6c79d4202ba25adcb16ebf8f59050c997f1ebd",
+      "released": "2026-10-16"
+    },
+    {
+      "name": "dbus",
+      "version": "1.16.2-1",
+      "size": 369102,
+      "installed_size": 979510,
+      "sha256": "74f51eb21a2c9a7fdfb566212c42dc6c33a834c6bc351a504d139ae40a5a8096",
+      "released": "2025-03-03"
+    },
+    {
+      "name": "dbus-broker",
+      "version": "37-3",
+      "size": 157426,
+      "installed_size": 333683,
+      "sha256": "12c6c5287f2872f78d8e71c1b6e40e033dcaa652f2ca59758fa61865d97bd5be",
+      "released": "2026-03-05"
+    },
+    {
+      "name": "dbus-broker-units",
+      "version": "37-3",
+      "size": 2551,
+      "installed_size": 0,
+      "sha256": "e5c5737b806becab1c9379eb589438e5d8a5d29d863791b2410a107cb82561d2",
+      "released": "2026-03-05"
+    },
+    {
+      "name": "dbus-units",
+      "version": "37-3",
+      "size": 2289,
+      "installed_size": 0,
+      "sha256": "f0bcbf8d38eddfc99fdeefbdb223266edda8fee5feee9513e67fafd4c696b789",
+      "released": "2026-03-05"
+    },
+    {
+      "name": "device-mapper",
+      "version": "2.03.43-2",
+      "size": 326891,
+      "installed_size": 830130,
+      "sha256": "b5152f92312be371bd89445d34138ff1bdbffa1f8f5e8bd8027af11c17f1f555",
+      "released": "2026-10-04"
+    },
+    {
+      "name": "e2fsprogs",
+      "version": "1.47.4-1",
+      "size": 1355080,
+      "installed_size": 5499273,
+      "sha256": "a60564b619114bdce7e5e57942bf1d92f4e32f8f47922202d10456d3fecd1e55",
+      "released": "2026-04-18"
+    },
+    {
+      "name": "expat",
+      "version": "2.9.0-1",
+      "size": 140996,
+      "installed_size": 522719,
+      "sha256": "4338db010b32e4b39c80e93be4926cc6afe7426d77897e9f89f47d3cbf2c8d3d",
+      "released": "2026-10-07"
+    },
+    {
+      "name": "file",
+      "version": "5.48-1",
+      "size": 471537,
+      "installed_size": 11024906,
+      "sha256": "5d9ebb60fbf30267db239e5869005da1c5f7b71066b1d45af5aff11b73b39000",
+      "released": "2026-06-09"
+    },
+    {
+      "name": "filesystem",
+      "version": "2025.10.12-1",
+      "size": 15474,
+      "installed_size": 24551,
+      "sha256": "3e5584e8894492e48ca171c194db5ca2a079d076113e3bee57cfb67f2e3122d9",
+      "released": "2025-10-19"
+    },
+    {
+      "name": "findutils",
+      "version": "4.11.0-1",
+      "size": 548730,
+      "installed_size": 1940636,
+      "sha256": "1be95edb3567e109b2fecc2637ae1f53af5a155792461b52dfe243311421cc7d",
+      "released": "2026-07-14"
+    },
+    {
+      "name": "gawk",
+      "version": "5.4.1-1",
+      "size": 1566499,
+      "installed_size": 4127995,
+      "sha256": "0c86382c6d81ff3cd3fd6fda135b7036c550630a47c627f63074d3bdb1e25da5",
+      "released": "2026-07-14"
+    },
+    {
+      "name": "gcc-libs",
+      "version": "16.2.1+r23+gd564253eb6c8-1",
+      "size": 2682,
+      "installed_size": 0,
+      "sha256": "7b23316599ac047c0142c202753d0813b1db39468784b11b6369539739ec55c9",
+      "released": "2026-08-18"
+    },
+    {
+      "name": "gdbm",
+      "version": "1.26-2",
+      "size": 269080,
+      "installed_size": 744228,
+      "sha256": "c867e955c257a8c85b39b678690fc82082fc3c34044ece35c4a9c270ad459894",
+      "released": "2026-01-10"
+    },
+    {
+      "name": "gettext",
+      "version": "1.0-2",
+      "size": 3427949,
+      "installed_size": 21669407,
+      "sha256": "34ed1b5681e645d005491d7fae728a851286187b2e25ecaa1568b379e65ad06e",
+      "released": "2026-03-03"
+    },
+    {
+      "name": "glib2",
+      "version": "2.90.1-1",
+      "size": 10115571,
+      "installed_size": 87058629,
+      "sha256": "95753235d935fc9cb0edb0def8b14d91bfa2359d4347aa27f114153853b96ac8",
+      "released": "2026-10-09"
+    },
+    {
+      "name": "glibc",
+      "version": "2.44+r50+g1848099f063e-1",
+      "size": 12775486,
+      "installed_size": 68203527,
+      "sha256": "a212a3b250b16f9c8688b4a26a52311eda8ac6574515aa456b812cc1b2194e98",
+      "released": "2026-09-28"
+    },
+    {
+      "name": "gmp",
+      "version": "6.3.0-3.2",
+      "size": 435503,
+      "installed_size": 847760,
+      "sha256": "8352ba6d6b917101ef8eeb4847edb09ddf05ed0e26f371827f41f9d1978c830a",
+      "released": "2026-05-16"
+    },
+    {
+      "name": "gnulib-l10n",
+      "version": "20241231-1",
+      "size": 126983,
+      "installed_size": 644166,
+      "sha256": "c488a93058d9877889529dc549693b810c78c4ab5fcb73ae6f17b91eab35eba5",
+      "released": "2025-01-01"
+    },
+    {
+      "name": "gnupg",
+      "version": "2.4.9-3",
+      "size": 3092187,
+      "installed_size": 10520084,
+      "sha256": "fb4326f88219c685f487a0537f9b36037ee3a91eb8165f0240414c907b475c05",
+      "released": "2026-08-23"
+    },
+    {
+      "name": "gnutls",
+      "version": "3.8.13-3",
+      "size": 1918927,
+      "installed_size": 8384982,
+      "sha256": "d47b193e6374b64ab811e422e038c860dd9713f1bd4e7479e548c2157ff77961",
+      "released": "2026-09-08"
+    },
+    {
+      "name": "gpgme",
+      "version": "2.2.0-1",
+      "size": 346955,
+      "installed_size": 764040,
+      "sha256": "ffa79e1bff93c0cd990e9b2d5183c60eb6955c2cf19c654e57c11ae7e18fe908",
+      "released": "2026-09-03"
+    },
+    {
+      "name": "grep",
+      "version": "3.12-2",
+      "size": 242376,
+      "installed_size": 899911,
+      "sha256": "634d2d7f52d1f352943f388074c2a6f9467d94e34f964fa47e86c708d7344420",
+      "released": "2025-04-25"
+    },
+    {
+      "name": "gzip",
+      "version": "1.15-1",
+      "size": 91972,
+      "installed_size": 154061,
+      "sha256": "e233e17b52bdc4c3aac7e4dd99a4945a3e83891f779a519e8ec5acd80b83bc6c",
+      "released": "2026-09-21"
+    },
+    {
+      "name": "hwdata",
+      "version": "0.412-1",
+      "size": 1783413,
+      "installed_size": 10565629,
+      "sha256": "bcf016ec3608694e61e6cf3c213e072e1d8cccc0007468f40303188c94f59377",
+      "released": "2026-10-06"
+    },
+    {
+      "name": "iana-etc",
+      "version": "20260617-1",
+      "size": 411482,
+      "installed_size": 4213221,
+      "sha256": "2c9e51bbc4776c268b6d3aa9755443fe471f2c2e9048623225d8d978fb6bd7fb",
+      "released": "2026-08-23"
+    },
+    {
+      "name": "icu",
+      "version": "78.3-1",
+      "size": 12472753,
+      "installed_size": 45375981,
+      "sha256": "87aeab3fd13fe1d7605d3da3c51a67f66c54b6da2a9ab1730c5a33156a7bc9b8",
+      "released": "2026-03-18"
+    },
+    {
+      "name": "iproute2",
+      "version": "7.2.0-1",
+      "size": 1299206,
+      "installed_size": 3072416,
+      "sha256": "5abd4f7593740708c235ac10d32bb871a728a57081afc27a431db0c7e0eea764",
+      "released": "2026-08-19"
+    },
+    {
+      "name": "iptables",
+      "version": "1:1.8.13-1.1",
+      "size": 461871,
+      "installed_size": 1873607,
+      "sha256": "ea875fda69ece0e7fc9a075f488ce09ccdcd4c77f5f8e43df2f35d87b115485a",
+      "released": "2026-09-13"
+    },
+    {
+      "name": "iputils",
+      "version": "20250605-1",
+      "size": 148364,
+      "installed_size": 673503,
+      "sha256": "585b1d2ca2de73bd0350f7d5fb484ca25f95a8494fdca268280f1e7b0b461797",
+      "released": "2025-06-18"
+    },
+    {
+      "name": "jansson",
+      "version": "2.15.1-1",
+      "size": 214884,
+      "installed_size": 1382291,
+      "sha256": "0fc1ef58810634a0a6adb01874873205879e774761b93003e34a22d3de966e55",
+      "released": "2026-08-22"
+    },
+    {
+      "name": "json-c",
+      "version": "0.19-1",
+      "size": 65991,
+      "installed_size": 194890,
+      "sha256": "cd8d45e7c7de051cc7396f45b3704fa8e9ae397582a9f18becacbdfddf23d491",
+      "released": "2026-08-15"
+    },
+    {
+      "name": "kbd",
+      "version": "2.10.0-1",
+      "size": 1348205,
+      "installed_size": 3471809,
+      "sha256": "04b5af4b552b0698f2752cc8a49c13e4a18eba2769a28610f23fd22d8baa77ee",
+      "released": "2026-06-07"
+    },
+    {
+      "name": "keyutils",
+      "version": "1.6.3-4",
+      "size": 108101,
+      "installed_size": 190953,
+      "sha256": "1c4f5367dc8ea31a2e773f9e42077c32e36e0537e15c4ec48edeabc84797315f",
+      "released": "2026-04-16"
+    },
+    {
+      "name": "kmod",
+      "version": "34.2-1.1",
+      "size": 145668,
+      "installed_size": 338706,
+      "sha256": "30783ee35edef1e879d45b64d75e4e4670599d0b6d7ff6b157f8529fef3a7472",
+      "released": "2025-05-27"
+    },
+    {
+      "name": "krb5",
+      "version": "1.22.2-1",
+      "size": 1493510,
+      "installed_size": 4712442,
+      "sha256": "b95096cc275ba518f85e086b2f79364a7c3a1e5bf7499d7d6df78dfa6a2a7608",
+      "released": "2026-05-22"
+    },
+    {
+      "name": "leancrypto",
+      "version": "1.9.1-1",
+      "size": 1593175,
+      "installed_size": 6413008,
+      "sha256": "f16fa4aaac8eb10171ebf999cf3c58adc4ffa7f85208bffb3a64d868b2ae41e6",
+      "released": "2026-10-07"
+    },
+    {
+      "name": "libarchive",
+      "version": "3.8.10-1",
+      "size": 625119,
+      "installed_size": 1235972,
+      "sha256": "867c2197fb00e375234c5deca1c7ea5ec9368199c5e0b0774bb1ce8ffbda10a6",
+      "released": "2026-10-15"
+    },
+    {
+      "name": "libasan",
+      "version": "16.2.1+r23+gd564253eb6c8-1",
+      "size": 552703,
+      "installed_size": 1777284,
+      "sha256": "127efc1592097a7ddaeaf015b9743436766986d16a3c6dac1e71b7bb717604f6",
+      "released": "2026-08-18"
+    },
+    {
+      "name": "libassuan",
+      "version": "3.0.0-1",
+      "size": 117848,
+      "installed_size": 241116,
+      "sha256": "64e901218178336bd8282ea1f8cc9ecf282766992174ba9463ee23507e1e99cb",
+      "released": "2024-07-21"
+    },
+    {
+      "name": "libatomic",
+      "version": "16.2.1+r23+gd564253eb6c8-1",
+      "size": 13416,
+      "installed_size": 29796,
+      "sha256": "628df7a3b82099c3e980714eb11690e0af4c4f141ab0e52343abafd1e4559792",
+      "released": "2026-08-18"
+    },
+    {
+      "name": "libbpf",
+      "version": "1.7.0-1",
+      "size": 288413,
+      "installed_size": 852494,
+      "sha256": "82c264a4642f748772e8a7683cdc6a07df2d63af6e678ede52547fee4416f1a9",
+      "released": "2026-04-30"
+    },
+    {
+      "name": "libcap",
+      "version": "2.78-1",
+      "size": 821557,
+      "installed_size": 2116064,
+      "sha256": "bf4ebbddf36836f4e4128a22bc716b711bb6d5b072429f9c4260ebddb2737142",
+      "released": "2026-04-16"
+    },
+    {
+      "name": "libcap-ng",
+      "version": "0.9.6-1",
+      "size": 74599,
+      "installed_size": 145172,
+      "sha256": "41562515b2bef4a1bac09b36e3a25f94e7a3c5b5b23292edbfbb5f4b3162db41",
+      "released": "2026-09-11"
+    },
+    {
+      "name": "libelf",
+      "version": "0.196-1",
+      "size": 1591717,
+      "installed_size": 11952071,
+      "sha256": "165c1d0d6633d83f9b9fd6ac3f5bca326738eaa82bec8de14d19fb50cbbbd767",
+      "released": "2026-08-19"
+    },
+    {
+      "name": "libevent",
+      "version": "2.1.13-2",
+      "size": 308972,
+      "installed_size": 1202522,
+      "sha256": "25b1f325fbe5d313ed973ecf59394207992bd91144612e1c28cad20661e34f7a",
+      "released": "2026-08-05"
+    },
+    {
+      "name": "libffi",
+      "version": "3.8.0-1",
+      "size": 51768,
+      "installed_size": 97663,
+      "sha256": "6abf4fb72eb0015b1a206eb57de378a7d3384af28fb86ac1ecb98cbaa67906ba",
+      "released": "2026-08-15"
+    },
+    {
+      "name": "libgcc",
+      "version": "16.2.1+r23+gd564253eb6c8-1",
+      "size": 84654,
+      "installed_size": 156996,
+      "sha256": "ca3f14de4442f6d42ff5b801b7ebac9ed23a7b23553a3764e73d8cb178ea6896",
+      "released": "2026-08-18"
+    },
+    {
+      "name": "libgcrypt",
+      "version": "1.12.4-1",
+      "size": 782605,
+      "installed_size": 1610337,
+      "sha256": "f3553c74d437b811c82324dd5fb38fd34371f0ba639cd2f5e4f6c07bb3a95025",
+      "released": "2026-09-12"
+    },
+    {
+      "name": "libgfortran",
+      "version": "16.2.1+r23+gd564253eb6c8-1",
+      "size": 507202,
+      "installed_size": 1693756,
+      "sha256": "8d8ccf612215eea2a63907f5ffea93b391779ded7a6c8642583b57e8fcbb941c",
+      "released": "2026-08-18"
+    },
+    {
+      "name": "libgomp",
+      "version": "16.2.1+r23+gd564253eb6c8-1",
+      "size": 238856,
+      "installed_size": 406337,
+      "sha256": "77ccec84edf5ffb81f006fc8d66c3a1bfbb728d407f889835957372d2e529812",
+      "released": "2026-08-18"
+    },
+    {
+      "name": "libgpg-error",
+      "version": "1.61-1",
+      "size": 284488,
+      "installed_size": 1170599,
+      "sha256": "4078daf40eb5faef30376cd792328eda1003c261655212ed0bbec01281b4e6f7",
+      "released": "2026-05-08"
+    },
+    {
+      "name": "libidn2",
+      "version": "2.3.8-1",
+      "size": 136671,
+      "installed_size": 368032,
+      "sha256": "28b4cf47f3eedf9ec39169468a74df6ac9ed61445353a7b7c5ae39eaec3cfc60",
+      "released": "2025-12-08"
+    },
+    {
+      "name": "libksba",
+      "version": "1.8.1-1",
+      "size": 159440,
+      "installed_size": 326891,
+      "sha256": "d4855649929a589cba84e45a5f73490f7284ab087e4af66c42e2522d8160354c",
+      "released": "2026-08-28"
+    },
+    {
+      "name": "libldap",
+      "version": "2.7.1-1",
+      "size": 300479,
+      "installed_size": 640046,
+      "sha256": "406785d1d1eda007149af8b879b25a323ad5d93bbfbf63942c1706f5c5c3f561",
+      "released": "2026-09-12"
+    },
+    {
+      "name": "liblsan",
+      "version": "16.2.1+r23+gd564253eb6c8-1",
+      "size": 246191,
+      "installed_size": 544316,
+      "sha256": "ec632bb5e9bcfd2a84132770a700df9f57b2dc949e6cfd7870016ac014373ae3",
+      "released": "2026-08-18"
+    },
+    {
+      "name": "libmakepkg-dropins",
+      "version": "20-2",
+      "size": 6384,
+      "installed_size": 11493,
+      "sha256": "2b287f333148c49077334648c0ed098e8d0e272bb81a1fc08b4317e67a29bd43",
+      "released": "2026-08-17"
+    },
+    {
+      "name": "libmnl",
+      "version": "1.0.5-2",
+      "size": 11745,
+      "installed_size": 26828,
+      "sha256": "c14436650f5c63445df05d551aabd9eda2c082663bcfbdc2fe3109e7b6bc156e",
+      "released": "2024-03-19"
+    },
+    {
+      "name": "libnetfilter_conntrack",
+      "version": "1.1.1-1",
+      "size": 57263,
+      "installed_size": 172305,
+      "sha256": "63a0f9b3ce19a04c364ebe231ef6898361e9934c6cd5c0db9b46f635f30b95a4",
+      "released": "2026-04-24"
+    },
+    {
+      "name": "libnfnetlink",
+      "version": "1.0.2-2",
+      "size": 18316,
+      "installed_size": 39236,
+      "sha256": "cd96d863a4c36cf5dd8635388cab32bd3c5ded6b4c8ffedf631cff115a002049",
+      "released": "2024-03-19"
+    },
+    {
+      "name": "libnftnl",
+      "version": "1.3.2-1",
+      "size": 83445,
+      "installed_size": 282507,
+      "sha256": "c37e879cc178c094680c76b0767d740f805ad9bdb3e62b13f202bcbf235fc6ad",
+      "released": "2026-09-03"
+    },
+    {
+      "name": "libnghttp2",
+      "version": "1.70.0-1",
+      "size": 103976,
+      "installed_size": 408203,
+      "sha256": "a369a5d37636898b5d87839439c59e2464506cca01718fa17970a00c9c4d77c1",
+      "released": "2026-08-15"
+    },
+    {
+      "name": "libnghttp3",
+      "version": "1.18.0-1",
+      "size": 85484,
+      "installed_size": 265590,
+      "sha256": "a8dd01a06fd4ab29943fab0b75c88d2107a34e1218472fc1b89f0bd2eab62427",
+      "released": "2026-08-15"
+    },
+    {
+      "name": "libngtcp2",
+      "version": "1.25.0-1",
+      "size": 247591,
+      "installed_size": 740065,
+      "sha256": "026b4447fbe907eaca20f7fba128fd2ca5891d26c1e4e7ab6ff88b5792df2562",
+      "released": "2026-08-15"
+    },
+    {
+      "name": "libnl",
+      "version": "3.12.0-1",
+      "size": 469670,
+      "installed_size": 2004973,
+      "sha256": "e8004caa95fb0c2214947cfd3077594406b6c77f9a005d763c20083d6445759d",
+      "released": "2025-12-08"
+    },
+    {
+      "name": "libnsl",
+      "version": "2.0.1-2",
+      "size": 23204,
+      "installed_size": 67618,
+      "sha256": "de0eb79857fc02d2deceb6f0e1b6c3139ed1386e43d9f825edd2f957d32345c3",
+      "released": "2026-05-15"
+    },
+    {
+      "name": "libobjc",
+      "version": "16.2.1+r23+gd564253eb6c8-1",
+      "size": 39718,
+      "installed_size": 89724,
+      "sha256": "bd012416c69ea907c3829f2566aa8162aacc2b7ac6028d46af8ac9a8f817116f",
+      "released": "2026-08-18"
+    },
+    {
+      "name": "libp11-kit",
+      "version": "0.26.5-1",
+      "size": 601420,
+      "installed_size": 3656812,
+      "sha256": "c2e207105844db6663ed74d1cf300a7e52c2208ef0a9b903c1db34b896e0168b",
+      "released": "2026-08-20"
+    },
+    {
+      "name": "libpcap",
+      "version": "1.11.0-1",
+      "size": 325346,
+      "installed_size": 706261,
+      "sha256": "9e4ce909164a0612e237ccca1db1e146199c5c802b52e2137bfa7bc0f4229520",
+      "released": "2026-09-15"
+    },
+    {
+      "name": "libpsl",
+      "version": "0.21.5-2",
+      "size": 89439,
+      "installed_size": 215887,
+      "sha256": "5d944adb5eb1efe09f941aba863319aa226e8e30578bfedda6ea29fdcee802fa",
+      "released": "2024-05-13"
+    },
+    {
+      "name": "libsasl",
+      "version": "2.1.28-5",
+      "size": 162908,
+      "installed_size": 491723,
+      "sha256": "3ab14e19f92264bc693bd584b979139e1a06b9b03515c7e1cf18d4dd12117c83",
+      "released": "2024-08-25"
+    },
+    {
+      "name": "libseccomp",
+      "version": "2.6.0-1",
+      "size": 100762,
+      "installed_size": 308772,
+      "sha256": "65507f4a51632aded7a9911a2e19868a6fbe29f05212f7b6870903bd5c464ebd",
+      "released": "2026-01-24"
+    },
+    {
+      "name": "libsecret",
+      "version": "0.21.8.2-1",
+      "size": 187763,
+      "installed_size": 1144817,
+      "sha256": "db65cd8255577feabc11691d4ccf112b94250b1efe9c2f665d416c9bacca46b8",
+      "released": "2026-09-17"
+    },
+    {
+      "name": "libssh2",
+      "version": "1.11.1-7",
+      "size": 275127,
+      "installed_size": 485786,
+      "sha256": "e1869b6b82fc68850c3dfe1c9cfb3a2d5b844fb0186af3acf60163f1db4f5104",
+      "released": "2026-08-15"
+    },
+    {
+      "name": "libstdc++",
+      "version": "16.2.1+r23+gd564253eb6c8-1",
+      "size": 888190,
+      "installed_size": 2751659,
+      "sha256": "c78e585b50b6738ac14a989465439fad61486c4376f28deb743cd0ca56e50156",
+      "released": "2026-08-18"
+    },
+    {
+      "name": "libsysprof-capture",
+      "version": "50.0-6",
+      "size": 148599,
+      "installed_size": 1132490,
+      "sha256": "733f522dac71c9ed9e5a5442bf5cae9c071267df9f21e325907e50da70368c00",
+      "released": "2026-08-22"
+    },
+    {
+      "name": "libtasn1",
+      "version": "4.21.0-1",
+      "size": 139166,
+      "installed_size": 268381,
+      "sha256": "450fd3cc0a9c149c2828645806e4d4ace67d95c20ab070c3e8e9d4c085276745",
+      "released": "2026-01-11"
+    },
+    {
+      "name": "libtirpc",
+      "version": "1.3.8-1",
+      "size": 187154,
+      "installed_size": 441500,
+      "sha256": "048280acc93dcdc29ca932b55bde7effcac0706017b06381b29ba635f43e1e73",
+      "released": "2026-09-14"
+    },
+    {
+      "name": "libtsan",
+      "version": "16.2.1+r23+gd564253eb6c8-1",
+      "size": 505300,
+      "installed_size": 1547924,
+      "sha256": "29634b41e93e1351b47de9ed7ab98ee390e2ed1817af8c22ede2b845ebf37afe",
+      "released": "2026-08-18"
+    },
+    {
+      "name": "libubsan",
+      "version": "16.2.1+r23+gd564253eb6c8-1",
+      "size": 224232,
+      "installed_size": 491364,
+      "sha256": "809b64a33fcdf91ebcb9fbf3e59cf9dc9e6e10b684782201d0c9f4ef67f03095",
+      "released": "2026-08-18"
+    },
+    {
+      "name": "libunistring",
+      "version": "1.4.2-1",
+      "size": 757034,
+      "installed_size": 2837672,
+      "sha256": "98fbdba5099671ed38c64a883267ef8d6f1205c32a3120d6a5340edc82a2e88c",
+      "released": "2026-05-14"
+    },
+    {
+      "name": "libusb",
+      "version": "1.0.30-1",
+      "size": 82528,
+      "installed_size": 226232,
+      "sha256": "72e9b71049641407456f648cfbaba9164adf57f92b02ab88a76ef07fbc9f0072",
+      "released": "2026-05-20"
+    },
+    {
+      "name": "libverto",
+      "version": "0.3.2-6",
+      "size": 19806,
+      "installed_size": 61598,
+      "sha256": "928db9126e129acd470b932b59247c425908d248352fc573b40cc3ebc19ee300",
+      "released": "2026-04-15"
+    },
+    {
+      "name": "libxcrypt",
+      "version": "4.5.2-1",
+      "size": 112151,
+      "installed_size": 211985,
+      "sha256": "fd3693f9260e2c4d1af2fdb230f4314fe9c5c181d0bafbde83cb8ad6700d61b2",
+      "released": "2025-11-17"
+    },
+    {
+      "name": "libxml2",
+      "version": "2.15.4-1",
+      "size": 846136,
+      "installed_size": 3167118,
+      "sha256": "1c48692d9ab67a192e5656bef84131bda8fed9a8b9861dc76e0fc534812bf908",
+      "released": "2026-09-05"
+    },
+    {
+      "name": "licenses",
+      "version": "20240728-1",
+      "size": 108249,
+      "installed_size": 1617309,
+      "sha256": "fa8486d80af01bf557202214cac1a40456bfd0dff3e6ca50aa30f047cd5cb298",
+      "released": "2024-07-29"
+    },
+    {
+      "name": "linux-api-headers",
+      "version": "7.2-1",
+      "size": 1552859,
+      "installed_size": 7202057,
+      "sha256": "c45d32b44a8206d143469d4d042909e06bf6363c23392cc9e6a7ab5581ecccc1",
+      "released": "2026-08-17"
+    },
+    {
+      "name": "lmdb",
+      "version": "0.9.35-1",
+      "size": 127644,
+      "installed_size": 386369,
+      "sha256": "9a002f72f22b7981f9a0372460070dde031088471de55c3df1884dc26d298db2",
+      "released": "2026-03-08"
+    },
+    {
+      "name": "lz4",
+      "version": "1:1.10.0-2",
+      "size": 207609,
+      "installed_size": 497892,
+      "sha256": "3c98b1b04bfb07b645abbbc9fd2a603b3217b1db3a1e7d99e605b3627f3b047e",
+      "released": "2024-08-01"
+    },
+    {
+      "name": "mpfr",
+      "version": "4.2.2-1",
+      "size": 378569,
+      "installed_size": 753523,
+      "sha256": "306e15272798fe4fff76461bb8e2440b91cd5db60cec7468c66ffc1fbc636fc5",
+      "released": "2025-03-22"
+    },
+    {
+      "name": "ncurses",
+      "version": "6.6-2",
+      "size": 1252128,
+      "installed_size": 4253455,
+      "sha256": "f35c637607713f5cddc99fef0d131f70f6b775d3ee732a58f63368c7eaec43b4",
+      "released": "2026-03-25"
+    },
+    {
+      "name": "nettle",
+      "version": "4.0-1.1",
+      "size": 502589,
+      "installed_size": 1037914,
+      "sha256": "c671b7170764a121b7bee16261222bbd2793e899212e0925305ae006cc3fbf54",
+      "released": "2026-06-19"
+    },
+    {
+      "name": "nftables",
+      "version": "1:1.1.7-3",
+      "size": 482189,
+      "installed_size": 1216835,
+      "sha256": "f3049705e705999b064f9238587fe9bc9c3e96c03cd8ffaf7b096d82737ea56a",
+      "released": "2026-09-05"
+    },
+    {
+      "name": "npth",
+      "version": "1.8-1",
+      "size": 29207,
+      "installed_size": 84133,
+      "sha256": "1c192ea2e9cca1f763352f7131981b2b916d70e2a0c78c89ff4f0f649571ca95",
+      "released": "2024-11-29"
+    },
+    {
+      "name": "openssl",
+      "version": "3.6.5-1",
+      "size": 5695998,
+      "installed_size": 12282691,
+      "sha256": "4d21adc63cda86c01220839443e19cbd6d16253f3a855d9c8f3cbd5cc489b368",
+      "released": "2026-09-30"
+    },
+    {
+      "name": "p11-kit",
+      "version": "0.26.5-1",
+      "size": 269353,
+      "installed_size": 1285808,
+      "sha256": "f63e7055bc30c87d6d6da44c6d3d39f88ad928af3e0ecf1647aab8246ac6d56c",
+      "released": "2026-08-20"
+    },
+    {
+      "name": "pacman",
+      "version": "7.1.0.r9.g54d9411-2.1",
+      "size": 996810,
+      "installed_size": 5227123,
+      "sha256": "dc57e74472de7c091a4a1c5c99e91c72faac6b7ceb68c6519e2688d4643ce0c7",
+      "released": "2026-09-10"
+    },
+    {
+      "name": "pacman-mirrorlist",
+      "version": "20230111-1",
+      "size": 2308,
+      "installed_size": 493,
+      "sha256": "cddc44f9095a23fea8f095564e3755f0b73498dc2a90c3ce5dc746a9e3791fb7",
+      "released": "2023-01-10"
+    },
+    {
+      "name": "pam",
+      "version": "1.7.3-1",
+      "size": 625700,
+      "installed_size": 2807323,
+      "sha256": "985f2f7afd8374ff339f0d313d2cc7cfdc0a004f365cd172c6d2336836bca4db",
+      "released": "2026-09-30"
+    },
+    {
+      "name": "pambase",
+      "version": "20260616-1",
+      "size": 3395,
+      "installed_size": 2794,
+      "sha256": "5346b73e642926ea7aa3d7a5e18da4d70a7830196cf5ef37dad0f29b600db1e3",
+      "released": "2026-06-17"
+    },
+    {
+      "name": "pciutils",
+      "version": "3.15.0-1",
+      "size": 155411,
+      "installed_size": 399344,
+      "sha256": "d5f5d7460b362affc3c1de0ab586645630df5584122921f37ee54ba3516e09f2",
+      "released": "2026-04-18"
+    },
+    {
+      "name": "pcre2",
+      "version": "10.49-1",
+      "size": 3787240,
+      "installed_size": 28703320,
+      "sha256": "a546b69ca2c20d048686469d3974b8b7c20ac8d20581037a96d4dd5dc076f30e",
+      "released": "2026-09-30"
+    },
+    {
+      "name": "pinentry",
+      "version": "1.3.3-1",
+      "size": 175812,
+      "installed_size": 654915,
+      "sha256": "8552f70e7c21f8daf5ab09af9be0ba0ba6fe6346d42f330f86a5acbbf0fc56e4",
+      "released": "2026-07-09"
+    },
+    {
+      "name": "popt",
+      "version": "1.19-2",
+      "size": 123055,
+      "installed_size": 625428,
+      "sha256": "a759657ba31eb4c44e7cec828c174f71a64dda693d4e7bf062384eec79dd1f4e",
+      "released": "2024-09-08"
+    },
+    {
+      "name": "procps-ng",
+      "version": "4.0.7-1",
+      "size": 1044775,
+      "installed_size": 2686963,
+      "sha256": "8f077336041aec1f3253eeb3b28cda84f2902053cdb849d246539532f4e08b47",
+      "released": "2026-08-15"
+    },
+    {
+      "name": "psmisc",
+      "version": "23.7-2",
+      "size": 264701,
+      "installed_size": 756777,
+      "sha256": "89fd84fe2906822323ab94f71dd370750bfdcbae036d9ee855a3cf6079d789a4",
+      "released": "2026-04-15"
+    },
+    {
+      "name": "readline",
+      "version": "8.3.6-1",
+      "size": 430988,
+      "installed_size": 1565009,
+      "sha256": "104f0a5fa64e1a25d889e2d67b7952754ccb2e7a2c110611616af62c3e9368dd",
+      "released": "2026-09-20"
+    },
+    {
+      "name": "sed",
+      "version": "4.10-2",
+      "size": 256383,
+      "installed_size": 782441,
+      "sha256": "8551d0e61a8561fa15513b3b18822c842c3c0a6b7fe05aa2814b11e051dd3eac",
+      "released": "2026-08-15"
+    },
+    {
+      "name": "shadow",
+      "version": "4.20.0.arch1-1",
+      "size": 1251445,
+      "installed_size": 3715749,
+      "sha256": "dac6584270df78c856e7c2b24b241ce85552bd2042f1ad2ddfcadfc2cb0d9731",
+      "released": "2026-08-21"
+    },
+    {
+      "name": "sqlite",
+      "version": "3.54.0-1",
+      "size": 2673083,
+      "installed_size": 15536253,
+      "sha256": "718acd3e0ce31a781a1439da2056d38667fab9cc0655ae73c9d49ba106366c3d",
+      "released": "2026-10-13"
+    },
+    {
+      "name": "systemd",
+      "version": "262-1",
+      "size": 11085830,
+      "installed_size": 40572119,
+      "sha256": "11719b3b9ba2beb5e7bce466b0ecd0b44b3796226c871be53d44845a77d33ad8",
+      "released": "2026-09-24"
+    },
+    {
+      "name": "systemd-libs",
+      "version": "262-1",
+      "size": 1518344,
+      "installed_size": 3616852,
+      "sha256": "a126733972310cef2bda6c4a8d4c520a6acbe0116250e7a997c02b4424c01399",
+      "released": "2026-09-24"
+    },
+    {
+      "name": "systemd-sysvcompat",
+      "version": "262-1",
+      "size": 6683,
+      "installed_size": 2910,
+      "sha256": "c0b76607c26ecf8f2dfcb53dc4e701cfa23d6ae3565855e87d4e7fe02220d471",
+      "released": "2026-09-24"
+    },
+    {
+      "name": "tar",
+      "version": "1.35-5",
+      "size": 787006,
+      "installed_size": 2895178,
+      "sha256": "fcdf3f34f90484173d830ad1d124552c863258f063c3fb45db0be163cec82849",
+      "released": "2026-08-22"
+    },
+    {
+      "name": "tpm2-tss",
+      "version": "4.2.0-2",
+      "size": 1102912,
+      "installed_size": 3751143,
+      "sha256": "f259ab2687ce66b7bb98f7b9d7770f631c41abb558d97b2d5dd795a9b6dc39f7",
+      "released": "2026-08-15"
+    },
+    {
+      "name": "tzdata",
+      "version": "2026e-1",
+      "size": 314293,
+      "installed_size": 1722290,
+      "sha256": "be81441f559e9b50f865fad1f038ea8c7f5fcfef73a26a1df4dfccc207fe08a8",
+      "released": "2026-10-01"
+    },
+    {
+      "name": "util-linux",
+      "version": "2.42.4-1",
+      "size": 6751342,
+      "installed_size": 20470681,
+      "sha256": "efaf04b4f3e2426cb847c4b54235735c13ea5d857793a6b8da2bade60854173a",
+      "released": "2026-09-24"
+    },
+    {
+      "name": "util-linux-libs",
+      "version": "2.42.4-1",
+      "size": 589525,
+      "installed_size": 1466995,
+      "sha256": "bbcdfd376fc2df210d05fb08f2a17f2ed57bfbc6e0968a650f0838334fed484a",
+      "released": "2026-09-24"
+    },
+    {
+      "name": "xz",
+      "version": "5.8.4-1",
+      "size": 863950,
+      "installed_size": 2965409,
+      "sha256": "53943d3c62bea3fc5076e32dd4566ff9952f8924504925561e46e2903a1b127c",
+      "released": "2026-09-11"
+    },
+    {
+      "name": "zlib",
+      "version": "1:1.3.2-4",
+      "size": 83953,
+      "installed_size": 212100,
+      "sha256": "8d22fec45418f949bfb52b53aed30a14239c6c26bcd0cbff916fce67ca16f862",
+      "released": "2026-10-15"
+    },
+    {
+      "name": "zstd",
+      "version": "1.5.7-3",
+      "size": 629829,
+      "installed_size": 1667909,
+      "sha256": "b27fc5bd334efe85c76d6fd23cb43e3ef5d11fbc129fff781f3e3b466b2d3704",
+      "released": "2026-03-03"
+    }
+  ],
+  "package_count": 135
+}

@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="406" viewBox="0 0 760 406" role="img" aria-labelledby="title desc">
+<title id="title">Image age</title>
+<desc id="desc">Time since each image was built, from the created label of the image on GHCR, against the build interval. A bar past the stale limit is cut at the end of the scale.</desc>
+<style>.bg{fill:#fcfcfb;stroke:rgba(11,11,11,.10)}text{font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif}.tt{font-size:16px;font-weight:600;fill:#0b0b0b}.hd{font-size:30px;font-weight:600;fill:#0b0b0b}.sub{font-size:13px;fill:#52514e}.lb{font-size:12px;fill:#0b0b0b}.gr{font-size:12px;font-weight:600;fill:#52514e;paint-order:stroke;stroke:#fcfcfb;stroke-width:5px;stroke-linejoin:round}.vl{font-size:12px;fill:#0b0b0b;font-variant-numeric:tabular-nums}.mu{fill:#6f6e69}.lg{font-size:12px;fill:#52514e}.tk{font-size:11px;fill:#6f6e69;font-variant-numeric:tabular-nums}.ax{font-size:12px;fill:#52514e}.note{font-size:13px;fill:#6f6e69}.grid{stroke:#e9e8e3;stroke-width:1}.base{stroke:#c3c2b7;stroke-width:1}.ref{stroke:#7d7b75;stroke-width:1;stroke-dasharray:4 3}.lead{stroke:#c3c2b7;stroke-width:1;fill:none}.track{fill:#ebeae5}.ring{stroke:#fcfcfb;stroke-width:2}.cut{stroke:#fcfcfb;stroke-width:2}.line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}.hollow{fill:none;stroke:#898781;stroke-width:1.5}.cell{fill:#f1f0ec}.s1{fill:#2a78d6}.l1{stroke:#2a78d6}.s2{fill:#eb6834}.l2{stroke:#eb6834}.s3{fill:#1baf7a}.l3{stroke:#1baf7a}.s4{fill:#eda100}.l4{stroke:#eda100}.s5{fill:#e87ba4}.l5{stroke:#e87ba4}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#4a3aa7}.l7{stroke:#4a3aa7}.s8{fill:#e34948}.l8{stroke:#e34948}.s0{fill:#a3a29c}.l0{stroke:#a3a29c}.st-good{fill:#0ca30c}.st-warning{fill:#fab219}.st-critical{fill:#d03b3b}.st-none{fill:#898781}.st-unknown{fill:#898781}@media (prefers-color-scheme:dark){.bg{fill:#1a1a19;stroke:rgba(255,255,255,.10)}.tt,.hd,.lb,.vl{fill:#ffffff}.sub,.gr,.ax,.lg{fill:#c3c2b7}.tk,.note,.mu{fill:#9a9890}.grid{stroke:#2a2a28}.base,.lead{stroke:#3d3d3a}.ref{stroke:#9a9890}.track{fill:#2e2e2c}.cell{fill:#232322}.ring,.cut,.gr{stroke:#1a1a19}.s1{fill:#3987e5}.l1{stroke:#3987e5}.s2{fill:#d95926}.l2{stroke:#d95926}.s3{fill:#199e70}.l3{stroke:#199e70}.s4{fill:#c98500}.l4{stroke:#c98500}.s5{fill:#d55181}.l5{stroke:#d55181}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#9085e9}.l7{stroke:#9085e9}.s8{fill:#e66767}.l8{stroke:#e66767}.s0{fill:#6b6a65}.l0{stroke:#6b6a65}}</style>
+<rect class="bg" x="0.5" y="0.5" width="759" height="405" rx="12"/>
+<text x="24.0" y="40.0" class="tt">Image age</text>
+<text x="24.0" y="82.0" class="hd">7.8 h</text>
+<text x="111.8" y="79.0" class="sub">oldest image. The build runs every 1 d. 8 of 8 images are current.</text>
+<circle cx="29.0" cy="108.0" r="5.0" class="st-good"/>
+<text x="40.0" y="112.0" class="lg">current, 2 d or less</text>
+<path d="M175.8 102.4l5.6 9.6h-11.2z" class="st-warning"/>
+<text x="186.8" y="112.0" class="lg">late</text>
+<path d="M232.8 103.0l5.0 5.0 -5.0 5.0 -5.0 -5.0z" class="st-critical"/>
+<text x="243.8" y="112.0" class="lg">stale, over 3 d</text>
+<circle cx="350.1" cy="108.0" r="4.2" class="hollow"/>
+<text x="361.1" y="112.0" class="lg">not read</text>
+<path d="M94.0 152.0V346.0" class="base"/>
+<text x="94.0" y="362.0" class="tk" text-anchor="middle">0</text>
+<path d="M200.6 152.0V346.0" class="grid"/>
+<text x="200.6" y="362.0" class="tk" text-anchor="middle">12 h</text>
+<path d="M307.2 152.0V346.0" class="grid"/>
+<text x="307.2" y="362.0" class="tk" text-anchor="middle">1 d</text>
+<path d="M413.8 152.0V346.0" class="grid"/>
+<text x="413.8" y="362.0" class="tk" text-anchor="middle">36 h</text>
+<path d="M520.4 152.0V346.0" class="grid"/>
+<text x="520.4" y="362.0" class="tk" text-anchor="middle">2 d</text>
+<path d="M627.0 152.0V346.0" class="grid"/>
+<text x="627.0" y="362.0" class="tk" text-anchor="middle">60 h</text>
+<path d="M307.2 144.0V346.0" class="ref"/>
+<text x="311.2" y="148.0" class="tk">built every 1 d</text>
+<text x="32.0" y="162.0" class="lb">amd64</text>
+<g><title>amd64: built 2026-10-17T09:30:42Z, 7.8 h before the measurement, current</title><path d="M94.0 152.0h65.2a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-65.2z" class="st-good"/><rect x="94.0" y="146.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="644.0" cy="158.0" r="5.0" class="st-good"/>
+<text x="655.0" y="162.0" class="vl">7.8 h<tspan class="mu" dx="8">current</tspan></text>
+<text x="32.0" y="186.0" class="lb">arm64</text>
+<g><title>arm64: built 2026-10-17T09:30:42Z, 7.8 h before the measurement, current</title><path d="M94.0 176.0h65.2a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-65.2z" class="st-good"/><rect x="94.0" y="170.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="644.0" cy="182.0" r="5.0" class="st-good"/>
+<text x="655.0" y="186.0" class="vl">7.8 h<tspan class="mu" dx="8">current</tspan></text>
+<text x="32.0" y="210.0" class="lb">armv7</text>
+<g><title>armv7: built 2026-10-17T09:30:42Z, 7.8 h before the measurement, current</title><path d="M94.0 200.0h65.2a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-65.2z" class="st-good"/><rect x="94.0" y="194.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="644.0" cy="206.0" r="5.0" class="st-good"/>
+<text x="655.0" y="210.0" class="vl">7.8 h<tspan class="mu" dx="8">current</tspan></text>
+<text x="32.0" y="234.0" class="lb">loong64</text>
+<g><title>loong64: built 2026-10-17T09:30:42Z, 7.8 h before the measurement, current</title><path d="M94.0 224.0h65.2a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-65.2z" class="st-good"/><rect x="94.0" y="218.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="644.0" cy="230.0" r="5.0" class="st-good"/>
+<text x="655.0" y="234.0" class="vl">7.8 h<tspan class="mu" dx="8">current</tspan></text>
+<text x="32.0" y="258.0" class="lb">ppc</text>
+<g><title>ppc: built 2026-10-17T09:30:42Z, 7.8 h before the measurement, current</title><path d="M94.0 248.0h65.2a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-65.2z" class="st-good"/><rect x="94.0" y="242.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="644.0" cy="254.0" r="5.0" class="st-good"/>
+<text x="655.0" y="258.0" class="vl">7.8 h<tspan class="mu" dx="8">current</tspan></text>
+<text x="32.0" y="282.0" class="lb">ppc64</text>
+<g><title>ppc64: built 2026-10-17T09:30:42Z, 7.8 h before the measurement, current</title><path d="M94.0 272.0h65.2a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-65.2z" class="st-good"/><rect x="94.0" y="266.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="644.0" cy="278.0" r="5.0" class="st-good"/>
+<text x="655.0" y="282.0" class="vl">7.8 h<tspan class="mu" dx="8">current</tspan></text>
+<text x="32.0" y="306.0" class="lb">ppc64le</text>
+<g><title>ppc64le: built 2026-10-17T09:30:42Z, 7.8 h before the measurement, current</title><path d="M94.0 296.0h65.2a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-65.2z" class="st-good"/><rect x="94.0" y="290.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="644.0" cy="302.0" r="5.0" class="st-good"/>
+<text x="655.0" y="306.0" class="vl">7.8 h<tspan class="mu" dx="8">current</tspan></text>
+<text x="32.0" y="330.0" class="lb">riscv64</text>
+<g><title>riscv64: built 2026-10-17T09:30:42Z, 7.8 h before the measurement, current</title><path d="M94.0 320.0h65.2a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-65.2z" class="st-good"/><rect x="94.0" y="314.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="644.0" cy="326.0" r="5.0" class="st-good"/>
+<text x="655.0" y="330.0" class="vl">7.8 h<tspan class="mu" dx="8">current</tspan></text>
+<text x="360.5" y="384.0" class="ax" text-anchor="middle">Time since the image was built</text>
+</svg>
