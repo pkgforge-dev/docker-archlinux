@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="446" viewBox="0 0 420 446" role="img" aria-labelledby="title desc">
+<title id="title">Image size</title>
+<desc id="desc">Compressed size of each image on GHCR, the sum of its layers, and the installed size of its packages from the evidence of the build.</desc>
+<style>.bg{fill:#fcfcfb;stroke:rgba(11,11,11,.10)}text{font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif}.tt{font-size:16px;font-weight:600;fill:#0b0b0b}.hd{font-size:30px;font-weight:600;fill:#0b0b0b}.sub{font-size:13px;fill:#52514e}.lb{font-size:12px;fill:#0b0b0b}.gr{font-size:12px;font-weight:600;fill:#52514e;paint-order:stroke;stroke:#fcfcfb;stroke-width:5px;stroke-linejoin:round}.vl{font-size:12px;fill:#0b0b0b;font-variant-numeric:tabular-nums}.mu{fill:#6f6e69}.lg{font-size:12px;fill:#52514e}.tk{font-size:11px;fill:#6f6e69;font-variant-numeric:tabular-nums}.ax{font-size:12px;fill:#52514e}.note{font-size:13px;fill:#6f6e69}.grid{stroke:#e9e8e3;stroke-width:1}.base{stroke:#c3c2b7;stroke-width:1}.ref{stroke:#7d7b75;stroke-width:1;stroke-dasharray:4 3}.lead{stroke:#c3c2b7;stroke-width:1;fill:none}.track{fill:#ebeae5}.ring{stroke:#fcfcfb;stroke-width:2}.cut{stroke:#fcfcfb;stroke-width:2}.line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}.hollow{fill:none;stroke:#898781;stroke-width:1.5}.cell{fill:#f1f0ec}.s1{fill:#2a78d6}.l1{stroke:#2a78d6}.s2{fill:#eb6834}.l2{stroke:#eb6834}.s3{fill:#1baf7a}.l3{stroke:#1baf7a}.s4{fill:#eda100}.l4{stroke:#eda100}.s5{fill:#e87ba4}.l5{stroke:#e87ba4}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#4a3aa7}.l7{stroke:#4a3aa7}.s8{fill:#e34948}.l8{stroke:#e34948}.s0{fill:#a3a29c}.l0{stroke:#a3a29c}.st-good{fill:#0ca30c}.st-warning{fill:#fab219}.st-critical{fill:#d03b3b}.st-none{fill:#898781}.st-unknown{fill:#898781}@media (prefers-color-scheme:dark){.bg{fill:#1a1a19;stroke:rgba(255,255,255,.10)}.tt,.hd,.lb,.vl{fill:#ffffff}.sub,.gr,.ax,.lg{fill:#c3c2b7}.tk,.note,.mu{fill:#9a9890}.grid{stroke:#2a2a28}.base,.lead{stroke:#3d3d3a}.ref{stroke:#9a9890}.track{fill:#2e2e2c}.cell{fill:#232322}.ring,.cut,.gr{stroke:#1a1a19}.s1{fill:#3987e5}.l1{stroke:#3987e5}.s2{fill:#d95926}.l2{stroke:#d95926}.s3{fill:#199e70}.l3{stroke:#199e70}.s4{fill:#c98500}.l4{stroke:#c98500}.s5{fill:#d55181}.l5{stroke:#d55181}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#9085e9}.l7{stroke:#9085e9}.s8{fill:#e66767}.l8{stroke:#e66767}.s0{fill:#6b6a65}.l0{stroke:#6b6a65}}</style>
+<rect class="bg" x="0.5" y="0.5" width="419" height="445" rx="12"/>
+<text x="24.0" y="40.0" class="tt">Image size</text>
+<text x="24.0" y="82.0" class="hd">1.5 GiB</text>
+<text x="24.0" y="101.0" class="sub">compressed, all images together. The grey part of a bar</text>
+<text x="24.0" y="120.0" class="sub">runs to the installed size of the packages.</text>
+<rect x="24.0" y="141.0" width="10" height="10" rx="2" class="s1"/>
+<text x="40.0" y="150.0" class="lg">amd64</text>
+<rect x="95.2" y="141.0" width="10" height="10" rx="2" class="s2"/>
+<text x="111.2" y="150.0" class="lg">arm64</text>
+<rect x="166.4" y="141.0" width="10" height="10" rx="2" class="s3"/>
+<text x="182.4" y="150.0" class="lg">armv7</text>
+<rect x="237.1" y="141.0" width="10" height="10" rx="2" class="s4"/>
+<text x="253.1" y="150.0" class="lg">loong64</text>
+<rect x="314.6" y="141.0" width="10" height="10" rx="2" class="s5"/>
+<text x="330.6" y="150.0" class="lg">ppc</text>
+<rect x="24.0" y="161.0" width="10" height="10" rx="2" class="s6"/>
+<text x="40.0" y="170.0" class="lg">ppc64</text>
+<rect x="91.4" y="161.0" width="10" height="10" rx="2" class="s7"/>
+<text x="107.4" y="170.0" class="lg">ppc64le</text>
+<rect x="168.8" y="161.0" width="10" height="10" rx="2" class="s8"/>
+<text x="184.8" y="170.0" class="lg">riscv64</text>
+<rect x="246.2" y="161.0" width="10" height="10" rx="2" class="track"/>
+<text x="262.2" y="170.0" class="lg">installed</text>
+<path d="M94.0 192.0V386.0" class="base"/>
+<text x="94.0" y="402.0" class="tk" text-anchor="middle">0</text>
+<path d="M176.3 192.0V386.0" class="grid"/>
+<text x="176.3" y="402.0" class="tk" text-anchor="middle">250</text>
+<path d="M258.7 192.0V386.0" class="grid"/>
+<text x="258.7" y="402.0" class="tk" text-anchor="middle">500</text>
+<path d="M341.0 192.0V386.0" class="grid"/>
+<text x="341.0" y="402.0" class="tk" text-anchor="middle">750</text>
+<text x="32.0" y="202.0" class="lb">amd64</text>
+<g><title>amd64: 187 MiB compressed, 514 MiB installed</title><path d="M94.0 192.0h61.5v12.0h-61.5z" class="s1"/><path d="M157.5 192.0h101.9a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-101.9z" class="track"/><rect x="94.0" y="186.0" width="302.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="271.4" y="202.0" class="vl">187 MiB</text>
+<text x="32.0" y="226.0" class="lb">arm64</text>
+<g><title>arm64: 193 MiB compressed, 596 MiB installed</title><path d="M94.0 216.0h63.5v12.0h-63.5z" class="s2"/><path d="M159.5 216.0h127.0a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-127.0z" class="track"/><rect x="94.0" y="210.0" width="302.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="298.5" y="226.0" class="vl">193 MiB</text>
+<text x="32.0" y="250.0" class="lb">armv7</text>
+<g><title>armv7: 181 MiB compressed, 476 MiB installed</title><path d="M94.0 240.0h59.6v12.0h-59.6z" class="s3"/><path d="M155.6 240.0h91.1a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-91.1z" class="track"/><rect x="94.0" y="234.0" width="302.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="258.7" y="250.0" class="vl">181 MiB</text>
+<text x="32.0" y="274.0" class="lb">loong64</text>
+<g><title>loong64: 197 MiB compressed, 646 MiB installed</title><path d="M94.0 264.0h65.0v12.0h-65.0z" class="s4"/><path d="M161.0 264.0h141.6a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-141.6z" class="track"/><rect x="94.0" y="258.0" width="302.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="314.7" y="274.0" class="vl">197 MiB</text>
+<text x="32.0" y="298.0" class="lb">ppc</text>
+<g><title>ppc: 185 MiB compressed, 562 MiB installed</title><path d="M94.0 288.0h60.9v12.0h-60.9z" class="s5"/><path d="M156.9 288.0h118.2a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-118.2z" class="track"/><rect x="94.0" y="282.0" width="302.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="287.1" y="298.0" class="vl">185 MiB</text>
+<text x="32.0" y="322.0" class="lb">ppc64</text>
+<g><title>ppc64: 187 MiB compressed, 583 MiB installed</title><path d="M94.0 312.0h61.6v12.0h-61.6z" class="s6"/><path d="M157.6 312.0h124.2a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-124.2z" class="track"/><rect x="94.0" y="306.0" width="302.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="293.9" y="322.0" class="vl">187 MiB</text>
+<text x="32.0" y="346.0" class="lb">ppc64le</text>
+<g><title>ppc64le: 193 MiB compressed, 605 MiB installed</title><path d="M94.0 336.0h63.6v12.0h-63.6z" class="s7"/><path d="M159.6 336.0h129.8a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-129.8z" class="track"/><rect x="94.0" y="330.0" width="302.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="301.3" y="346.0" class="vl">193 MiB</text>
+<text x="32.0" y="370.0" class="lb">riscv64</text>
+<g><title>riscv64: 211 MiB compressed, 640 MiB installed</title><path d="M94.0 360.0h69.6v12.0h-69.6z" class="s8"/><path d="M165.6 360.0h135.2a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-135.2z" class="track"/><rect x="94.0" y="354.0" width="302.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="312.8" y="370.0" class="vl">211 MiB</text>
+<text x="217.5" y="424.0" class="ax" text-anchor="middle">MiB; compressed, then installed</text>
+</svg>

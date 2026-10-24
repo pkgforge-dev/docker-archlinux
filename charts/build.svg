@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="408" viewBox="0 0 760 408" role="img" aria-labelledby="title desc">
+<title id="title">Last build</title>
+<desc id="desc">Job time of the newest Build job of each port in build-deploy.yml, with its result.</desc>
+<style>.bg{fill:#fcfcfb;stroke:rgba(11,11,11,.10)}text{font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif}.tt{font-size:16px;font-weight:600;fill:#0b0b0b}.hd{font-size:30px;font-weight:600;fill:#0b0b0b}.sub{font-size:13px;fill:#52514e}.lb{font-size:12px;fill:#0b0b0b}.gr{font-size:12px;font-weight:600;fill:#52514e;paint-order:stroke;stroke:#fcfcfb;stroke-width:5px;stroke-linejoin:round}.vl{font-size:12px;fill:#0b0b0b;font-variant-numeric:tabular-nums}.mu{fill:#6f6e69}.lg{font-size:12px;fill:#52514e}.tk{font-size:11px;fill:#6f6e69;font-variant-numeric:tabular-nums}.ax{font-size:12px;fill:#52514e}.note{font-size:13px;fill:#6f6e69}.grid{stroke:#e9e8e3;stroke-width:1}.base{stroke:#c3c2b7;stroke-width:1}.ref{stroke:#7d7b75;stroke-width:1;stroke-dasharray:4 3}.lead{stroke:#c3c2b7;stroke-width:1;fill:none}.track{fill:#ebeae5}.ring{stroke:#fcfcfb;stroke-width:2}.cut{stroke:#fcfcfb;stroke-width:2}.line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}.hollow{fill:none;stroke:#898781;stroke-width:1.5}.cell{fill:#f1f0ec}.s1{fill:#2a78d6}.l1{stroke:#2a78d6}.s2{fill:#eb6834}.l2{stroke:#eb6834}.s3{fill:#1baf7a}.l3{stroke:#1baf7a}.s4{fill:#eda100}.l4{stroke:#eda100}.s5{fill:#e87ba4}.l5{stroke:#e87ba4}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#4a3aa7}.l7{stroke:#4a3aa7}.s8{fill:#e34948}.l8{stroke:#e34948}.s0{fill:#a3a29c}.l0{stroke:#a3a29c}.st-good{fill:#0ca30c}.st-warning{fill:#fab219}.st-critical{fill:#d03b3b}.st-none{fill:#898781}.st-unknown{fill:#898781}@media (prefers-color-scheme:dark){.bg{fill:#1a1a19;stroke:rgba(255,255,255,.10)}.tt,.hd,.lb,.vl{fill:#ffffff}.sub,.gr,.ax,.lg{fill:#c3c2b7}.tk,.note,.mu{fill:#9a9890}.grid{stroke:#2a2a28}.base,.lead{stroke:#3d3d3a}.ref{stroke:#9a9890}.track{fill:#2e2e2c}.cell{fill:#232322}.ring,.cut,.gr{stroke:#1a1a19}.s1{fill:#3987e5}.l1{stroke:#3987e5}.s2{fill:#d95926}.l2{stroke:#d95926}.s3{fill:#199e70}.l3{stroke:#199e70}.s4{fill:#c98500}.l4{stroke:#c98500}.s5{fill:#d55181}.l5{stroke:#d55181}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#9085e9}.l7{stroke:#9085e9}.s8{fill:#e66767}.l8{stroke:#e66767}.s0{fill:#6b6a65}.l0{stroke:#6b6a65}}</style>
+<rect class="bg" x="0.5" y="0.5" width="759" height="407" rx="12"/>
+<text x="24.0" y="40.0" class="tt">Last build</text>
+<text x="24.0" y="82.0" class="hd">8 of 8</text>
+<text x="129.2" y="79.0" class="sub">passed, in the newest run of each port.</text>
+<rect x="24.0" y="103.0" width="10" height="10" rx="2" class="s1"/>
+<text x="40.0" y="112.0" class="lg">amd64</text>
+<rect x="95.2" y="103.0" width="10" height="10" rx="2" class="s2"/>
+<text x="111.2" y="112.0" class="lg">arm64</text>
+<rect x="166.4" y="103.0" width="10" height="10" rx="2" class="s3"/>
+<text x="182.4" y="112.0" class="lg">armv7</text>
+<rect x="237.1" y="103.0" width="10" height="10" rx="2" class="s4"/>
+<text x="253.1" y="112.0" class="lg">loong64</text>
+<rect x="314.6" y="103.0" width="10" height="10" rx="2" class="s5"/>
+<text x="330.6" y="112.0" class="lg">ppc</text>
+<rect x="368.0" y="103.0" width="10" height="10" rx="2" class="s6"/>
+<text x="384.0" y="112.0" class="lg">ppc64</text>
+<rect x="435.4" y="103.0" width="10" height="10" rx="2" class="s7"/>
+<text x="451.4" y="112.0" class="lg">ppc64le</text>
+<rect x="512.8" y="103.0" width="10" height="10" rx="2" class="s8"/>
+<text x="528.8" y="112.0" class="lg">riscv64</text>
+<circle cx="595.2" cy="108.0" r="5.0" class="st-good"/>
+<text x="606.2" y="112.0" class="lg">passed</text>
+<path d="M668.1 103.0l5.0 5.0 -5.0 5.0 -5.0 -5.0z" class="st-critical"/>
+<text x="679.1" y="112.0" class="lg">failed</text>
+<path d="M29.0 122.4l5.6 9.6h-11.2z" class="st-warning"/>
+<text x="40.0" y="132.0" class="lg">cancelled</text>
+<path d="M94.0 154.0V348.0" class="base"/>
+<text x="94.0" y="364.0" class="tk" text-anchor="middle">0</text>
+<path d="M228.0 154.0V348.0" class="grid"/>
+<text x="228.0" y="364.0" class="tk" text-anchor="middle">2</text>
+<path d="M362.1 154.0V348.0" class="grid"/>
+<text x="362.1" y="364.0" class="tk" text-anchor="middle">4</text>
+<path d="M496.1 154.0V348.0" class="grid"/>
+<text x="496.1" y="364.0" class="tk" text-anchor="middle">6</text>
+<path d="M630.2 154.0V348.0" class="grid"/>
+<text x="630.2" y="364.0" class="tk" text-anchor="middle">8</text>
+<text x="32.0" y="164.0" class="lb">amd64</text>
+<g><title>amd64: passed, 3 min, started 2026-10-24T09:38:45Z</title><path d="M94.0 154.0h228.3a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-228.3z" class="s1"/><rect x="94.0" y="148.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="339.3" cy="160.0" r="5.0" class="st-good"/>
+<text x="350.3" y="164.0" class="vl">3 min<tspan class="mu" dx="8">passed</tspan></text>
+<text x="32.0" y="188.0" class="lb">arm64</text>
+<g><title>arm64: passed, 5 min, started 2026-10-24T09:38:45Z</title><path d="M94.0 178.0h307.6a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-307.6z" class="s2"/><rect x="94.0" y="172.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="418.6" cy="184.0" r="5.0" class="st-good"/>
+<text x="429.6" y="188.0" class="vl">5 min<tspan class="mu" dx="8">passed</tspan></text>
+<text x="32.0" y="212.0" class="lb">armv7</text>
+<g><title>armv7: passed, 5 min, started 2026-10-24T09:38:45Z</title><path d="M94.0 202.0h316.6a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-316.6z" class="s3"/><rect x="94.0" y="196.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="427.6" cy="208.0" r="5.0" class="st-good"/>
+<text x="438.6" y="212.0" class="vl">5 min<tspan class="mu" dx="8">passed</tspan></text>
+<text x="32.0" y="236.0" class="lb">loong64</text>
+<g><title>loong64: passed, 4 min, started 2026-10-24T09:38:45Z</title><path d="M94.0 226.0h260.7a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-260.7z" class="s4"/><rect x="94.0" y="220.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="371.7" cy="232.0" r="5.0" class="st-good"/>
+<text x="382.7" y="236.0" class="vl">4 min<tspan class="mu" dx="8">passed</tspan></text>
+<text x="32.0" y="260.0" class="lb">ppc</text>
+<g><title>ppc: passed, 4 min, started 2026-10-24T09:38:45Z</title><path d="M94.0 250.0h258.5a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-258.5z" class="s5"/><rect x="94.0" y="244.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="369.5" cy="256.0" r="5.0" class="st-good"/>
+<text x="380.5" y="260.0" class="vl">4 min<tspan class="mu" dx="8">passed</tspan></text>
+<text x="32.0" y="284.0" class="lb">ppc64</text>
+<g><title>ppc64: passed, 5 min, started 2026-10-24T09:38:45Z</title><path d="M94.0 274.0h303.2a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-303.2z" class="s6"/><rect x="94.0" y="268.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="414.2" cy="280.0" r="5.0" class="st-good"/>
+<text x="425.2" y="284.0" class="vl">5 min<tspan class="mu" dx="8">passed</tspan></text>
+<text x="32.0" y="308.0" class="lb">ppc64le</text>
+<g><title>ppc64le: passed, 4 min, started 2026-10-24T09:38:45Z</title><path d="M94.0 298.0h288.7a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-288.7z" class="s7"/><rect x="94.0" y="292.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="399.7" cy="304.0" r="5.0" class="st-good"/>
+<text x="410.7" y="308.0" class="vl">4 min<tspan class="mu" dx="8">passed</tspan></text>
+<text x="32.0" y="332.0" class="lb">riscv64</text>
+<g><title>riscv64: passed, 7 min, started 2026-10-24T09:38:45Z</title><path d="M94.0 322.0h476.3a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-476.3z" class="s8"/><rect x="94.0" y="316.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<circle cx="587.3" cy="328.0" r="5.0" class="st-good"/>
+<text x="598.3" y="332.0" class="vl">7 min<tspan class="mu" dx="8">passed</tspan></text>
+<text x="362.1" y="386.0" class="ax" text-anchor="middle">Minutes, the job Build &lt;arch&gt;</text>
+</svg>

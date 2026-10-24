@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="432" viewBox="0 0 760 432" role="img" aria-labelledby="title desc">
+<title id="title">Tags on both registries</title>
+<desc id="desc">Tags per port on GHCR, and how many of them Docker Hub carries: a rolling tag with the same digest, a pinned tag at all.</desc>
+<style>.bg{fill:#fcfcfb;stroke:rgba(11,11,11,.10)}text{font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif}.tt{font-size:16px;font-weight:600;fill:#0b0b0b}.hd{font-size:30px;font-weight:600;fill:#0b0b0b}.sub{font-size:13px;fill:#52514e}.lb{font-size:12px;fill:#0b0b0b}.gr{font-size:12px;font-weight:600;fill:#52514e;paint-order:stroke;stroke:#fcfcfb;stroke-width:5px;stroke-linejoin:round}.vl{font-size:12px;fill:#0b0b0b;font-variant-numeric:tabular-nums}.mu{fill:#6f6e69}.lg{font-size:12px;fill:#52514e}.tk{font-size:11px;fill:#6f6e69;font-variant-numeric:tabular-nums}.ax{font-size:12px;fill:#52514e}.note{font-size:13px;fill:#6f6e69}.grid{stroke:#e9e8e3;stroke-width:1}.base{stroke:#c3c2b7;stroke-width:1}.ref{stroke:#7d7b75;stroke-width:1;stroke-dasharray:4 3}.lead{stroke:#c3c2b7;stroke-width:1;fill:none}.track{fill:#ebeae5}.ring{stroke:#fcfcfb;stroke-width:2}.cut{stroke:#fcfcfb;stroke-width:2}.line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}.hollow{fill:none;stroke:#898781;stroke-width:1.5}.cell{fill:#f1f0ec}.s1{fill:#2a78d6}.l1{stroke:#2a78d6}.s2{fill:#eb6834}.l2{stroke:#eb6834}.s3{fill:#1baf7a}.l3{stroke:#1baf7a}.s4{fill:#eda100}.l4{stroke:#eda100}.s5{fill:#e87ba4}.l5{stroke:#e87ba4}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#4a3aa7}.l7{stroke:#4a3aa7}.s8{fill:#e34948}.l8{stroke:#e34948}.s0{fill:#a3a29c}.l0{stroke:#a3a29c}.st-good{fill:#0ca30c}.st-warning{fill:#fab219}.st-critical{fill:#d03b3b}.st-none{fill:#898781}.st-unknown{fill:#898781}@media (prefers-color-scheme:dark){.bg{fill:#1a1a19;stroke:rgba(255,255,255,.10)}.tt,.hd,.lb,.vl{fill:#ffffff}.sub,.gr,.ax,.lg{fill:#c3c2b7}.tk,.note,.mu{fill:#9a9890}.grid{stroke:#2a2a28}.base,.lead{stroke:#3d3d3a}.ref{stroke:#9a9890}.track{fill:#2e2e2c}.cell{fill:#232322}.ring,.cut,.gr{stroke:#1a1a19}.s1{fill:#3987e5}.l1{stroke:#3987e5}.s2{fill:#d95926}.l2{stroke:#d95926}.s3{fill:#199e70}.l3{stroke:#199e70}.s4{fill:#c98500}.l4{stroke:#c98500}.s5{fill:#d55181}.l5{stroke:#d55181}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#9085e9}.l7{stroke:#9085e9}.s8{fill:#e66767}.l8{stroke:#e66767}.s0{fill:#6b6a65}.l0{stroke:#6b6a65}}</style>
+<rect class="bg" x="0.5" y="0.5" width="759" height="431" rx="12"/>
+<text x="24.0" y="40.0" class="tt">Tags on both registries</text>
+<text x="24.0" y="82.0" class="hd">100%</text>
+<text x="112.5" y="79.0" class="sub">of GHCR tags are on Docker Hub. 0 rolling tag(s) differ, 0 pinned tag(s) are missing.</text>
+<rect x="24.0" y="103.0" width="10" height="10" rx="2" class="s1"/>
+<text x="40.0" y="112.0" class="lg">amd64</text>
+<rect x="95.2" y="103.0" width="10" height="10" rx="2" class="s2"/>
+<text x="111.2" y="112.0" class="lg">arm64</text>
+<rect x="166.4" y="103.0" width="10" height="10" rx="2" class="s3"/>
+<text x="182.4" y="112.0" class="lg">armv7</text>
+<rect x="237.1" y="103.0" width="10" height="10" rx="2" class="s4"/>
+<text x="253.1" y="112.0" class="lg">loong64</text>
+<rect x="314.6" y="103.0" width="10" height="10" rx="2" class="s5"/>
+<text x="330.6" y="112.0" class="lg">ppc</text>
+<rect x="368.0" y="103.0" width="10" height="10" rx="2" class="s6"/>
+<text x="384.0" y="112.0" class="lg">ppc64</text>
+<rect x="435.4" y="103.0" width="10" height="10" rx="2" class="s7"/>
+<text x="451.4" y="112.0" class="lg">ppc64le</text>
+<rect x="512.8" y="103.0" width="10" height="10" rx="2" class="s8"/>
+<text x="528.8" y="112.0" class="lg">riscv64</text>
+<rect x="590.2" y="103.0" width="10" height="10" rx="2" class="s0"/>
+<text x="606.2" y="112.0" class="lg">index</text>
+<rect x="24.0" y="123.0" width="10" height="10" rx="2" class="track"/>
+<text x="40.0" y="132.0" class="lg">on GHCR only</text>
+<path d="M94.0 154.0V372.0" class="base"/>
+<text x="94.0" y="388.0" class="tk" text-anchor="middle">0</text>
+<path d="M197.2 154.0V372.0" class="grid"/>
+<text x="197.2" y="388.0" class="tk" text-anchor="middle">50</text>
+<path d="M300.5 154.0V372.0" class="grid"/>
+<text x="300.5" y="388.0" class="tk" text-anchor="middle">100</text>
+<path d="M403.7 154.0V372.0" class="grid"/>
+<text x="403.7" y="388.0" class="tk" text-anchor="middle">150</text>
+<path d="M507.0 154.0V372.0" class="grid"/>
+<text x="507.0" y="388.0" class="tk" text-anchor="middle">200</text>
+<text x="32.0" y="164.0" class="lb">amd64</text>
+<g><title>amd64: 50 of 50 GHCR tags on Docker Hub</title><path d="M94.0 154.0h99.2a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-99.2z" class="s1"/><rect x="94.0" y="148.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="205.2" y="164.0" class="vl">50 of 50<tspan class="mu" dx="8">2 rolling, 44 dated, 4 anchor</tspan></text>
+<text x="32.0" y="188.0" class="lb">arm64</text>
+<g><title>arm64: 50 of 50 GHCR tags on Docker Hub</title><path d="M94.0 178.0h99.2a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-99.2z" class="s2"/><rect x="94.0" y="172.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="205.2" y="188.0" class="vl">50 of 50<tspan class="mu" dx="8">2 rolling, 44 dated, 4 anchor</tspan></text>
+<text x="32.0" y="212.0" class="lb">armv7</text>
+<g><title>armv7: 75 of 75 GHCR tags on Docker Hub</title><path d="M94.0 202.0h150.9a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-150.9z" class="s3"/><rect x="94.0" y="196.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="256.9" y="212.0" class="vl">75 of 75<tspan class="mu" dx="8">3 rolling, 66 dated, 6 anchor</tspan></text>
+<text x="32.0" y="236.0" class="lb">loong64</text>
+<g><title>loong64: 48 of 48 GHCR tags on Docker Hub</title><path d="M94.0 226.0h95.1a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-95.1z" class="s4"/><rect x="94.0" y="220.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="201.1" y="236.0" class="vl">48 of 48<tspan class="mu" dx="8">2 rolling, 42 dated, 4 anchor</tspan></text>
+<text x="32.0" y="260.0" class="lb">ppc</text>
+<g><title>ppc: 40 of 40 GHCR tags on Docker Hub</title><path d="M94.0 250.0h78.6a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-78.6z" class="s5"/><rect x="94.0" y="244.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="184.6" y="260.0" class="vl">40 of 40<tspan class="mu" dx="8">2 rolling, 34 dated, 4 anchor</tspan></text>
+<text x="32.0" y="284.0" class="lb">ppc64</text>
+<g><title>ppc64: 42 of 42 GHCR tags on Docker Hub</title><path d="M94.0 274.0h82.7a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-82.7z" class="s6"/><rect x="94.0" y="268.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="188.7" y="284.0" class="vl">42 of 42<tspan class="mu" dx="8">2 rolling, 36 dated, 4 anchor</tspan></text>
+<text x="32.0" y="308.0" class="lb">ppc64le</text>
+<g><title>ppc64le: 42 of 42 GHCR tags on Docker Hub</title><path d="M94.0 298.0h82.7a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-82.7z" class="s7"/><rect x="94.0" y="292.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="188.7" y="308.0" class="vl">42 of 42<tspan class="mu" dx="8">2 rolling, 36 dated, 4 anchor</tspan></text>
+<text x="32.0" y="332.0" class="lb">riscv64</text>
+<g><title>riscv64: 25 of 25 GHCR tags on Docker Hub</title><path d="M94.0 322.0h47.6a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-47.6z" class="s8"/><rect x="94.0" y="316.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="153.6" y="332.0" class="vl">25 of 25<tspan class="mu" dx="8">1 rolling, 22 dated, 2 anchor</tspan></text>
+<text x="32.0" y="356.0" class="lb">index</text>
+<g><title>index: 158 of 158 GHCR tags on Docker Hub</title><path d="M94.0 346.0h322.2a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-322.2z" class="s0"/><rect x="94.0" y="340.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="428.2" y="356.0" class="vl">158 of 158</text>
+<text x="300.5" y="410.0" class="ax" text-anchor="middle">Tags on GHCR; the coloured part is on Docker Hub</text>
+</svg>

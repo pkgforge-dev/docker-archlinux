@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="392" viewBox="0 0 420 392" role="img" aria-labelledby="title desc">
+<title id="title">Image size, last 30 days</title>
+<desc id="desc">Compressed size of each image over time. A run that could not read the size keeps the last measured size. With more than 2 days of history, one point per 6 hours.</desc>
+<style>.bg{fill:#fcfcfb;stroke:rgba(11,11,11,.10)}text{font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif}.tt{font-size:16px;font-weight:600;fill:#0b0b0b}.hd{font-size:30px;font-weight:600;fill:#0b0b0b}.sub{font-size:13px;fill:#52514e}.lb{font-size:12px;fill:#0b0b0b}.gr{font-size:12px;font-weight:600;fill:#52514e;paint-order:stroke;stroke:#fcfcfb;stroke-width:5px;stroke-linejoin:round}.vl{font-size:12px;fill:#0b0b0b;font-variant-numeric:tabular-nums}.mu{fill:#6f6e69}.lg{font-size:12px;fill:#52514e}.tk{font-size:11px;fill:#6f6e69;font-variant-numeric:tabular-nums}.ax{font-size:12px;fill:#52514e}.note{font-size:13px;fill:#6f6e69}.grid{stroke:#e9e8e3;stroke-width:1}.base{stroke:#c3c2b7;stroke-width:1}.ref{stroke:#7d7b75;stroke-width:1;stroke-dasharray:4 3}.lead{stroke:#c3c2b7;stroke-width:1;fill:none}.track{fill:#ebeae5}.ring{stroke:#fcfcfb;stroke-width:2}.cut{stroke:#fcfcfb;stroke-width:2}.line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}.hollow{fill:none;stroke:#898781;stroke-width:1.5}.cell{fill:#f1f0ec}.s1{fill:#2a78d6}.l1{stroke:#2a78d6}.s2{fill:#eb6834}.l2{stroke:#eb6834}.s3{fill:#1baf7a}.l3{stroke:#1baf7a}.s4{fill:#eda100}.l4{stroke:#eda100}.s5{fill:#e87ba4}.l5{stroke:#e87ba4}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#4a3aa7}.l7{stroke:#4a3aa7}.s8{fill:#e34948}.l8{stroke:#e34948}.s0{fill:#a3a29c}.l0{stroke:#a3a29c}.st-good{fill:#0ca30c}.st-warning{fill:#fab219}.st-critical{fill:#d03b3b}.st-none{fill:#898781}.st-unknown{fill:#898781}@media (prefers-color-scheme:dark){.bg{fill:#1a1a19;stroke:rgba(255,255,255,.10)}.tt,.hd,.lb,.vl{fill:#ffffff}.sub,.gr,.ax,.lg{fill:#c3c2b7}.tk,.note,.mu{fill:#9a9890}.grid{stroke:#2a2a28}.base,.lead{stroke:#3d3d3a}.ref{stroke:#9a9890}.track{fill:#2e2e2c}.cell{fill:#232322}.ring,.cut,.gr{stroke:#1a1a19}.s1{fill:#3987e5}.l1{stroke:#3987e5}.s2{fill:#d95926}.l2{stroke:#d95926}.s3{fill:#199e70}.l3{stroke:#199e70}.s4{fill:#c98500}.l4{stroke:#c98500}.s5{fill:#d55181}.l5{stroke:#d55181}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#9085e9}.l7{stroke:#9085e9}.s8{fill:#e66767}.l8{stroke:#e66767}.s0{fill:#6b6a65}.l0{stroke:#6b6a65}}</style>
+<rect class="bg" x="0.5" y="0.5" width="419" height="391" rx="12"/>
+<text x="24.0" y="40.0" class="tt">Image size, last 30 days</text>
+<text x="24.0" y="82.0" class="hd">211 MiB</text>
+<text x="143.9" y="64.0" class="sub">largest image now, compressed. One</text>
+<text x="143.9" y="81.0" class="sub">line per port, since Oct 16, 16:17 UTC.</text>
+<path d="M23.0 108.0h12" class="line l1"/>
+<text x="40.0" y="112.0" class="lg">amd64</text>
+<path d="M94.2 108.0h12" class="line l2"/>
+<text x="111.2" y="112.0" class="lg">arm64</text>
+<path d="M165.4 108.0h12" class="line l3"/>
+<text x="182.4" y="112.0" class="lg">armv7</text>
+<path d="M236.1 108.0h12" class="line l4"/>
+<text x="253.1" y="112.0" class="lg">loong64</text>
+<path d="M313.6 108.0h12" class="line l5"/>
+<text x="330.6" y="112.0" class="lg">ppc</text>
+<path d="M23.0 128.0h12" class="line l6"/>
+<text x="40.0" y="132.0" class="lg">ppc64</text>
+<path d="M90.4 128.0h12" class="line l7"/>
+<text x="107.4" y="132.0" class="lg">ppc64le</text>
+<path d="M167.8 128.0h12" class="line l8"/>
+<text x="184.8" y="132.0" class="lg">riscv64</text>
+<path d="M70.0 328.0H286.0" class="base"/>
+<text x="62.0" y="332.0" class="tk" text-anchor="end">0</text>
+<path d="M70.0 271.3H286.0" class="grid"/>
+<text x="62.0" y="275.3" class="tk" text-anchor="end">100</text>
+<path d="M70.0 214.7H286.0" class="grid"/>
+<text x="62.0" y="218.7" class="tk" text-anchor="end">200</text>
+<path d="M70.0 158.0H286.0" class="grid"/>
+<text x="62.0" y="162.0" class="tk" text-anchor="end">300</text>
+<path d="M134.4 328.0v4" class="base"/>
+<text x="134.4" y="346.0" class="tk" text-anchor="middle">Oct 19</text>
+<path d="M273.0 328.0v4" class="base"/>
+<text x="273.0" y="346.0" class="tk" text-anchor="middle">Oct 24</text>
+<path d="M70.1 222.2L77.6 222.2L85.5 222.2L91.5 222.2L98.9 222.2L104.8 222.2L108.0 222.2L119.8 222.2L123.6 222.2L133.6 222.2L136.0 222.2L147.3 222.2L152.5 222.2L159.4 222.2L162.6 222.2L175.8 222.2L182.1 222.2L189.8 222.2L195.6 222.2L202.0 222.2L207.6 222.2L216.9 222.2L223.4 222.2L229.8 222.2L237.5 222.2L243.5 222.2L247.1 222.2L257.3 222.2L261.0 222.2L271.1 222.2L273.9 222.2L286.0 222.2" class="line l1"><title>amd64</title></path>
+<path d="M70.1 218.8L77.6 218.8L85.5 218.8L91.5 218.8L98.9 218.8L104.8 218.8L108.0 218.8L119.8 218.8L123.6 218.8L133.6 218.8L136.0 218.8L147.3 218.8L152.5 218.8L159.4 218.8L162.6 218.8L175.8 218.8L182.1 218.8L189.8 218.8L195.6 218.8L202.0 218.8L207.6 218.8L216.9 218.8L223.4 218.8L229.8 218.8L237.5 218.8L243.5 218.8L247.1 218.8L257.3 218.8L261.0 218.8L271.1 218.8L273.9 218.8L286.0 218.8" class="line l2"><title>arm64</title></path>
+<path d="M70.1 225.5L77.6 225.5L85.5 225.5L91.5 225.5L98.9 225.5L104.8 225.5L108.0 225.5L119.8 225.5L123.6 225.5L133.6 225.5L136.0 225.5L147.3 225.5L152.5 225.5L159.4 225.5L162.6 225.5L175.8 225.5L182.1 225.5L189.8 225.5L195.6 225.5L202.0 225.5L207.6 225.5L216.9 225.5L223.4 225.5L229.8 225.5L237.5 225.5L243.5 225.5L247.1 225.5L257.3 225.5L261.0 225.5L271.1 225.5L273.9 225.5L286.0 225.5" class="line l3"><title>armv7</title></path>
+<path d="M70.1 216.1L77.6 216.1L85.5 216.1L91.5 216.1L98.9 216.1L104.8 216.1L108.0 216.1L119.8 216.1L123.6 216.1L133.6 216.1L136.0 216.1L147.3 216.1L152.5 216.1L159.4 216.1L162.6 216.1L175.8 216.1L182.1 216.1L189.8 216.1L195.6 216.1L202.0 216.1L207.6 216.1L216.9 216.1L223.4 216.1L229.8 216.1L237.5 216.1L243.5 216.1L247.1 216.1L257.3 216.1L261.0 216.1L271.1 216.1L273.9 216.1L286.0 216.1" class="line l4"><title>loong64</title></path>
+<path d="M70.1 223.0L77.6 223.0L85.5 223.0L91.5 223.0L98.9 223.0L104.8 223.0L108.0 223.0L119.8 223.0L123.6 223.0L133.6 223.0L136.0 223.0L147.3 223.0L152.5 223.0L159.4 223.0L162.6 223.0L175.8 223.0L182.1 223.0L189.8 223.0L195.6 223.0L202.0 223.2L207.6 223.2L216.9 223.2L223.4 223.2L229.8 223.2L237.5 223.2L243.5 223.2L247.1 223.2L257.3 223.2L261.0 223.2L271.1 223.2L273.9 223.2L286.0 223.2" class="line l5"><title>ppc</title></path>
+<path d="M70.1 221.3L77.6 221.3L85.5 221.3L91.5 221.3L98.9 221.3L104.8 221.3L108.0 221.3L119.8 221.3L123.6 221.3L133.6 221.3L136.0 221.3L147.3 221.3L152.5 221.3L159.4 221.3L162.6 221.3L175.8 221.3L182.1 221.3L189.8 222.0L195.6 222.0L202.0 222.0L207.6 222.0L216.9 222.0L223.4 222.0L229.8 222.0L237.5 222.0L243.5 222.0L247.1 222.0L257.3 222.0L261.0 222.0L271.1 222.0L273.9 222.0L286.0 222.0" class="line l6"><title>ppc64</title></path>
+<path d="M70.1 218.2L77.6 218.2L85.5 218.2L91.5 218.2L98.9 218.2L104.8 218.2L108.0 218.2L119.8 218.2L123.6 218.2L133.6 218.2L136.0 218.2L147.3 218.2L152.5 218.2L159.4 218.2L162.6 218.2L175.8 218.2L182.1 218.2L189.8 218.7L195.6 218.7L202.0 218.7L207.6 218.7L216.9 218.7L223.4 218.7L229.8 218.7L237.5 218.7L243.5 218.7L247.1 218.7L257.3 218.7L261.0 218.7L271.1 218.7L273.9 218.7L286.0 218.7" class="line l7"><title>ppc64le</title></path>
+<path d="M70.1 208.2L77.6 208.2L85.5 208.2L91.5 208.2L98.9 208.2L104.8 208.2L108.0 208.2L119.8 208.2L123.6 208.2L133.6 208.2L136.0 208.2L147.3 208.2L152.5 208.2L159.4 208.2L162.6 208.2L175.8 208.2L182.1 208.2L189.8 208.2L195.6 208.2L202.0 208.2L207.6 208.2L216.9 208.2L223.4 208.2L229.8 208.2L237.5 208.2L243.5 208.2L247.1 208.2L257.3 208.2L261.0 208.2L271.1 208.2L273.9 208.2L286.0 208.2" class="line l8"><title>riscv64</title></path>
+<path d="M292.0 216.1L298.0 223.2" class="lead"/>
+<path d="M292.0 218.7L298.0 238.2" class="lead"/>
+<path d="M292.0 218.8L298.0 253.2" class="lead"/>
+<path d="M292.0 222.0L298.0 268.2" class="lead"/>
+<path d="M292.0 222.2L298.0 283.2" class="lead"/>
+<path d="M292.0 223.2L298.0 298.2" class="lead"/>
+<path d="M292.0 225.5L298.0 313.2" class="lead"/>
+<circle cx="286.0" cy="208.2" r="4" class="s8 ring"><title>riscv64 211 MiB</title></circle>
+<text x="302.0" y="212.2" class="vl">riscv64<tspan class="mu" dx="5">211 MiB</tspan></text>
+<circle cx="286.0" cy="216.1" r="4" class="s4 ring"><title>loong64 197 MiB</title></circle>
+<text x="302.0" y="227.2" class="vl">loong64<tspan class="mu" dx="5">197 MiB</tspan></text>
+<circle cx="286.0" cy="218.7" r="4" class="s7 ring"><title>ppc64le 193 MiB</title></circle>
+<text x="302.0" y="242.2" class="vl">ppc64le<tspan class="mu" dx="5">193 MiB</tspan></text>
+<circle cx="286.0" cy="218.8" r="4" class="s2 ring"><title>arm64 193 MiB</title></circle>
+<text x="302.0" y="257.2" class="vl">arm64<tspan class="mu" dx="5">193 MiB</tspan></text>
+<circle cx="286.0" cy="222.0" r="4" class="s6 ring"><title>ppc64 187 MiB</title></circle>
+<text x="302.0" y="272.2" class="vl">ppc64<tspan class="mu" dx="5">187 MiB</tspan></text>
+<circle cx="286.0" cy="222.2" r="4" class="s1 ring"><title>amd64 187 MiB</title></circle>
+<text x="302.0" y="287.2" class="vl">amd64<tspan class="mu" dx="5">187 MiB</tspan></text>
+<circle cx="286.0" cy="223.2" r="4" class="s5 ring"><title>ppc 185 MiB</title></circle>
+<text x="302.0" y="302.2" class="vl">ppc<tspan class="mu" dx="5">185 MiB</tspan></text>
+<circle cx="286.0" cy="225.5" r="4" class="s3 ring"><title>armv7 181 MiB</title></circle>
+<text x="302.0" y="317.2" class="vl">armv7<tspan class="mu" dx="5">181 MiB</tspan></text>
+<text x="178.0" y="370.0" class="ax" text-anchor="middle">Time, UTC</text>
+<text class="ax" text-anchor="middle" transform="translate(30.0 243.0) rotate(-90)">MiB, compressed</text>
+</svg>
