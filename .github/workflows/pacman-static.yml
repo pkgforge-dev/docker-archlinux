@@ -32,7 +32,7 @@ jobs:
   #--------------------------------------------------------------------------#
   setup:
     name: Ports and downloads
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -94,7 +94,7 @@ jobs:
   build:
     name: Static pacman ${{ matrix.arch }}
     needs: setup
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: read

@@ -47,7 +47,7 @@ env:
 jobs:
   static:
     name: Static suite
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -78,7 +78,7 @@ jobs:
 
   lint:
     name: Linters
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -173,7 +173,7 @@ jobs:
 
   network:
     name: Network suite
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -199,7 +199,7 @@ jobs:
 
   changes:
     name: Image inputs
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -333,7 +333,7 @@ jobs:
     name: Image ${{ matrix.arch }}
     needs: changes
     if: needs.changes.outputs.build == 'true' && needs.changes.outputs.matrix != '[]'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:
       contents: read
@@ -443,7 +443,7 @@ jobs:
     name: Static suite and linters
     needs: [static, lint, changes, image]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions: {}
     steps:
