@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="157" height="20" viewBox="0 0 157 20" role="img" aria-label="ppc64le: 15 min · current">
+<title>ppc64le: 15 min · current</title>
+<style>.lab{fill:#555}.msg{fill:#1a7f37}text{font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif;font-size:11px;fill:#fff}@media (prefers-color-scheme:dark){.lab{fill:#3d444d}.msg{fill:#238636}}</style>
+<clipPath id="r"><rect width="157" height="20" rx="3"/></clipPath>
+<g clip-path="url(#r)"><rect class="lab" width="55" height="20"/><rect class="msg" x="55" width="102" height="20"/></g>
+<text x="27.5" y="14" text-anchor="middle">ppc64le</text>
+<text x="106.0" y="14" text-anchor="middle">15 min · current</text>
+</svg>

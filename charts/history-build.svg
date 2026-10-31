@@ -1,0 +1,516 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="380" viewBox="0 0 760 380" role="img" aria-labelledby="title desc">
+<title id="title">Builds, last 30 days</title>
+<desc id="desc">The result of the last Build job of each port on each UTC day. A day with no mark had no build of that port.</desc>
+<style>.bg{fill:#fcfcfb;stroke:rgba(11,11,11,.10)}text{font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif}.tt{font-size:16px;font-weight:600;fill:#0b0b0b}.hd{font-size:30px;font-weight:600;fill:#0b0b0b}.sub{font-size:13px;fill:#52514e}.lb{font-size:12px;fill:#0b0b0b}.gr{font-size:12px;font-weight:600;fill:#52514e;paint-order:stroke;stroke:#fcfcfb;stroke-width:5px;stroke-linejoin:round}.vl{font-size:12px;fill:#0b0b0b;font-variant-numeric:tabular-nums}.mu{fill:#6f6e69}.lg{font-size:12px;fill:#52514e}.tk{font-size:11px;fill:#6f6e69;font-variant-numeric:tabular-nums}.ax{font-size:12px;fill:#52514e}.note{font-size:13px;fill:#6f6e69}.grid{stroke:#e9e8e3;stroke-width:1}.base{stroke:#c3c2b7;stroke-width:1}.ref{stroke:#7d7b75;stroke-width:1;stroke-dasharray:4 3}.lead{stroke:#c3c2b7;stroke-width:1;fill:none}.track{fill:#ebeae5}.ring{stroke:#fcfcfb;stroke-width:2}.cut{stroke:#fcfcfb;stroke-width:2}.line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}.hollow{fill:none;stroke:#898781;stroke-width:1.5}.cell{fill:#f1f0ec}.s1{fill:#2a78d6}.l1{stroke:#2a78d6}.s2{fill:#eb6834}.l2{stroke:#eb6834}.s3{fill:#1baf7a}.l3{stroke:#1baf7a}.s4{fill:#eda100}.l4{stroke:#eda100}.s5{fill:#e87ba4}.l5{stroke:#e87ba4}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#4a3aa7}.l7{stroke:#4a3aa7}.s8{fill:#e34948}.l8{stroke:#e34948}.s0{fill:#a3a29c}.l0{stroke:#a3a29c}.st-good{fill:#0ca30c}.st-warning{fill:#fab219}.st-critical{fill:#d03b3b}.st-none{fill:#898781}.st-unknown{fill:#898781}@media (prefers-color-scheme:dark){.bg{fill:#1a1a19;stroke:rgba(255,255,255,.10)}.tt,.hd,.lb,.vl{fill:#ffffff}.sub,.gr,.ax,.lg{fill:#c3c2b7}.tk,.note,.mu{fill:#9a9890}.grid{stroke:#2a2a28}.base,.lead{stroke:#3d3d3a}.ref{stroke:#9a9890}.track{fill:#2e2e2c}.cell{fill:#232322}.ring,.cut,.gr{stroke:#1a1a19}.s1{fill:#3987e5}.l1{stroke:#3987e5}.s2{fill:#d95926}.l2{stroke:#d95926}.s3{fill:#199e70}.l3{stroke:#199e70}.s4{fill:#c98500}.l4{stroke:#c98500}.s5{fill:#d55181}.l5{stroke:#d55181}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#9085e9}.l7{stroke:#9085e9}.s8{fill:#e66767}.l8{stroke:#e66767}.s0{fill:#6b6a65}.l0{stroke:#6b6a65}}</style>
+<rect class="bg" x="0.5" y="0.5" width="759" height="379" rx="12"/>
+<text x="24.0" y="40.0" class="tt">Builds, last 30 days</text>
+<text x="24.0" y="82.0" class="hd">154 of 157</text>
+<text x="185.7" y="79.0" class="sub">build days passed. One mark per port and day: the last build of that day.</text>
+<circle cx="29.0" cy="108.0" r="5.0" class="st-good"/>
+<text x="40.0" y="112.0" class="lg">passed</text>
+<path d="M101.9 103.0l5.0 5.0 -5.0 5.0 -5.0 -5.0z" class="st-critical"/>
+<text x="112.9" y="112.0" class="lg">failed</text>
+<path d="M169.0 102.4l5.6 9.6h-11.2z" class="st-warning"/>
+<text x="180.0" y="112.0" class="lg">cancelled</text>
+<circle cx="255.6" cy="108.0" r="4.2" class="hollow"/>
+<text x="266.6" y="112.0" class="lg">no build</text>
+<text x="24.0" y="151.0" class="lb">amd64</text>
+<rect x="84.4" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-02: no build</title></rect>
+<circle cx="94.3" cy="147.0" r="1.5" class="st-none"/>
+<rect x="106.2" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-03: no build</title></rect>
+<circle cx="116.1" cy="147.0" r="1.5" class="st-none"/>
+<rect x="127.9" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-04: no build</title></rect>
+<circle cx="137.8" cy="147.0" r="1.5" class="st-none"/>
+<rect x="149.7" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-05: no build</title></rect>
+<circle cx="159.6" cy="147.0" r="1.5" class="st-none"/>
+<rect x="171.4" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-06: no build</title></rect>
+<circle cx="181.3" cy="147.0" r="1.5" class="st-none"/>
+<rect x="193.2" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-07: no build</title></rect>
+<circle cx="203.1" cy="147.0" r="1.5" class="st-none"/>
+<rect x="215.0" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-08: no build</title></rect>
+<circle cx="224.8" cy="147.0" r="1.5" class="st-none"/>
+<rect x="236.7" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-09: no build</title></rect>
+<circle cx="246.6" cy="147.0" r="1.5" class="st-none"/>
+<rect x="258.5" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-10: no build</title></rect>
+<circle cx="268.3" cy="147.0" r="1.5" class="st-none"/>
+<rect x="280.2" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-11: no build</title></rect>
+<circle cx="290.1" cy="147.0" r="1.5" class="st-none"/>
+<rect x="302.0" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-12: passed</title></rect>
+<circle cx="311.8" cy="147.0" r="5.5" class="st-good"/>
+<rect x="323.7" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-13: passed</title></rect>
+<circle cx="333.6" cy="147.0" r="5.5" class="st-good"/>
+<rect x="345.5" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-14: passed</title></rect>
+<circle cx="355.3" cy="147.0" r="5.5" class="st-good"/>
+<rect x="367.2" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-15: passed</title></rect>
+<circle cx="377.1" cy="147.0" r="5.5" class="st-good"/>
+<rect x="389.0" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-16: passed</title></rect>
+<circle cx="398.8" cy="147.0" r="5.5" class="st-good"/>
+<rect x="410.7" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-17: passed</title></rect>
+<circle cx="420.6" cy="147.0" r="5.5" class="st-good"/>
+<rect x="432.5" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-18: passed</title></rect>
+<circle cx="442.3" cy="147.0" r="5.5" class="st-good"/>
+<rect x="454.2" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-19: passed</title></rect>
+<circle cx="464.1" cy="147.0" r="5.5" class="st-good"/>
+<rect x="476.0" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-20: passed</title></rect>
+<circle cx="485.9" cy="147.0" r="5.5" class="st-good"/>
+<rect x="497.7" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-21: passed</title></rect>
+<circle cx="507.6" cy="147.0" r="5.5" class="st-good"/>
+<rect x="519.5" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-22: passed</title></rect>
+<circle cx="529.4" cy="147.0" r="5.5" class="st-good"/>
+<rect x="541.2" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-23: passed</title></rect>
+<circle cx="551.1" cy="147.0" r="5.5" class="st-good"/>
+<rect x="563.0" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-24: passed</title></rect>
+<circle cx="572.9" cy="147.0" r="5.5" class="st-good"/>
+<rect x="584.7" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-25: passed</title></rect>
+<circle cx="594.6" cy="147.0" r="5.5" class="st-good"/>
+<rect x="606.5" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-26: passed</title></rect>
+<circle cx="616.4" cy="147.0" r="5.5" class="st-good"/>
+<rect x="628.2" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-27: passed</title></rect>
+<circle cx="638.1" cy="147.0" r="5.5" class="st-good"/>
+<rect x="650.0" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-28: passed</title></rect>
+<circle cx="659.9" cy="147.0" r="5.5" class="st-good"/>
+<rect x="671.7" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-29: passed</title></rect>
+<circle cx="681.6" cy="147.0" r="5.5" class="st-good"/>
+<rect x="693.5" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-30: passed</title></rect>
+<circle cx="703.4" cy="147.0" r="5.5" class="st-good"/>
+<rect x="715.2" y="138.0" width="19.8" height="18" rx="3" class="cell"><title>amd64 2026-10-31: passed</title></rect>
+<circle cx="725.1" cy="147.0" r="5.5" class="st-good"/>
+<text x="24.0" y="173.0" class="lb">arm64</text>
+<rect x="84.4" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-02: no build</title></rect>
+<circle cx="94.3" cy="169.0" r="1.5" class="st-none"/>
+<rect x="106.2" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-03: no build</title></rect>
+<circle cx="116.1" cy="169.0" r="1.5" class="st-none"/>
+<rect x="127.9" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-04: no build</title></rect>
+<circle cx="137.8" cy="169.0" r="1.5" class="st-none"/>
+<rect x="149.7" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-05: no build</title></rect>
+<circle cx="159.6" cy="169.0" r="1.5" class="st-none"/>
+<rect x="171.4" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-06: no build</title></rect>
+<circle cx="181.3" cy="169.0" r="1.5" class="st-none"/>
+<rect x="193.2" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-07: no build</title></rect>
+<circle cx="203.1" cy="169.0" r="1.5" class="st-none"/>
+<rect x="215.0" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-08: no build</title></rect>
+<circle cx="224.8" cy="169.0" r="1.5" class="st-none"/>
+<rect x="236.7" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-09: no build</title></rect>
+<circle cx="246.6" cy="169.0" r="1.5" class="st-none"/>
+<rect x="258.5" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-10: no build</title></rect>
+<circle cx="268.3" cy="169.0" r="1.5" class="st-none"/>
+<rect x="280.2" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-11: no build</title></rect>
+<circle cx="290.1" cy="169.0" r="1.5" class="st-none"/>
+<rect x="302.0" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-12: passed</title></rect>
+<circle cx="311.8" cy="169.0" r="5.5" class="st-good"/>
+<rect x="323.7" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-13: passed</title></rect>
+<circle cx="333.6" cy="169.0" r="5.5" class="st-good"/>
+<rect x="345.5" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-14: passed</title></rect>
+<circle cx="355.3" cy="169.0" r="5.5" class="st-good"/>
+<rect x="367.2" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-15: passed</title></rect>
+<circle cx="377.1" cy="169.0" r="5.5" class="st-good"/>
+<rect x="389.0" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-16: passed</title></rect>
+<circle cx="398.8" cy="169.0" r="5.5" class="st-good"/>
+<rect x="410.7" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-17: passed</title></rect>
+<circle cx="420.6" cy="169.0" r="5.5" class="st-good"/>
+<rect x="432.5" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-18: passed</title></rect>
+<circle cx="442.3" cy="169.0" r="5.5" class="st-good"/>
+<rect x="454.2" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-19: passed</title></rect>
+<circle cx="464.1" cy="169.0" r="5.5" class="st-good"/>
+<rect x="476.0" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-20: passed</title></rect>
+<circle cx="485.9" cy="169.0" r="5.5" class="st-good"/>
+<rect x="497.7" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-21: passed</title></rect>
+<circle cx="507.6" cy="169.0" r="5.5" class="st-good"/>
+<rect x="519.5" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-22: passed</title></rect>
+<circle cx="529.4" cy="169.0" r="5.5" class="st-good"/>
+<rect x="541.2" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-23: passed</title></rect>
+<circle cx="551.1" cy="169.0" r="5.5" class="st-good"/>
+<rect x="563.0" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-24: passed</title></rect>
+<circle cx="572.9" cy="169.0" r="5.5" class="st-good"/>
+<rect x="584.7" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-25: passed</title></rect>
+<circle cx="594.6" cy="169.0" r="5.5" class="st-good"/>
+<rect x="606.5" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-26: passed</title></rect>
+<circle cx="616.4" cy="169.0" r="5.5" class="st-good"/>
+<rect x="628.2" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-27: passed</title></rect>
+<circle cx="638.1" cy="169.0" r="5.5" class="st-good"/>
+<rect x="650.0" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-28: passed</title></rect>
+<circle cx="659.9" cy="169.0" r="5.5" class="st-good"/>
+<rect x="671.7" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-29: passed</title></rect>
+<circle cx="681.6" cy="169.0" r="5.5" class="st-good"/>
+<rect x="693.5" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-30: passed</title></rect>
+<circle cx="703.4" cy="169.0" r="5.5" class="st-good"/>
+<rect x="715.2" y="160.0" width="19.8" height="18" rx="3" class="cell"><title>arm64 2026-10-31: passed</title></rect>
+<circle cx="725.1" cy="169.0" r="5.5" class="st-good"/>
+<text x="24.0" y="195.0" class="lb">armv7</text>
+<rect x="84.4" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-02: no build</title></rect>
+<circle cx="94.3" cy="191.0" r="1.5" class="st-none"/>
+<rect x="106.2" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-03: no build</title></rect>
+<circle cx="116.1" cy="191.0" r="1.5" class="st-none"/>
+<rect x="127.9" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-04: no build</title></rect>
+<circle cx="137.8" cy="191.0" r="1.5" class="st-none"/>
+<rect x="149.7" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-05: no build</title></rect>
+<circle cx="159.6" cy="191.0" r="1.5" class="st-none"/>
+<rect x="171.4" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-06: no build</title></rect>
+<circle cx="181.3" cy="191.0" r="1.5" class="st-none"/>
+<rect x="193.2" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-07: no build</title></rect>
+<circle cx="203.1" cy="191.0" r="1.5" class="st-none"/>
+<rect x="215.0" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-08: no build</title></rect>
+<circle cx="224.8" cy="191.0" r="1.5" class="st-none"/>
+<rect x="236.7" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-09: no build</title></rect>
+<circle cx="246.6" cy="191.0" r="1.5" class="st-none"/>
+<rect x="258.5" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-10: no build</title></rect>
+<circle cx="268.3" cy="191.0" r="1.5" class="st-none"/>
+<rect x="280.2" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-11: no build</title></rect>
+<circle cx="290.1" cy="191.0" r="1.5" class="st-none"/>
+<rect x="302.0" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-12: passed</title></rect>
+<circle cx="311.8" cy="191.0" r="5.5" class="st-good"/>
+<rect x="323.7" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-13: passed</title></rect>
+<circle cx="333.6" cy="191.0" r="5.5" class="st-good"/>
+<rect x="345.5" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-14: passed</title></rect>
+<circle cx="355.3" cy="191.0" r="5.5" class="st-good"/>
+<rect x="367.2" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-15: passed</title></rect>
+<circle cx="377.1" cy="191.0" r="5.5" class="st-good"/>
+<rect x="389.0" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-16: passed</title></rect>
+<circle cx="398.8" cy="191.0" r="5.5" class="st-good"/>
+<rect x="410.7" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-17: passed</title></rect>
+<circle cx="420.6" cy="191.0" r="5.5" class="st-good"/>
+<rect x="432.5" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-18: passed</title></rect>
+<circle cx="442.3" cy="191.0" r="5.5" class="st-good"/>
+<rect x="454.2" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-19: passed</title></rect>
+<circle cx="464.1" cy="191.0" r="5.5" class="st-good"/>
+<rect x="476.0" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-20: passed</title></rect>
+<circle cx="485.9" cy="191.0" r="5.5" class="st-good"/>
+<rect x="497.7" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-21: passed</title></rect>
+<circle cx="507.6" cy="191.0" r="5.5" class="st-good"/>
+<rect x="519.5" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-22: passed</title></rect>
+<circle cx="529.4" cy="191.0" r="5.5" class="st-good"/>
+<rect x="541.2" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-23: passed</title></rect>
+<circle cx="551.1" cy="191.0" r="5.5" class="st-good"/>
+<rect x="563.0" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-24: passed</title></rect>
+<circle cx="572.9" cy="191.0" r="5.5" class="st-good"/>
+<rect x="584.7" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-25: passed</title></rect>
+<circle cx="594.6" cy="191.0" r="5.5" class="st-good"/>
+<rect x="606.5" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-26: passed</title></rect>
+<circle cx="616.4" cy="191.0" r="5.5" class="st-good"/>
+<rect x="628.2" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-27: passed</title></rect>
+<circle cx="638.1" cy="191.0" r="5.5" class="st-good"/>
+<rect x="650.0" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-28: passed</title></rect>
+<circle cx="659.9" cy="191.0" r="5.5" class="st-good"/>
+<rect x="671.7" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-29: passed</title></rect>
+<circle cx="681.6" cy="191.0" r="5.5" class="st-good"/>
+<rect x="693.5" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-30: passed</title></rect>
+<circle cx="703.4" cy="191.0" r="5.5" class="st-good"/>
+<rect x="715.2" y="182.0" width="19.8" height="18" rx="3" class="cell"><title>armv7 2026-10-31: passed</title></rect>
+<circle cx="725.1" cy="191.0" r="5.5" class="st-good"/>
+<text x="24.0" y="217.0" class="lb">loong64</text>
+<rect x="84.4" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-02: no build</title></rect>
+<circle cx="94.3" cy="213.0" r="1.5" class="st-none"/>
+<rect x="106.2" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-03: no build</title></rect>
+<circle cx="116.1" cy="213.0" r="1.5" class="st-none"/>
+<rect x="127.9" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-04: no build</title></rect>
+<circle cx="137.8" cy="213.0" r="1.5" class="st-none"/>
+<rect x="149.7" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-05: no build</title></rect>
+<circle cx="159.6" cy="213.0" r="1.5" class="st-none"/>
+<rect x="171.4" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-06: no build</title></rect>
+<circle cx="181.3" cy="213.0" r="1.5" class="st-none"/>
+<rect x="193.2" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-07: no build</title></rect>
+<circle cx="203.1" cy="213.0" r="1.5" class="st-none"/>
+<rect x="215.0" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-08: no build</title></rect>
+<circle cx="224.8" cy="213.0" r="1.5" class="st-none"/>
+<rect x="236.7" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-09: no build</title></rect>
+<circle cx="246.6" cy="213.0" r="1.5" class="st-none"/>
+<rect x="258.5" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-10: no build</title></rect>
+<circle cx="268.3" cy="213.0" r="1.5" class="st-none"/>
+<rect x="280.2" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-11: no build</title></rect>
+<circle cx="290.1" cy="213.0" r="1.5" class="st-none"/>
+<rect x="302.0" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-12: failed</title></rect>
+<path d="M311.8 207.5l5.5 5.5 -5.5 5.5 -5.5 -5.5z" class="st-critical"/>
+<rect x="323.7" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-13: passed</title></rect>
+<circle cx="333.6" cy="213.0" r="5.5" class="st-good"/>
+<rect x="345.5" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-14: passed</title></rect>
+<circle cx="355.3" cy="213.0" r="5.5" class="st-good"/>
+<rect x="367.2" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-15: passed</title></rect>
+<circle cx="377.1" cy="213.0" r="5.5" class="st-good"/>
+<rect x="389.0" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-16: passed</title></rect>
+<circle cx="398.8" cy="213.0" r="5.5" class="st-good"/>
+<rect x="410.7" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-17: passed</title></rect>
+<circle cx="420.6" cy="213.0" r="5.5" class="st-good"/>
+<rect x="432.5" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-18: passed</title></rect>
+<circle cx="442.3" cy="213.0" r="5.5" class="st-good"/>
+<rect x="454.2" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-19: passed</title></rect>
+<circle cx="464.1" cy="213.0" r="5.5" class="st-good"/>
+<rect x="476.0" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-20: passed</title></rect>
+<circle cx="485.9" cy="213.0" r="5.5" class="st-good"/>
+<rect x="497.7" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-21: passed</title></rect>
+<circle cx="507.6" cy="213.0" r="5.5" class="st-good"/>
+<rect x="519.5" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-22: passed</title></rect>
+<circle cx="529.4" cy="213.0" r="5.5" class="st-good"/>
+<rect x="541.2" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-23: passed</title></rect>
+<circle cx="551.1" cy="213.0" r="5.5" class="st-good"/>
+<rect x="563.0" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-24: passed</title></rect>
+<circle cx="572.9" cy="213.0" r="5.5" class="st-good"/>
+<rect x="584.7" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-25: passed</title></rect>
+<circle cx="594.6" cy="213.0" r="5.5" class="st-good"/>
+<rect x="606.5" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-26: passed</title></rect>
+<circle cx="616.4" cy="213.0" r="5.5" class="st-good"/>
+<rect x="628.2" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-27: passed</title></rect>
+<circle cx="638.1" cy="213.0" r="5.5" class="st-good"/>
+<rect x="650.0" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-28: passed</title></rect>
+<circle cx="659.9" cy="213.0" r="5.5" class="st-good"/>
+<rect x="671.7" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-29: passed</title></rect>
+<circle cx="681.6" cy="213.0" r="5.5" class="st-good"/>
+<rect x="693.5" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-30: passed</title></rect>
+<circle cx="703.4" cy="213.0" r="5.5" class="st-good"/>
+<rect x="715.2" y="204.0" width="19.8" height="18" rx="3" class="cell"><title>loong64 2026-10-31: passed</title></rect>
+<circle cx="725.1" cy="213.0" r="5.5" class="st-good"/>
+<text x="24.0" y="239.0" class="lb">ppc</text>
+<rect x="84.4" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-02: no build</title></rect>
+<circle cx="94.3" cy="235.0" r="1.5" class="st-none"/>
+<rect x="106.2" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-03: no build</title></rect>
+<circle cx="116.1" cy="235.0" r="1.5" class="st-none"/>
+<rect x="127.9" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-04: no build</title></rect>
+<circle cx="137.8" cy="235.0" r="1.5" class="st-none"/>
+<rect x="149.7" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-05: no build</title></rect>
+<circle cx="159.6" cy="235.0" r="1.5" class="st-none"/>
+<rect x="171.4" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-06: no build</title></rect>
+<circle cx="181.3" cy="235.0" r="1.5" class="st-none"/>
+<rect x="193.2" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-07: no build</title></rect>
+<circle cx="203.1" cy="235.0" r="1.5" class="st-none"/>
+<rect x="215.0" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-08: no build</title></rect>
+<circle cx="224.8" cy="235.0" r="1.5" class="st-none"/>
+<rect x="236.7" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-09: no build</title></rect>
+<circle cx="246.6" cy="235.0" r="1.5" class="st-none"/>
+<rect x="258.5" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-10: no build</title></rect>
+<circle cx="268.3" cy="235.0" r="1.5" class="st-none"/>
+<rect x="280.2" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-11: no build</title></rect>
+<circle cx="290.1" cy="235.0" r="1.5" class="st-none"/>
+<rect x="302.0" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-12: no build</title></rect>
+<circle cx="311.8" cy="235.0" r="1.5" class="st-none"/>
+<rect x="323.7" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-13: passed</title></rect>
+<circle cx="333.6" cy="235.0" r="5.5" class="st-good"/>
+<rect x="345.5" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-14: passed</title></rect>
+<circle cx="355.3" cy="235.0" r="5.5" class="st-good"/>
+<rect x="367.2" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-15: passed</title></rect>
+<circle cx="377.1" cy="235.0" r="5.5" class="st-good"/>
+<rect x="389.0" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-16: passed</title></rect>
+<circle cx="398.8" cy="235.0" r="5.5" class="st-good"/>
+<rect x="410.7" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-17: passed</title></rect>
+<circle cx="420.6" cy="235.0" r="5.5" class="st-good"/>
+<rect x="432.5" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-18: passed</title></rect>
+<circle cx="442.3" cy="235.0" r="5.5" class="st-good"/>
+<rect x="454.2" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-19: passed</title></rect>
+<circle cx="464.1" cy="235.0" r="5.5" class="st-good"/>
+<rect x="476.0" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-20: failed</title></rect>
+<path d="M485.9 229.5l5.5 5.5 -5.5 5.5 -5.5 -5.5z" class="st-critical"/>
+<rect x="497.7" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-21: passed</title></rect>
+<circle cx="507.6" cy="235.0" r="5.5" class="st-good"/>
+<rect x="519.5" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-22: passed</title></rect>
+<circle cx="529.4" cy="235.0" r="5.5" class="st-good"/>
+<rect x="541.2" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-23: passed</title></rect>
+<circle cx="551.1" cy="235.0" r="5.5" class="st-good"/>
+<rect x="563.0" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-24: passed</title></rect>
+<circle cx="572.9" cy="235.0" r="5.5" class="st-good"/>
+<rect x="584.7" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-25: passed</title></rect>
+<circle cx="594.6" cy="235.0" r="5.5" class="st-good"/>
+<rect x="606.5" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-26: passed</title></rect>
+<circle cx="616.4" cy="235.0" r="5.5" class="st-good"/>
+<rect x="628.2" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-27: passed</title></rect>
+<circle cx="638.1" cy="235.0" r="5.5" class="st-good"/>
+<rect x="650.0" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-28: passed</title></rect>
+<circle cx="659.9" cy="235.0" r="5.5" class="st-good"/>
+<rect x="671.7" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-29: passed</title></rect>
+<circle cx="681.6" cy="235.0" r="5.5" class="st-good"/>
+<rect x="693.5" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-30: passed</title></rect>
+<circle cx="703.4" cy="235.0" r="5.5" class="st-good"/>
+<rect x="715.2" y="226.0" width="19.8" height="18" rx="3" class="cell"><title>ppc 2026-10-31: passed</title></rect>
+<circle cx="725.1" cy="235.0" r="5.5" class="st-good"/>
+<text x="24.0" y="261.0" class="lb">ppc64</text>
+<rect x="84.4" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-02: no build</title></rect>
+<circle cx="94.3" cy="257.0" r="1.5" class="st-none"/>
+<rect x="106.2" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-03: no build</title></rect>
+<circle cx="116.1" cy="257.0" r="1.5" class="st-none"/>
+<rect x="127.9" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-04: no build</title></rect>
+<circle cx="137.8" cy="257.0" r="1.5" class="st-none"/>
+<rect x="149.7" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-05: no build</title></rect>
+<circle cx="159.6" cy="257.0" r="1.5" class="st-none"/>
+<rect x="171.4" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-06: no build</title></rect>
+<circle cx="181.3" cy="257.0" r="1.5" class="st-none"/>
+<rect x="193.2" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-07: no build</title></rect>
+<circle cx="203.1" cy="257.0" r="1.5" class="st-none"/>
+<rect x="215.0" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-08: no build</title></rect>
+<circle cx="224.8" cy="257.0" r="1.5" class="st-none"/>
+<rect x="236.7" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-09: no build</title></rect>
+<circle cx="246.6" cy="257.0" r="1.5" class="st-none"/>
+<rect x="258.5" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-10: no build</title></rect>
+<circle cx="268.3" cy="257.0" r="1.5" class="st-none"/>
+<rect x="280.2" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-11: no build</title></rect>
+<circle cx="290.1" cy="257.0" r="1.5" class="st-none"/>
+<rect x="302.0" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-12: no build</title></rect>
+<circle cx="311.8" cy="257.0" r="1.5" class="st-none"/>
+<rect x="323.7" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-13: passed</title></rect>
+<circle cx="333.6" cy="257.0" r="5.5" class="st-good"/>
+<rect x="345.5" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-14: passed</title></rect>
+<circle cx="355.3" cy="257.0" r="5.5" class="st-good"/>
+<rect x="367.2" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-15: passed</title></rect>
+<circle cx="377.1" cy="257.0" r="5.5" class="st-good"/>
+<rect x="389.0" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-16: passed</title></rect>
+<circle cx="398.8" cy="257.0" r="5.5" class="st-good"/>
+<rect x="410.7" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-17: passed</title></rect>
+<circle cx="420.6" cy="257.0" r="5.5" class="st-good"/>
+<rect x="432.5" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-18: passed</title></rect>
+<circle cx="442.3" cy="257.0" r="5.5" class="st-good"/>
+<rect x="454.2" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-19: passed</title></rect>
+<circle cx="464.1" cy="257.0" r="5.5" class="st-good"/>
+<rect x="476.0" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-20: passed</title></rect>
+<circle cx="485.9" cy="257.0" r="5.5" class="st-good"/>
+<rect x="497.7" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-21: passed</title></rect>
+<circle cx="507.6" cy="257.0" r="5.5" class="st-good"/>
+<rect x="519.5" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-22: passed</title></rect>
+<circle cx="529.4" cy="257.0" r="5.5" class="st-good"/>
+<rect x="541.2" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-23: passed</title></rect>
+<circle cx="551.1" cy="257.0" r="5.5" class="st-good"/>
+<rect x="563.0" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-24: passed</title></rect>
+<circle cx="572.9" cy="257.0" r="5.5" class="st-good"/>
+<rect x="584.7" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-25: passed</title></rect>
+<circle cx="594.6" cy="257.0" r="5.5" class="st-good"/>
+<rect x="606.5" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-26: passed</title></rect>
+<circle cx="616.4" cy="257.0" r="5.5" class="st-good"/>
+<rect x="628.2" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-27: passed</title></rect>
+<circle cx="638.1" cy="257.0" r="5.5" class="st-good"/>
+<rect x="650.0" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-28: passed</title></rect>
+<circle cx="659.9" cy="257.0" r="5.5" class="st-good"/>
+<rect x="671.7" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-29: passed</title></rect>
+<circle cx="681.6" cy="257.0" r="5.5" class="st-good"/>
+<rect x="693.5" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-30: passed</title></rect>
+<circle cx="703.4" cy="257.0" r="5.5" class="st-good"/>
+<rect x="715.2" y="248.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64 2026-10-31: passed</title></rect>
+<circle cx="725.1" cy="257.0" r="5.5" class="st-good"/>
+<text x="24.0" y="283.0" class="lb">ppc64le</text>
+<rect x="84.4" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-02: no build</title></rect>
+<circle cx="94.3" cy="279.0" r="1.5" class="st-none"/>
+<rect x="106.2" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-03: no build</title></rect>
+<circle cx="116.1" cy="279.0" r="1.5" class="st-none"/>
+<rect x="127.9" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-04: no build</title></rect>
+<circle cx="137.8" cy="279.0" r="1.5" class="st-none"/>
+<rect x="149.7" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-05: no build</title></rect>
+<circle cx="159.6" cy="279.0" r="1.5" class="st-none"/>
+<rect x="171.4" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-06: no build</title></rect>
+<circle cx="181.3" cy="279.0" r="1.5" class="st-none"/>
+<rect x="193.2" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-07: no build</title></rect>
+<circle cx="203.1" cy="279.0" r="1.5" class="st-none"/>
+<rect x="215.0" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-08: no build</title></rect>
+<circle cx="224.8" cy="279.0" r="1.5" class="st-none"/>
+<rect x="236.7" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-09: no build</title></rect>
+<circle cx="246.6" cy="279.0" r="1.5" class="st-none"/>
+<rect x="258.5" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-10: no build</title></rect>
+<circle cx="268.3" cy="279.0" r="1.5" class="st-none"/>
+<rect x="280.2" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-11: no build</title></rect>
+<circle cx="290.1" cy="279.0" r="1.5" class="st-none"/>
+<rect x="302.0" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-12: no build</title></rect>
+<circle cx="311.8" cy="279.0" r="1.5" class="st-none"/>
+<rect x="323.7" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-13: passed</title></rect>
+<circle cx="333.6" cy="279.0" r="5.5" class="st-good"/>
+<rect x="345.5" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-14: passed</title></rect>
+<circle cx="355.3" cy="279.0" r="5.5" class="st-good"/>
+<rect x="367.2" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-15: passed</title></rect>
+<circle cx="377.1" cy="279.0" r="5.5" class="st-good"/>
+<rect x="389.0" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-16: passed</title></rect>
+<circle cx="398.8" cy="279.0" r="5.5" class="st-good"/>
+<rect x="410.7" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-17: passed</title></rect>
+<circle cx="420.6" cy="279.0" r="5.5" class="st-good"/>
+<rect x="432.5" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-18: passed</title></rect>
+<circle cx="442.3" cy="279.0" r="5.5" class="st-good"/>
+<rect x="454.2" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-19: passed</title></rect>
+<circle cx="464.1" cy="279.0" r="5.5" class="st-good"/>
+<rect x="476.0" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-20: passed</title></rect>
+<circle cx="485.9" cy="279.0" r="5.5" class="st-good"/>
+<rect x="497.7" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-21: passed</title></rect>
+<circle cx="507.6" cy="279.0" r="5.5" class="st-good"/>
+<rect x="519.5" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-22: passed</title></rect>
+<circle cx="529.4" cy="279.0" r="5.5" class="st-good"/>
+<rect x="541.2" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-23: passed</title></rect>
+<circle cx="551.1" cy="279.0" r="5.5" class="st-good"/>
+<rect x="563.0" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-24: passed</title></rect>
+<circle cx="572.9" cy="279.0" r="5.5" class="st-good"/>
+<rect x="584.7" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-25: passed</title></rect>
+<circle cx="594.6" cy="279.0" r="5.5" class="st-good"/>
+<rect x="606.5" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-26: passed</title></rect>
+<circle cx="616.4" cy="279.0" r="5.5" class="st-good"/>
+<rect x="628.2" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-27: passed</title></rect>
+<circle cx="638.1" cy="279.0" r="5.5" class="st-good"/>
+<rect x="650.0" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-28: passed</title></rect>
+<circle cx="659.9" cy="279.0" r="5.5" class="st-good"/>
+<rect x="671.7" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-29: passed</title></rect>
+<circle cx="681.6" cy="279.0" r="5.5" class="st-good"/>
+<rect x="693.5" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-30: passed</title></rect>
+<circle cx="703.4" cy="279.0" r="5.5" class="st-good"/>
+<rect x="715.2" y="270.0" width="19.8" height="18" rx="3" class="cell"><title>ppc64le 2026-10-31: passed</title></rect>
+<circle cx="725.1" cy="279.0" r="5.5" class="st-good"/>
+<text x="24.0" y="305.0" class="lb">riscv64</text>
+<rect x="84.4" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-02: no build</title></rect>
+<circle cx="94.3" cy="301.0" r="1.5" class="st-none"/>
+<rect x="106.2" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-03: no build</title></rect>
+<circle cx="116.1" cy="301.0" r="1.5" class="st-none"/>
+<rect x="127.9" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-04: no build</title></rect>
+<circle cx="137.8" cy="301.0" r="1.5" class="st-none"/>
+<rect x="149.7" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-05: no build</title></rect>
+<circle cx="159.6" cy="301.0" r="1.5" class="st-none"/>
+<rect x="171.4" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-06: no build</title></rect>
+<circle cx="181.3" cy="301.0" r="1.5" class="st-none"/>
+<rect x="193.2" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-07: no build</title></rect>
+<circle cx="203.1" cy="301.0" r="1.5" class="st-none"/>
+<rect x="215.0" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-08: no build</title></rect>
+<circle cx="224.8" cy="301.0" r="1.5" class="st-none"/>
+<rect x="236.7" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-09: no build</title></rect>
+<circle cx="246.6" cy="301.0" r="1.5" class="st-none"/>
+<rect x="258.5" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-10: no build</title></rect>
+<circle cx="268.3" cy="301.0" r="1.5" class="st-none"/>
+<rect x="280.2" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-11: no build</title></rect>
+<circle cx="290.1" cy="301.0" r="1.5" class="st-none"/>
+<rect x="302.0" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-12: failed</title></rect>
+<path d="M311.8 295.5l5.5 5.5 -5.5 5.5 -5.5 -5.5z" class="st-critical"/>
+<rect x="323.7" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-13: passed</title></rect>
+<circle cx="333.6" cy="301.0" r="5.5" class="st-good"/>
+<rect x="345.5" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-14: passed</title></rect>
+<circle cx="355.3" cy="301.0" r="5.5" class="st-good"/>
+<rect x="367.2" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-15: passed</title></rect>
+<circle cx="377.1" cy="301.0" r="5.5" class="st-good"/>
+<rect x="389.0" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-16: passed</title></rect>
+<circle cx="398.8" cy="301.0" r="5.5" class="st-good"/>
+<rect x="410.7" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-17: passed</title></rect>
+<circle cx="420.6" cy="301.0" r="5.5" class="st-good"/>
+<rect x="432.5" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-18: passed</title></rect>
+<circle cx="442.3" cy="301.0" r="5.5" class="st-good"/>
+<rect x="454.2" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-19: passed</title></rect>
+<circle cx="464.1" cy="301.0" r="5.5" class="st-good"/>
+<rect x="476.0" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-20: passed</title></rect>
+<circle cx="485.9" cy="301.0" r="5.5" class="st-good"/>
+<rect x="497.7" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-21: passed</title></rect>
+<circle cx="507.6" cy="301.0" r="5.5" class="st-good"/>
+<rect x="519.5" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-22: passed</title></rect>
+<circle cx="529.4" cy="301.0" r="5.5" class="st-good"/>
+<rect x="541.2" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-23: passed</title></rect>
+<circle cx="551.1" cy="301.0" r="5.5" class="st-good"/>
+<rect x="563.0" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-24: passed</title></rect>
+<circle cx="572.9" cy="301.0" r="5.5" class="st-good"/>
+<rect x="584.7" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-25: passed</title></rect>
+<circle cx="594.6" cy="301.0" r="5.5" class="st-good"/>
+<rect x="606.5" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-26: passed</title></rect>
+<circle cx="616.4" cy="301.0" r="5.5" class="st-good"/>
+<rect x="628.2" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-27: passed</title></rect>
+<circle cx="638.1" cy="301.0" r="5.5" class="st-good"/>
+<rect x="650.0" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-28: passed</title></rect>
+<circle cx="659.9" cy="301.0" r="5.5" class="st-good"/>
+<rect x="671.7" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-29: passed</title></rect>
+<circle cx="681.6" cy="301.0" r="5.5" class="st-good"/>
+<rect x="693.5" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-30: passed</title></rect>
+<circle cx="703.4" cy="301.0" r="5.5" class="st-good"/>
+<rect x="715.2" y="292.0" width="19.8" height="18" rx="3" class="cell"><title>riscv64 2026-10-31: passed</title></rect>
+<circle cx="725.1" cy="301.0" r="5.5" class="st-good"/>
+<path d="M725.1 316.0v4" class="base"/>
+<text x="725.1" y="334.0" class="tk" text-anchor="middle">Oct 31</text>
+<path d="M572.9 316.0v4" class="base"/>
+<text x="572.9" y="334.0" class="tk" text-anchor="middle">Oct 24</text>
+<path d="M420.6 316.0v4" class="base"/>
+<text x="420.6" y="334.0" class="tk" text-anchor="middle">Oct 17</text>
+<path d="M268.3 316.0v4" class="base"/>
+<text x="268.3" y="334.0" class="tk" text-anchor="middle">Oct 10</text>
+<path d="M116.1 316.0v4" class="base"/>
+<text x="116.1" y="334.0" class="tk" text-anchor="middle">Oct 3</text>
+<text x="409.7" y="358.0" class="ax" text-anchor="middle">Day, UTC</text>
+</svg>

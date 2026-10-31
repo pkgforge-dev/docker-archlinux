@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="197" height="20" viewBox="0 0 197 20" role="img" aria-label="Docker Hub: 100% of GHCR tags">
+<title>Docker Hub: 100% of GHCR tags</title>
+<style>.lab{fill:#555}.msg{fill:#1a7f37}text{font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif;font-size:11px;fill:#fff}@media (prefers-color-scheme:dark){.lab{fill:#3d444d}.msg{fill:#238636}}</style>
+<clipPath id="r"><rect width="197" height="20" rx="3"/></clipPath>
+<g clip-path="url(#r)"><rect class="lab" width="75" height="20"/><rect class="msg" x="75" width="122" height="20"/></g>
+<text x="37.5" y="14" text-anchor="middle">Docker Hub</text>
+<text x="136.0" y="14" text-anchor="middle">100% of GHCR tags</text>
+</svg>
