@@ -368,7 +368,7 @@ jobs:
       - name: Start a registry on this runner
         env:
           # tag: 3
-          REGISTRY_IMAGE: docker.io/library/registry:3@sha256:d4032d4cc323c1731c707931ecada07a53076eac38e3b61ae57533f170f2c6c3
+          REGISTRY_IMAGE: docker.io/library/registry:3@sha256:88604dfe2f457935aafbb96755d0511e8216eb1b8df6b94329d530706eb8b906
         run: |
           digest="${REGISTRY_IMAGE#*@}"
           started=0
