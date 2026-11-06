@@ -21,7 +21,7 @@
 #------------------------------------------------------------------------------------#
 # scripts/check-image-pins reads the marker on the line above the pin.
 # tag: latest
-ARG BASE_IMAGE=docker.io/library/archlinux:latest@sha256:ece6c971fec3c532fd508bce299a446deaf469feecbfe7c353e995bc1a5e7bba
+ARG BASE_IMAGE=docker.io/library/archlinux:latest@sha256:b1c2fe6e717bfd5673af8fc217e1e1c3ce0dcbb1d53c3414c8425e7ce79fc6d9
 
 FROM --platform=$BUILDPLATFORM ${BASE_IMAGE} AS bootstrap
 
