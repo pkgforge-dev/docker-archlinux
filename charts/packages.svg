@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="388" viewBox="0 0 760 388" role="img" aria-labelledby="title desc">
+<title id="title">Packages per image</title>
+<desc id="desc">Packages installed in each image, from the evidence of its build: the package list the image&#x27;s own pacman database names.</desc>
+<style>.bg{fill:#fcfcfb;stroke:rgba(11,11,11,.10)}text{font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif}.tt{font-size:16px;font-weight:600;fill:#0b0b0b}.hd{font-size:30px;font-weight:600;fill:#0b0b0b}.sub{font-size:13px;fill:#52514e}.lb{font-size:12px;fill:#0b0b0b}.gr{font-size:12px;font-weight:600;fill:#52514e;paint-order:stroke;stroke:#fcfcfb;stroke-width:5px;stroke-linejoin:round}.vl{font-size:12px;fill:#0b0b0b;font-variant-numeric:tabular-nums}.mu{fill:#6f6e69}.lg{font-size:12px;fill:#52514e}.tk{font-size:11px;fill:#6f6e69;font-variant-numeric:tabular-nums}.ax{font-size:12px;fill:#52514e}.note{font-size:13px;fill:#6f6e69}.grid{stroke:#e9e8e3;stroke-width:1}.base{stroke:#c3c2b7;stroke-width:1}.ref{stroke:#7d7b75;stroke-width:1;stroke-dasharray:4 3}.lead{stroke:#c3c2b7;stroke-width:1;fill:none}.track{fill:#ebeae5}.ring{stroke:#fcfcfb;stroke-width:2}.cut{stroke:#fcfcfb;stroke-width:2}.line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}.hollow{fill:none;stroke:#898781;stroke-width:1.5}.cell{fill:#f1f0ec}.s1{fill:#2a78d6}.l1{stroke:#2a78d6}.s2{fill:#eb6834}.l2{stroke:#eb6834}.s3{fill:#1baf7a}.l3{stroke:#1baf7a}.s4{fill:#eda100}.l4{stroke:#eda100}.s5{fill:#e87ba4}.l5{stroke:#e87ba4}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#4a3aa7}.l7{stroke:#4a3aa7}.s8{fill:#e34948}.l8{stroke:#e34948}.s0{fill:#a3a29c}.l0{stroke:#a3a29c}.st-good{fill:#0ca30c}.st-warning{fill:#fab219}.st-critical{fill:#d03b3b}.st-none{fill:#898781}.st-unknown{fill:#898781}@media (prefers-color-scheme:dark){.bg{fill:#1a1a19;stroke:rgba(255,255,255,.10)}.tt,.hd,.lb,.vl{fill:#ffffff}.sub,.gr,.ax,.lg{fill:#c3c2b7}.tk,.note,.mu{fill:#9a9890}.grid{stroke:#2a2a28}.base,.lead{stroke:#3d3d3a}.ref{stroke:#9a9890}.track{fill:#2e2e2c}.cell{fill:#232322}.ring,.cut,.gr{stroke:#1a1a19}.s1{fill:#3987e5}.l1{stroke:#3987e5}.s2{fill:#d95926}.l2{stroke:#d95926}.s3{fill:#199e70}.l3{stroke:#199e70}.s4{fill:#c98500}.l4{stroke:#c98500}.s5{fill:#d55181}.l5{stroke:#d55181}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#9085e9}.l7{stroke:#9085e9}.s8{fill:#e66767}.l8{stroke:#e66767}.s0{fill:#6b6a65}.l0{stroke:#6b6a65}}</style>
+<rect class="bg" x="0.5" y="0.5" width="759" height="387" rx="12"/>
+<text x="24.0" y="40.0" class="tt">Packages per image</text>
+<text x="24.0" y="82.0" class="hd">137</text>
+<text x="84.9" y="79.0" class="sub">packages, the median. The anchor is the pacman version that names the pinned tags.</text>
+<rect x="24.0" y="103.0" width="10" height="10" rx="2" class="s1"/>
+<text x="40.0" y="112.0" class="lg">amd64</text>
+<rect x="95.2" y="103.0" width="10" height="10" rx="2" class="s2"/>
+<text x="111.2" y="112.0" class="lg">arm64</text>
+<rect x="166.4" y="103.0" width="10" height="10" rx="2" class="s3"/>
+<text x="182.4" y="112.0" class="lg">armv7</text>
+<rect x="237.1" y="103.0" width="10" height="10" rx="2" class="s4"/>
+<text x="253.1" y="112.0" class="lg">loong64</text>
+<rect x="314.6" y="103.0" width="10" height="10" rx="2" class="s5"/>
+<text x="330.6" y="112.0" class="lg">ppc</text>
+<rect x="368.0" y="103.0" width="10" height="10" rx="2" class="s6"/>
+<text x="384.0" y="112.0" class="lg">ppc64</text>
+<rect x="435.4" y="103.0" width="10" height="10" rx="2" class="s7"/>
+<text x="451.4" y="112.0" class="lg">ppc64le</text>
+<rect x="512.8" y="103.0" width="10" height="10" rx="2" class="s8"/>
+<text x="528.8" y="112.0" class="lg">riscv64</text>
+<path d="M94.0 134.0V328.0" class="base"/>
+<text x="94.0" y="344.0" class="tk" text-anchor="middle">0</text>
+<path d="M240.9 134.0V328.0" class="grid"/>
+<text x="240.9" y="344.0" class="tk" text-anchor="middle">50</text>
+<path d="M387.9 134.0V328.0" class="grid"/>
+<text x="387.9" y="344.0" class="tk" text-anchor="middle">100</text>
+<path d="M534.8 134.0V328.0" class="grid"/>
+<text x="534.8" y="344.0" class="tk" text-anchor="middle">150</text>
+<text x="32.0" y="144.0" class="lb">amd64</text>
+<g><title>amd64: 137 packages, 122 MiB download, evidence of the published image</title><path d="M94.0 134.0h398.6a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-398.6z" class="s1"/><rect x="94.0" y="128.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="504.6" y="144.0" class="vl">137<tspan class="mu" dx="8">pacman 7.1.0.r9.g54d9411-3</tspan></text>
+<text x="32.0" y="168.0" class="lb">arm64</text>
+<g><title>arm64: 137 packages, 110 MiB download, evidence of the published image</title><path d="M94.0 158.0h398.6a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-398.6z" class="s2"/><rect x="94.0" y="152.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="504.6" y="168.0" class="vl">137<tspan class="mu" dx="8">pacman 7.1.0.r9.g54d9411-3</tspan></text>
+<text x="32.0" y="192.0" class="lb">armv7</text>
+<g><title>armv7: 137 packages, 104 MiB download, evidence of the published image</title><path d="M94.0 182.0h398.6a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-398.6z" class="s3"/><rect x="94.0" y="176.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="504.6" y="192.0" class="vl">137<tspan class="mu" dx="8">pacman 7.1.0.r9.g54d9411-3</tspan></text>
+<text x="32.0" y="216.0" class="lb">loong64</text>
+<g><title>loong64: 137 packages, 128 MiB download, evidence of the published image</title><path d="M94.0 206.0h398.6a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-398.6z" class="s4"/><rect x="94.0" y="200.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="504.6" y="216.0" class="vl">137<tspan class="mu" dx="8">pacman 7.1.0.r9.g54d9411-3</tspan></text>
+<text x="32.0" y="240.0" class="lb">ppc</text>
+<g><title>ppc: 140 packages, 154 MiB download, evidence of the published image</title><path d="M94.0 230.0h407.4a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-407.4z" class="s5"/><rect x="94.0" y="224.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="513.4" y="240.0" class="vl">140<tspan class="mu" dx="8">pacman 7.1.0.r9.g54d9411-2.5</tspan></text>
+<text x="32.0" y="264.0" class="lb">ppc64</text>
+<g><title>ppc64: 140 packages, 158 MiB download, evidence of the published image</title><path d="M94.0 254.0h407.4a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-407.4z" class="s6"/><rect x="94.0" y="248.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="513.4" y="264.0" class="vl">140<tspan class="mu" dx="8">pacman 7.1.0.r9.g54d9411-2.5</tspan></text>
+<text x="32.0" y="288.0" class="lb">ppc64le</text>
+<g><title>ppc64le: 141 packages, 165 MiB download, evidence of the published image</title><path d="M94.0 278.0h410.4a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-410.4z" class="s7"/><rect x="94.0" y="272.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="516.4" y="288.0" class="vl">141<tspan class="mu" dx="8">pacman 7.1.0.r9.g54d9411-2.5</tspan></text>
+<text x="32.0" y="312.0" class="lb">riscv64</text>
+<g><title>riscv64: 135 packages, 136 MiB download, evidence of the published image</title><path d="M94.0 302.0h392.7a4.0 4.0 0 0 1 4.0 4.0v4.0a4.0 4.0 0 0 1 -4.0 4.0h-392.7z" class="s8"/><rect x="94.0" y="296.0" width="642.0" height="24" fill="#000" fill-opacity="0"/></g>
+<text x="498.7" y="312.0" class="vl">135<tspan class="mu" dx="8">pacman 7.1.0.r9.g54d9411-3</tspan></text>
+<text x="314.4" y="366.0" class="ax" text-anchor="middle">Packages in the image</text>
+</svg>
