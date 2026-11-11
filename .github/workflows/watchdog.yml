@@ -32,7 +32,7 @@ defaults:
 jobs:
   recency:
     name: Each port publishes
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -77,7 +77,7 @@ jobs:
 
   schedules:
     name: Each schedule fires and passes
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       actions: write
@@ -121,7 +121,7 @@ jobs:
 
   status-site:
     name: The status site moves
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -157,7 +157,7 @@ jobs:
 
   bot-ci:
     name: Re-run the failed CI of Renovate pull requests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write
