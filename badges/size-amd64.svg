@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="130" height="20" viewBox="0 0 130 20" role="img" aria-label="amd64 size: 187 MiB">
+<title>amd64 size: 187 MiB</title>
+<style>.lab{fill:#555}.msg{fill:#0969da}text{font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif;font-size:11px;fill:#fff}@media (prefers-color-scheme:dark){.lab{fill:#3d444d}.msg{fill:#1f6feb}}</style>
+<clipPath id="r"><rect width="130" height="20" rx="3"/></clipPath>
+<g clip-path="url(#r)"><rect class="lab" width="75" height="20"/><rect class="msg" x="75" width="55" height="20"/></g>
+<text x="37.5" y="14" text-anchor="middle">amd64 size</text>
+<text x="102.5" y="14" text-anchor="middle">187 MiB</text>
+</svg>
