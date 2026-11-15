@@ -431,7 +431,9 @@ if command -v timeout > /dev/null && [ -d /proc/self ]; then
   kill -TERM "$tpid"
   wait "$tpid" || rc=$?
   out="$(cat "$tree/term.out")"
-  check "TERM stops the run (exit 143)" 143 "$rc"
+  # GNU timeout passes on the exit of the run, 143. The timeout of Ubuntu
+  # 26.04 exits 124 when it gets a TERM. Either one says the run stopped.
+  check "TERM stops the run (exit 143 or 124)" stopped "$(case "$rc" in 143 | 124) echo stopped ;; *) echo "exit $rc" ;; esac)"
   check "after TERM, the output of a file that ended before is printed" yes "$(has_line '# ===== static/30-third.sh =====')"
   check "after TERM, the partial output of the file that did not end is printed" yes "$(has_line 'ok 1 - before the hang')"
   check "after TERM, the summary names the file that did not end" yes "$(has_line 'failed: static/20-hang.sh')"
