@@ -66,8 +66,8 @@ check "the dispatch inputs" "allow_anchor_downgrade arches dry_run dry_run_hub f
   "$(q '$on.workflow_dispatch.inputs | keys | join(" ")')"
 check "allow_anchor_downgrade is a string that defaults to none" "string none" \
   "$(q '$on.workflow_dispatch.inputs.allow_anchor_downgrade | "\(.type) \(.default)"')"
-check "every job runs on ubuntu-24.04 with a timeout" "" \
-  "$(q '[.jobs | to_entries[] | select(.value["runs-on"] != "ubuntu-24.04" or (.value["timeout-minutes"] | type) != "number") | .key] | join(" ")')"
+check "every job runs on ubuntu-26.04 with a timeout" "" \
+  "$(q '[.jobs | to_entries[] | select(.value["runs-on"] != "ubuntu-26.04" or (.value["timeout-minutes"] | type) != "number") | .key] | join(" ")')"
 
 # needs, as a sorted word list
 needs() { q ".jobs.$1.needs // [] | if type == \"string\" then [.] else . end | sort | join(\" \")"; }

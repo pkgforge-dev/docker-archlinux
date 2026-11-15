@@ -4,7 +4,7 @@
 #
 #   - name Status; an hourly cron and workflow_dispatch; no permission at the
 #     top; one concurrency group that never cancels a run
-#   - jobs build, check, deploy and keep, each on ubuntu-24.04 with a timeout
+#   - jobs build, check, deploy and keep, each on ubuntu-26.04 with a timeout
 #   - build: contents write, runs scripts/status-collect and
 #     scripts/status-render, pushes the branch status and uploads the Pages
 #     artifact only on the default branch, uploads no status-history
@@ -63,8 +63,8 @@ expect "no permission at the top" "{}" "$(q '.permissions | tojson')" "$R | jq .
 expect "one concurrency group, and a run is never cancelled" "status false" \
   "$(q '"\(.concurrency.group) \(.concurrency["cancel-in-progress"])"')" "$R | jq .concurrency"
 expect "the jobs are build, check, deploy and keep" "build check deploy keep" "$(q '.jobs | keys | join(" ")')" "$R | jq '.jobs | keys'"
-expect "every job runs on ubuntu-24.04 with a timeout" "" \
-  "$(q '[.jobs | to_entries[] | select(.value["runs-on"] != "ubuntu-24.04" or (.value["timeout-minutes"] | type) != "number") | .key] | join(" ")')" \
+expect "every job runs on ubuntu-26.04 with a timeout" "" \
+  "$(q '[.jobs | to_entries[] | select(.value["runs-on"] != "ubuntu-26.04" or (.value["timeout-minutes"] | type) != "number") | .key] | join(" ")')" \
   "$R | jq '.jobs[] | {\"runs-on\", \"timeout-minutes\"}'"
 
 # build

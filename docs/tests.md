@@ -423,7 +423,7 @@ The tree itself is never changed. Each row gives the fault, then the `not ok` li
 | 35 | `secrets.GITHUB_TOKEN` in a leg | ⛔ no secret in a build leg |
 | 35 | EXPECT_ANCHOR removed | ⛔ the evidence must have the resolved anchor |
 | 35 | the plan result dropped from the publish condition | the publish runs only after a passed plan and gate |
-| 35 | gate on ubuntu-latest, or watch with no timeout | every job runs on ubuntu-24.04 with a timeout |
+| 35 | gate on ubuntu-latest, or watch with no timeout | every job runs on ubuntu-26.04 with a timeout |
 | 35 | `permissions: read-all` | the top level grants no permission |
 | 35 | plan-build gives the real hub target | a dry run plans the scratch images; ⛔ a dry run with dry_run_hub copies between the scratch images only |
 | 35 | the name, a job id, a cron, an input or the allow-list default changed | the assertion of each |
@@ -689,7 +689,7 @@ A broken config `{"automerge":"yes","bogusKey":1}` fails `renovate-config-valida
 | 79 | contents read at the top | no permission at the top |
 | 79 | cancel-in-progress true | one concurrency group, and a run is never cancelled |
 | 79 | the job check renamed verify | the jobs are build, check, deploy and keep |
-| 79 | ubuntu-latest | every job runs on ubuntu-24.04 with a timeout |
+| 79 | ubuntu-latest | every job runs on ubuntu-26.04 with a timeout |
 | 79 | pull-requests read added | build: actions read and contents write, nothing more |
 | 79 | `scripts/collect` | build: runs scripts/status-collect, then scripts/status-render |
 | 79 | the `if` removed from the push step | build: the push to the branch status and the Pages artifact run on the default branch only |

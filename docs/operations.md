@@ -18,7 +18,7 @@ This document tells what runs by itself, which issues the automation raises and 
 Every workflow keeps these rules, and `tests/static/51-workflow-policy.sh` checks each one:
 
 - `permissions: {}` at the top.
-- `ubuntu-24.04` and `timeout-minutes` on each job. A job that calls a reusable workflow has no timeout of its own.
+- `ubuntu-26.04` and `timeout-minutes` on each job. A job that calls a reusable workflow has no timeout of its own.
 - Each action pinned by commit.
 
 ### The jobs of the watchdog

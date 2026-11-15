@@ -48,7 +48,7 @@ Keep these conventions in every change. The static suite checks most of them. [t
 `tests/static/51-workflow-policy.sh` checks each rule:
 
 - `permissions: {}` at the top. Each job asks for what it needs.
-- `runs-on: ubuntu-24.04`, a pinned label, never `*-latest`. Renovate moves the label, and a person merges that update.
+- `runs-on: ubuntu-26.04`, a pinned label, never `*-latest`. Renovate moves the label, and a person merges that update.
 - `timeout-minutes` on every job. A job that calls a reusable workflow cannot have one; the jobs of the called workflow have their own.
 - `shell: bash` by default, so each `run:` block runs with `-eo pipefail`.
 - Each action pinned by a 40 hex commit, with the version in a comment: `uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`.
