@@ -335,9 +335,13 @@ TRIPLE="$(port zig_triple)"
 HOSTTRIPLET="$(port host_triplet)"
 OSSLTARGET="$(port openssl_target)"
 ELFMACHINE="$(port elf_machine)"
-# ports/*.conf names the emulator without -static. The qemu-user-static
-# package installs each one with the suffix.
+# ports/*.conf names the emulator without -static. Ubuntu 24.04 installs it
+# with the suffix (qemu-user-static); from 26.04 qemu-user is static and
+# installs it without. The first on PATH is used.
 QEMU="$(port qemu)-static"
+if ! command -v "$QEMU" > /dev/null && command -v "$(port qemu)" > /dev/null; then
+  QEMU="$(port qemu)"
+fi
 PACMAN_ARCH="$(port pacman_arch)"
 CPUFAMILY="$(port meson_cpu_family)"
 ENDIAN="$(port endian)"

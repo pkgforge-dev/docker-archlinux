@@ -306,7 +306,7 @@ Every leg runs on an x86_64 runner. The bootstrap stage runs native. The last st
 | `native` | nothing; the runner runs the port |
 | `tonistiigi` | `tonistiigi/binfmt --install <name>`, pinned by digest; then multiarch, then ubuntu |
 | `multiarch` | `multiarch/qemu-user-static --reset -p yes`, pinned by digest; then ubuntu |
-| `ubuntu` | the `qemu-user-static` package of the runner, and a registration line that the script writes, flags `F`. The magic and mask come from the table of the script, which holds each emulator of qemu's `scripts/qemu-binfmt-conf.sh` |
+| `ubuntu` | the static emulator of the runner (`qemu-user-static` on Ubuntu 24.04, `qemu-user` from 26.04), and a registration line that the script writes, flags `F`. The magic and mask come from the table of the script, which holds each emulator of qemu's `scripts/qemu-binfmt-conf.sh` |
 
 After each source, the script reads `/proc/sys/fs/binfmt_misc/<name>`: it must be enabled with the `F` flag. ⚠ Without `F` the kernel opens the emulator inside the build container, where it does not exist. ⚠ tonistiigi/binfmt has no `qemu-ppc` and no `qemu-ppc64`, so the two big endian PowerPC ports start at multiarch.
 

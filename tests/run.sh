@@ -282,8 +282,14 @@ print_failed() {
 
 # on_exit: after an early exit, stop the files that run, then print each file
 # that started, with the output it has, and the summary. Then remove OUT.
+#
+# ⚠ A second INT or TERM must not cut the report short. timeout(1) sends TERM
+# to the run and then to its whole process group, so the run gets it twice; a
+# second Ctrl-C does the same. The trap 'exit 143' would end on_exit with no
+# output, so on_exit ignores both first.
 on_exit() {
   local rc=$?
+  trap '' INT TERM
   stop_jobs
   if [ "$all_ended" -eq 0 ] && [ "$n_started" -gt 0 ]; then
     flush_upto "$n_started"

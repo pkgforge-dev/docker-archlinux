@@ -411,13 +411,27 @@ if command -v timeout > /dev/null && [ -d /proc/self ]; then
   check "the other files still run" "10-first.sh 30-third.sh" "$(tr ' ' '\n' <<< "$ran" | awk 'NF' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
   check "the deadline stops the processes that the file started" gone "$(gone "$tree/hang.pid")"
 
-  # The run itself is stopped by TERM after 3 s, while 20-hang waits.
+  # The run itself is stopped by TERM while 20-hang waits. ⚠ The TERM goes
+  # out only when 20-hang has started and 30-third has run, not after a fixed
+  # time: on a loaded runner the files can start late.
   rm -f "$tree/hang.pid"
   rc=0
   : > "$tree/ran.log"
-  out="$(env -u IMAGE -u PLATFORM -u REPO_ROOT TESTS_FILE_TIMEOUT=100 \
-    timeout -k 5 -s TERM 3 bash "$tree/tests/run.sh" -j 3 static 2>&1)" || rc=$?
-  check "TERM stops the run (exit of timeout)" 124 "$rc"
+  env -u IMAGE -u PLATFORM -u REPO_ROOT TESTS_FILE_TIMEOUT=100 \
+    timeout -k 5 -s TERM 120 bash "$tree/tests/run.sh" -j 3 static > "$tree/term.out" 2>&1 &
+  tpid=$!
+  n=0
+  until { [ -s "$tree/hang.pid" ] && [ -n "$(awk '$0 == "30-third.sh"' "$tree/ran.log")" ]; } || [ "$n" -ge 600 ]; do
+    sleep 0.1
+    n=$((n + 1))
+  done
+  # 30-third logs its name first; let it print its summary and end.
+  sleep 1
+  # timeout passes the TERM on to the run.
+  kill -TERM "$tpid"
+  wait "$tpid" || rc=$?
+  out="$(cat "$tree/term.out")"
+  check "TERM stops the run (exit 143)" 143 "$rc"
   check "after TERM, the output of a file that ended before is printed" yes "$(has_line '# ===== static/30-third.sh =====')"
   check "after TERM, the partial output of the file that did not end is printed" yes "$(has_line 'ok 1 - before the hang')"
   check "after TERM, the summary names the file that did not end" yes "$(has_line 'failed: static/20-hang.sh')"

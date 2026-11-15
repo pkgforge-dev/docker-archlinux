@@ -66,12 +66,12 @@ pacman -Syu --noconfirm --needed curl git gnupg make perl pkgconf binutils \
   xz bzip2 gzip meson ninja gperf qemu-user-static jq
 ```
 
-On Debian or Ubuntu, install `meson` with `scripts/install-tools`. It gets the pinned version and checks its sha256. CI uses the same pin.
+On Debian or Ubuntu, install `meson` with `scripts/install-tools`. From Ubuntu 26.04, `qemu-user` is static and names each emulator without `-static`; the build takes either name. It gets the pinned version and checks its sha256. CI uses the same pin.
 
 ```bash
 apt-get install -y --no-install-recommends ca-certificates curl git gnupg make \
   perl pkg-config binutils xz-utils bzip2 gzip ninja-build gperf python3 \
-  qemu-user-static jq
+  qemu-user jq
 scripts/install-tools "$HOME/.local/tools" meson
 export PATH="$HOME/.local/tools:$PATH"
 ```

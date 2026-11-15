@@ -14,8 +14,10 @@
 #   native      no emulator: the runner runs the port
 #   tonistiigi  1. tonistiigi/binfmt --install, 2. multiarch, 3. ubuntu
 #   multiarch   2. multiarch/qemu-user-static --reset -p yes, 3. ubuntu
-#   ubuntu      the qemu-user-static package of the runner, and a registration
-#               line from the table below, flags F
+#   ubuntu      the static emulator of the runner, and a registration line
+#               from the table below, flags F. Ubuntu 24.04 ships it as
+#               /usr/bin/NAME-static (qemu-user-static); from 26.04 the
+#               package qemu-user ships it as /usr/bin/NAME
 # The images are pinned by digest. After each source, the check reads
 # /proc/sys/fs/binfmt_misc/<NAME>: it must be enabled and carry the F flag.
 # ⚠ Without F the kernel opens the emulator inside the build container, where
@@ -98,11 +100,24 @@ usage() {
 # What to edit for an emulator that the table does not have.
 FIX_TABLE="add its NAME, magic and mask from qemu's scripts/qemu-binfmt-conf.sh to TABLE in scripts/binfmt-register and to tests/fixtures/64-plan-build/binfmt.tsv"
 
-# line_for NAME -> the registration line for /register, or nothing
+# line_for NAME [EMULATOR] -> the registration line for /register, or
+# nothing. EMULATOR defaults to /usr/bin/NAME-static.
 line_for() {
-  awk -v n="$1" '$1 == n {
-      printf ":%s:M::%s:%s:/usr/bin/%s-static:F\n", $1, $2, $3, $1
+  awk -v n="$1" -v e="${2:-/usr/bin/$1-static}" '$1 == n {
+      printf ":%s:M::%s:%s:%s:F\n", $1, $2, $3, e
     }' <<< "$TABLE"
+}
+
+# emulator_path NAME -> /usr/bin/NAME-static or /usr/bin/NAME, the first that
+# can run, or nothing
+emulator_path() {
+  local p
+  for p in "/usr/bin/$1-static" "/usr/bin/$1"; do
+    if [ -x "$p" ]; then
+      printf '%s\n' "$p"
+      return 0
+    fi
+  done
 }
 
 # AS_ROOT: the prefix that runs a command as root.
@@ -150,23 +165,28 @@ src_multiarch() {
 }
 
 src_ubuntu() {
-  local qemu="$1" line
-  line="$(line_for "$qemu")"
-  [ -n "$line" ] || {
+  local qemu="$1" line emu
+  [ -n "$(line_for "$qemu")" ] || {
     warn "the fallback table has no entry for $qemu; $FIX_TABLE"
     return 1
   }
   need timeout
-  if [ ! -x "/usr/bin/$qemu-static" ]; then
+  emu="$(emulator_path "$qemu")"
+  if [ -z "$emu" ]; then
     need apt-get
     timeout -k 5 300 "${AS_ROOT[@]}" apt-get -o Acquire::Retries=3 update
+    # Ubuntu 26.04 has no qemu-user-static: qemu-user is static there.
     timeout -k 5 600 "${AS_ROOT[@]}" env DEBIAN_FRONTEND=noninteractive \
-      apt-get -o Acquire::Retries=3 install -y --no-install-recommends qemu-user-static
+      apt-get -o Acquire::Retries=3 install -y --no-install-recommends qemu-user-static ||
+      timeout -k 5 600 "${AS_ROOT[@]}" env DEBIAN_FRONTEND=noninteractive \
+        apt-get -o Acquire::Retries=3 install -y --no-install-recommends qemu-user
+    emu="$(emulator_path "$qemu")"
   fi
-  [ -x "/usr/bin/$qemu-static" ] || {
-    warn "/usr/bin/$qemu-static is not there after the install"
+  [ -n "$emu" ] || {
+    warn "neither /usr/bin/$qemu-static nor /usr/bin/$qemu is there after the install"
     return 1
   }
+  line="$(line_for "$qemu" "$emu")"
   # The package can register NAME itself, with other flags. Ours replaces it.
   unregister "$qemu"
   # shellcheck disable=SC2016 # $1 and $2 are for the inner sh
