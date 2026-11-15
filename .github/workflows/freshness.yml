@@ -44,7 +44,7 @@ defaults:
 jobs:
   image-pins:
     name: Image pins against their tags
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       actions: read
@@ -145,7 +145,7 @@ jobs:
 
   keyring-list:
     name: List the keyring pins
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -176,7 +176,7 @@ jobs:
   keyring:
     name: Keyring ${{ matrix.keyring }}
     needs: keyring-list
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
       actions: write
@@ -342,7 +342,7 @@ jobs:
 
   pacman-static:
     name: Static pacman pin against upstream
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -551,7 +551,7 @@ jobs:
 
   tools:
     name: Pinned tools against upstream
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -617,7 +617,7 @@ jobs:
 
   pacman-oci:
     name: Vendored pacman-oci against its source
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read

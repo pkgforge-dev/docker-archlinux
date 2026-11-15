@@ -70,7 +70,7 @@ env:
 jobs:
   plan:
     name: Plan
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -104,7 +104,7 @@ jobs:
 
   gate:
     name: Static suite
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -146,7 +146,7 @@ jobs:
     name: Build ${{ matrix.arch }}
     needs: plan
     if: ${{ needs.plan.outputs.matrix != '[]' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 75
     permissions:
       contents: read
@@ -365,7 +365,7 @@ jobs:
     name: Publish to GHCR
     needs: [plan, build, gate]
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.gate.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -416,7 +416,7 @@ jobs:
     name: Copy to Docker Hub
     needs: [plan, publish]
     if: ${{ !cancelled() && needs.plan.outputs.publish_hub == 'true' && needs.publish.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -450,7 +450,7 @@ jobs:
     name: Report
     needs: [plan, gate, build, publish, hub]
     if: ${{ always() && inputs.dry_run != true }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -480,7 +480,7 @@ jobs:
     name: Start the status site
     needs: report
     if: ${{ always() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       actions: write
@@ -501,7 +501,7 @@ jobs:
   watch:
     name: Watch the schedules
     if: ${{ inputs.dry_run != true }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
