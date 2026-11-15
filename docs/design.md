@@ -368,7 +368,7 @@ A comment line `# Adopted YYYY-MM-DD.` records the adoption date. `scripts/check
 
 `scripts/build-pacman-static ARCH` links pacman statically against musl, for each port, from the inputs of `bootstrap/pacman-static/sources.pin`. It is a release asset. ⛔ The Dockerfile does not read the pin, and no image build fetches anything named in it.
 
-- One zig download is the compiler, the linker, the archiver and the musl source for every target. zig 0.16.0 is pinned for x86_64 and aarch64 hosts.
+- One zig download is the compiler, the linker, the archiver and the musl source for every target. zig 0.17.1 is pinned for x86_64 and aarch64 hosts.
 - 11 libraries: zlib, xz, bzip2, zstd, openssl (3.5 line), libarchive, curl, libgpg-error, libassuan, gpgme and libseccomp. ⚠ No brotli and no nghttp2: the binary uses HTTP/1.1 and does not take the `br` content encoding.
 - ⛔ pacman is pinned at a commit, `54d94116164b0b2202c6061c4a59c6f3e70820d8`, the commit of the pacman that the images ship (`g54d9411` in the anchor). The tag `v7.1.0` is an older commit.
 - The signed tag `v7.1.0` is pinned by its object sha. The build checks its signature with the pinned signer keys (`bootstrap/pacman-static/keys/`, then two keyservers) and requires a `VALIDSIG` of a signer line. ⚠ The signature covers the tagged commit. The commit sha covers the commits after it.

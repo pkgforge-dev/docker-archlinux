@@ -40,14 +40,14 @@
 # download. One zig cross compiles to every port from one host. The build
 # picks the record whose HOST is the host it runs on.
 #---------------------------------------------------------------------------#
-zig 0.16.0 x86_64-linux https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
-zig 0.16.0 aarch64-linux https://ziglang.org/download/0.16.0/zig-aarch64-linux-0.16.0.tar.xz ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
-mirror = zig-x86_64-linux https://pkg.hexops.org/zig/zig-x86_64-linux-0.16.0.tar.xz
-mirror = zig-x86_64-linux https://zig.linus.dev/zig/zig-x86_64-linux-0.16.0.tar.xz
-mirror = zig-x86_64-linux https://fs.liujiacai.net/zigbuilds/zig-x86_64-linux-0.16.0.tar.xz
-mirror = zig-aarch64-linux https://pkg.hexops.org/zig/zig-aarch64-linux-0.16.0.tar.xz
-mirror = zig-aarch64-linux https://zig.linus.dev/zig/zig-aarch64-linux-0.16.0.tar.xz
-mirror = zig-aarch64-linux https://fs.liujiacai.net/zigbuilds/zig-aarch64-linux-0.16.0.tar.xz
+zig 0.17.1 x86_64-linux https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz 3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a
+zig 0.17.1 aarch64-linux https://ziglang.org/download/0.17.1/zig-aarch64-linux-0.17.1.tar.xz a1546d5646eb184437918d6635ca6b762a0e889eac09cef720ee7a1ed3fe7795
+mirror = zig-x86_64-linux https://pkg.hexops.org/zig/zig-x86_64-linux-0.17.1.tar.xz
+mirror = zig-x86_64-linux https://zig.linus.dev/zig/zig-x86_64-linux-0.17.1.tar.xz
+mirror = zig-x86_64-linux https://fs.liujiacai.net/zigbuilds/zig-x86_64-linux-0.17.1.tar.xz
+mirror = zig-aarch64-linux https://pkg.hexops.org/zig/zig-aarch64-linux-0.17.1.tar.xz
+mirror = zig-aarch64-linux https://zig.linus.dev/zig/zig-aarch64-linux-0.17.1.tar.xz
+mirror = zig-aarch64-linux https://fs.liujiacai.net/zigbuilds/zig-aarch64-linux-0.17.1.tar.xz
 
 #---------------------------------------------------------------------------#
 # The static libraries, in the order the build makes them.
@@ -62,12 +62,12 @@ mirror = zig-aarch64-linux https://fs.liujiacai.net/zigbuilds/zig-aarch64-linux-
 #
 # ⚠ OpenSSL is the 3.5 long term support line.
 #---------------------------------------------------------------------------#
-source zlib 1.3.2 https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
-mirror = zlib https://zlib.net/fossils/zlib-1.3.2.tar.gz
+source zlib 1.4 https://github.com/madler/zlib/releases/download/v1.4/zlib-1.4.tar.gz 02dd159783677a749c04adbdd02b55b8a2bcc7e054f51b76b549199a916ad584
+mirror = zlib https://zlib.net/fossils/zlib-1.4.tar.gz
 
-source xz 5.8.3 https://github.com/tukaani-project/xz/releases/download/v5.8.3/xz-5.8.3.tar.gz 3d3a1b973af218114f4f889bbaa2f4c037deaae0c8e815eec381c3d546b974a0
-mirror = xz https://downloads.sourceforge.net/project/lzmautils/xz-5.8.3.tar.gz
-mirror = xz https://distfiles.gentoo.org/distfiles/a1/xz-5.8.3.tar.gz
+source xz 5.8.4 https://github.com/tukaani-project/xz/releases/download/v5.8.4/xz-5.8.4.tar.gz 0014c7886930454fe8bd4228665b51af55eeae560ea135c9c4cd33f55b2591d9
+mirror = xz https://downloads.sourceforge.net/project/lzmautils/xz-5.8.4.tar.gz
+mirror = xz https://distfiles.gentoo.org/distfiles/30/xz-5.8.4.tar.gz
 
 source bzip2 1.0.8 https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269
 mirror = bzip2 https://mirrors.kernel.org/sourceware/bzip2/bzip2-1.0.8.tar.gz
@@ -77,15 +77,15 @@ mirror = bzip2 https://distfiles.gentoo.org/distfiles/1c/bzip2-1.0.8.tar.gz
 source zstd 1.5.7 https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
 mirror = zstd https://distfiles.gentoo.org/distfiles/49/zstd-1.5.7.tar.gz
 
-source openssl 3.5.8 https://github.com/openssl/openssl/releases/download/openssl-3.5.8/openssl-3.5.8.tar.gz a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2
-mirror = openssl https://distfiles.gentoo.org/distfiles/f1/openssl-3.5.8.tar.gz
-mirror = openssl https://distfiles.alpinelinux.org/distfiles/edge/openssl-3.5.8.tar.gz
+source openssl 3.5.9 https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz 603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
+mirror = openssl https://distfiles.gentoo.org/distfiles/74/openssl-3.5.9.tar.gz
+mirror = openssl https://distfiles.alpinelinux.org/distfiles/edge/openssl-3.5.9.tar.gz
 
-source libarchive 3.8.9 https://github.com/libarchive/libarchive/releases/download/v3.8.9/libarchive-3.8.9.tar.gz f5a6539059cf5e597dbeda37bfa4874b1e8dea063c8d93bf85a2b44af90a5bd4
-mirror = libarchive https://www.libarchive.org/downloads/libarchive-3.8.9.tar.gz
+source libarchive 3.8.11 https://github.com/libarchive/libarchive/releases/download/v3.8.11/libarchive-3.8.11.tar.gz 900fe9fc7237c2b04f090f3c3648de8fe597525771f5035016537ce2d667d12b
+mirror = libarchive https://www.libarchive.org/downloads/libarchive-3.8.11.tar.gz
 
-source curl 8.21.0 https://github.com/curl/curl/releases/download/curl-8_21_0/curl-8.21.0.tar.gz d9b327997999045a24cda50f3983e69e51c516bd8be6ef9842fc7f99135e33bb
-mirror = curl https://curl.se/download/curl-8.21.0.tar.gz
+source curl 8.23.0 https://github.com/curl/curl/releases/download/curl-8_23_0/curl-8.23.0.tar.gz e3de77cfa6367083c776a26647fc9f633b538c06c3baa73d931a252ac8f72b49
+mirror = curl https://curl.se/download/curl-8.23.0.tar.gz
 
 source libgpg-error 1.61 https://gnupg.org/ftp/gcrypt/libgpg-error/libgpg-error-1.61.tar.bz2 7a85413f2bc354f4f8aa832b718af122e48965e9e0eb9012ee659c13c6385c93
 mirror = libgpg-error https://mirrors.dotsrc.org/gcrypt/libgpg-error/libgpg-error-1.61.tar.bz2
@@ -96,10 +96,8 @@ source libassuan 3.0.2 https://gnupg.org/ftp/gcrypt/libassuan/libassuan-3.0.2.ta
 mirror = libassuan https://mirrors.dotsrc.org/gcrypt/libassuan/libassuan-3.0.2.tar.bz2
 mirror = libassuan https://www.mirrorservice.org/sites/ftp.gnupg.org/gcrypt/libassuan/libassuan-3.0.2.tar.bz2
 
-source gpgme 2.1.2 https://gnupg.org/ftp/gcrypt/gpgme/gpgme-2.1.2.tar.bz2 0687a95b299871c4141f507c0f740de6b429c9ac067d0fa4e062e3264df5fb77
-mirror = gpgme https://mirrors.dotsrc.org/gcrypt/gpgme/gpgme-2.1.2.tar.bz2
-mirror = gpgme https://www.mirrorservice.org/sites/ftp.gnupg.org/gcrypt/gpgme/gpgme-2.1.2.tar.bz2
-mirror = gpgme https://distfiles.gentoo.org/distfiles/b8/gpgme-2.1.2.tar.bz2
+source gpgme 2.2.0 https://gnupg.org/ftp/gcrypt/gpgme/gpgme-2.2.0.tar.bz2 7160e80e84dafd00d956c84891c533bb7ab16a6a54fbe1574b2f3acf0496977b
+mirror = gpgme https://distfiles.gentoo.org/distfiles/ba/gpgme-2.2.0.tar.bz2
 
 source libseccomp 2.6.1 https://github.com/seccomp/libseccomp/releases/download/v2.6.1/libseccomp-2.6.1.tar.gz 501f66c667225d53791b97e1d7cf85ab764c297d04881f60f38f451c4b0ee1be
 mirror = libseccomp https://distfiles.gentoo.org/distfiles/ee/libseccomp-2.6.1.tar.gz
