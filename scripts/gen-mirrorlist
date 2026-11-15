@@ -7,15 +7,18 @@
 #
 # ARCH is a name that `scripts/ports list` prints. For each list that
 # rootfs/ARCH/etc/pacman.conf includes, it writes rootfs/ARCH/etc/pacman.d/LIST:
-#   mirrorlist    the servers of mirrors/ARCH.anchors, in file order, then the
-#                 candidates of mirrors/ARCH.pool that answer, fastest
-#                 connection first
-#   mirrorlist-X  the servers of mirrors/ARCH.X-anchors, in file order
+#   mirrorlist    the Server lines of mirrors/ARCH.anchors, in file order, then
+#                 the candidates of mirrors/ARCH.pool that answer, fastest
+#                 connection first, then the Fallback lines of the anchors file
+#   mirrorlist-X  the Server lines of mirrors/ARCH.X-anchors, in file order,
+#                 then its Fallback lines
 #
-# ⭐ The anchors file is the only reviewed input. Its servers are always first,
-# in file order, and are never ranked or dropped. At least one anchor of each
-# list must answer. A candidate is written only when it answers 200 for the
-# database of the first repository that reads the list.
+# ⭐ The anchors file is the only reviewed input. Its Server lines are always
+# first and its Fallback lines always last, each in file order, and they are
+# never ranked or dropped. At least one of them must answer. A Fallback is a
+# server that a consumer reads only when every other server failed: the GHCR
+# mirror, which can be hours behind upstream. A candidate is written only when
+# it answers 200 for the database of the first repository that reads the list.
 #
 # ⛔ The lists of a port change together. Each list goes to a temporary file,
 # and the files move into place only when every list of the port passes. A
@@ -396,7 +399,7 @@ trap cleanup EXIT
 
 generate() {
   local arch="$1" parch lists line list repos repo anchors_path dest tmp
-  local anchors probe_out live total dead ranked nranked old_ranked keep_min pool rc
+  local anchors fallbacks fixed probe_out live total dead ranked nranked old_ranked keep_min pool rc
   local today
   today="$(date -u +%Y-%m-%d)"
   parch="$(port_get "$arch" pacman_arch)"
@@ -413,20 +416,23 @@ generate() {
     [ -f "$anchors_path" ] || die "$list of $arch has no anchors file" "expected: ${anchors_path#"$MIRRORS_DIR/"} in mirrors/" \
       "reproduce: ls $MIRRORS_DIR"
     anchors="$(list_servers "$anchors_path")"
+    fallbacks="$(list_fallbacks "$anchors_path")"
     [ -n "$anchors" ] || die "${anchors_path##*/} has no Server line" "reproduce: grep -n Server $anchors_path"
+    # Every server that the anchors file names, Server and Fallback
+    fixed="$(printf '%s\n%s\n' "$anchors" "$fallbacks" | awk 'NF')"
     # ⛔ A shipped list has no oci:// server. Only use-transport adds one, in
     # the build stage.
-    if [ -n "$(awk '/^oci/' <<< "$anchors")" ]; then
+    if [ -n "$(awk '/^oci/' <<< "$fixed")" ]; then
       die "${anchors_path##*/} has an oci:// server, and a shipped list never has one" \
         "reproduce: grep -n oci: $anchors_path"
     fi
     echo "==> $arch $list: Architecture = $parch, probed with $repo.db"
 
-    # The anchors: every one is written, and at least one must answer.
-    probe_out="$(printf '%s\n' "$anchors" | probe_all "$repo" "$parch" 0)"
+    # The anchors and fallbacks: every one is written, and at least one must answer.
+    probe_out="$(printf '%s\n' "$fixed" | probe_all "$repo" "$parch" 0)"
     live="$(awk '$1 == "200" { n++ } END { print n + 0 }' <<< "$probe_out")"
     dead="$(awk '$1 != "200" { print "  " $3 " (HTTP " $1 ")" }' <<< "$probe_out")"
-    echo "    anchors: $(awk 'NF { n++ } END { print n + 0 }' <<< "$anchors") written, $live answered"
+    echo "    anchors: $(awk 'NF { n++ } END { print n + 0 }' <<< "$fixed") written ($(awk 'NF { n++ } END { print n + 0 }' <<< "$fallbacks") last), $live answered"
     if [ -n "$dead" ]; then
       printf '    no answer from here:\n%s\n' "$dead"
     fi
@@ -446,18 +452,18 @@ generate() {
         3) refuse "no candidate source in mirrors/$arch.pool answered" "each failure is above" ;;
         *) exit "$rc" ;;
       esac
-      # An anchor is not also a candidate, and no candidate is oci://.
-      pool="$(awk 'NR == FNR { a[$0]; next } NF && !($0 in a) && !/^oci/' <(printf '%s\n' "$anchors") <(printf '%s\n' "$pool"))"
+      # An anchor or fallback is not also a candidate, and no candidate is oci://.
+      pool="$(awk 'NR == FNR { a[$0]; next } NF && !($0 in a) && !/^oci/' <(printf '%s\n' "$fixed") <(printf '%s\n' "$pool"))"
       echo "    pool: $(awk 'NF { n++ } END { print n + 0 }' <<< "$pool") candidates"
       if [ -n "$pool" ]; then
         ranked="$(printf '%s\n' "$pool" | probe_all "$repo" "$parch" 1 |
           awk '$1 == "200" { print $2 " " $3 }' | LC_ALL=C sort -n | awk '{ print $2 }')"
         ranked="$(awk 'NR == FNR { a[$0]; next } NF && !($0 in a) && ++k <= m' m="$MAX_SERVERS" \
-          <(printf '%s\n' "$anchors") <(printf '%s\n' "$ranked"))"
+          <(printf '%s\n' "$fixed") <(printf '%s\n' "$ranked"))"
       fi
     fi
     nranked="$(awk 'NF { n++ } END { print n + 0 }' <<< "$ranked")"
-    total=$(($(awk 'NF { n++ } END { print n + 0 }' <<< "$anchors") + nranked))
+    total=$(($(awk 'NF { n++ } END { print n + 0 }' <<< "$fixed") + nranked))
     echo "    ranked: $nranked written"
 
     if [ "$total" -lt "$MIN_SERVERS" ]; then
@@ -465,11 +471,12 @@ generate() {
         "add anchors to ${anchors_path##*/}, or try again when the candidates answer"
     fi
 
-    # The ranked servers of the list in the tree: the servers that are not anchors.
+    # The ranked servers of the list in the tree: the servers that are not
+    # anchors or fallbacks.
     old_ranked=0
     if [ -f "$dest" ]; then
       old_ranked="$(awk 'NR == FNR { a[$0]; next } NF && !($0 in a) { n++ } END { print n + 0 }' \
-        <(printf '%s\n' "$anchors") <(list_servers "$dest"))"
+        <(printf '%s\n' "$fixed") <(list_servers "$dest"))"
     fi
     keep_min=$((old_ranked / 2))
     [ "$keep_min" -le $((MAX_SERVERS / 2)) ] || keep_min=$((MAX_SERVERS / 2))
@@ -493,15 +500,25 @@ generate() {
       if [ "$nranked" -gt 0 ]; then
         printf '## The first %s servers are the anchors of mirrors/%s, in that order.\n' \
           "$(awk 'NF { n++ } END { print n + 0 }' <<< "$anchors")" "${anchors_path##*/}"
-        printf '## The other servers answered for %s.db, the fastest connection first.\n' "$repo"
+        printf '## The next servers answered for %s.db, the fastest connection first.\n' "$repo"
       else
-        printf '## The servers are the anchors of mirrors/%s, in that order.\n' "${anchors_path##*/}"
+        printf '## The first servers are the anchors of mirrors/%s, in that order.\n' "${anchors_path##*/}"
       fi
+      case "$(awk 'NF { n++ } END { print n + 0 }' <<< "$fallbacks")" in
+        0) ;;
+        1) printf '## The last server is the fallback, read only when every other server fails.\n' ;;
+        *) printf '## The last %s servers are the fallbacks, read only when every other server fails.\n' \
+          "$(awk 'NF { n++ } END { print n + 0 }' <<< "$fallbacks")" ;;
+      esac
       printf '##\n\n'
       awk 'NF { print "Server = " $0 }' <<< "$anchors"
       if [ "$nranked" -gt 0 ]; then
         printf '\n'
         awk 'NF { print "Server = " $0 }' <<< "$ranked"
+      fi
+      if [ -n "$fallbacks" ]; then
+        printf '\n'
+        awk 'NF { print "Server = " $0 }' <<< "$fallbacks"
       fi
     } > "$tmp"
     chmod 0644 "$tmp"

@@ -100,7 +100,7 @@ docker buildx imagetools inspect ghcr.io/pkgforge-dev/archlinux:latest --format 
 
 ## Mirrors
 
-The first server of each mirror list of each port is the [GHCR mirror](https://github.com/pkgforge-dev/mirror-archlinux). That includes both lists of the PowerPC ports, `mirrorlist` for `[base]` and `mirrorlist-any` for `[base-any]`. The mirror serves upstream's own databases and packages, with upstream's signatures, from GitHub's package storage. The upstream servers follow it in the same list.
+The last server of each mirror list of each port is the [GHCR mirror](https://github.com/pkgforge-dev/mirror-archlinux). That includes both lists of the PowerPC ports, `mirrorlist` for `[base]` and `mirrorlist-any` for `[base-any]`. The mirror serves upstream's own databases and packages, with upstream's signatures, from GitHub's package storage. The upstream servers come first, so pacman reads the mirror only when each of them fails: the mirror can be hours behind upstream. The build stage reads the mirror first.
 
 ```ini
 Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo

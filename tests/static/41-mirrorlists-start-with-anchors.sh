@@ -6,13 +6,16 @@
 # includes:
 #   - the anchors file of the list exists (mirrors/ARCH.anchors for mirrorlist,
 #     mirrors/ARCH.X-anchors for mirrorlist-X)
-#   - the list starts with the servers of that file, in file order
+#   - the list starts with the Server lines of that file, in file order
+#   - the list ends with the Fallback lines of that file, in file order, and
+#     has no path to the GHCR mirror before them
 #   - the list has at least 2 servers and at least one https server
 #   - the list has no oci:// server
 #   - the header gives a date that parses and is not in the future
 # And over the tree:
 #   - each mirrorlist* file is a list that a pacman.conf includes
 #   - each mirrors/*.pool line is a comment, a Server line or a known source
+#   - each mirrors/*anchors line is a comment, a Server line or a Fallback line
 #
 # Hermetic: no network. tests/network/40-mirrors-reachable.sh probes the
 # servers.
@@ -27,7 +30,11 @@ servers_of() {
   awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print }' "$1" | tr -d '\r'
 }
 
-# includes CONF -> the file name of each list that an enabled section includes
+fallbacks_of() {
+  awk '/^[[:space:]]*Fallback[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print }' "$1" | tr -d '\r'
+}
+
+# includes CONF ->the file name of each list that an enabled section includes
 includes() {
   awk '
     /^[[:space:]]*#/ { next }
@@ -97,6 +104,22 @@ while IFS= read -r arch; do
         "first $n_want of the list: $(tr '\n' ' ' <<< "$head_of")" \
         "regenerate with: scripts/gen-mirrorlist $arch" \
         "reproduce: diff <(grep '^Server' $anchors_rel) <(grep '^Server' $rel | awk 'NR <= $n_want')"
+    fi
+
+    fb="$(fallbacks_of "$REPO_ROOT/$anchors_rel")"
+    n_fb="$(awk 'NF { n++ } END { print n + 0 }' <<< "$fb")"
+    tail_of="$(awk 'NF' <<< "$got" | tail -n "$n_fb")"
+    early="$(awk 'NF' <<< "$got" | awk -v n="$(($(awk 'NF { n++ } END { print n + 0 }' <<< "$got") - n_fb))" \
+      'NR <= n && /^(https:\/\/ghcr\.mirror\.archlinux\.pkgforge\.dev\/|oci:)/')"
+    if [ "$n_fb" -eq 0 ] || { [ "$tail_of" = "$fb" ] && [ -z "$early" ]; }; then
+      ok "$rel ends with the $n_fb fallback(s) of $anchors_rel, and has the GHCR mirror nowhere else"
+    else
+      fail "$rel ends with the fallbacks of $anchors_rel, and has the GHCR mirror nowhere else" \
+        "fallbacks: $(tr '\n' ' ' <<< "$fb")" \
+        "last $n_fb of the list: $(tr '\n' ' ' <<< "$tail_of")" \
+        "GHCR before the fallbacks: $(tr '\n' ' ' <<< "$early")" \
+        "regenerate with: scripts/gen-mirrorlist $arch" \
+        "reproduce: grep -n '^Fallback' $anchors_rel; grep -n '^Server' $rel"
     fi
 
     count="$(awk 'NF { n++ } END { print n + 0 }' <<< "$got")"
@@ -176,4 +199,22 @@ else
     "reproduce: grep -vnE '^[[:space:]]*(#|$|Server|source)' mirrors/*.pool"
 fi
 
+
+# Each anchors line is a comment, a Server line or a Fallback line.
+bad=""
+for f in "$REPO_ROOT"/mirrors/*anchors; do
+  [ -e "$f" ] || continue
+  bad="$bad$(awk -v f="${f#"$REPO_ROOT/"}" '
+    /^[[:space:]]*(#|$)/ { next }
+    /^[[:space:]]*(Server|Fallback)[[:space:]]*=[[:space:]]*[^[:space:]]+[[:space:]]*$/ { next }
+    { printf " %s:%d", f, FNR }' "$f")"
+done
+if [ -z "$bad" ]; then
+  ok "each line of mirrors/*anchors is a comment, a Server line or a Fallback line"
+else
+  fail "each line of mirrors/*anchors is a comment, a Server line or a Fallback line" \
+    "lines:$bad" \
+    "scripts/gen-mirrorlist gives the format" \
+    "reproduce: grep -vnE '^[[:space:]]*(#|$|Server|Fallback)' mirrors/*anchors"
+fi
 summary

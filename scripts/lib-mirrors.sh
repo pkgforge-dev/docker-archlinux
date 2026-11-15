@@ -194,6 +194,11 @@ list_servers() {
   awk '/^[[:space:]]*Server[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print }' "$1"
 }
 
+# list_fallbacks FILE -> every Fallback value of an anchors file, in file order
+list_fallbacks() {
+  awk '/^[[:space:]]*Fallback[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+$/, ""); print }' "$1"
+}
+
 # server_url SERVER REPO PACMAN_ARCH -> SERVER with $repo and $arch expanded
 server_url() {
   local u="${1//\$repo/$2}"
@@ -245,9 +250,15 @@ skip_of() {
 # servers_of ARCH LIST MODE: puts the servers of LIST into the array SERVERS.
 # MODE judge: in the order the build stage gets them, TRANSPORT applied.
 # MODE build: the same, less the servers SKIP_SERVERS names for LIST.
+#
+# The build stage order is the order of use-transport: with TRANSPORT=oci the
+# oci:// server first, then each path to the GHCR mirror (GHCR_MATCH) in list
+# order, then every other server in list order. A shipped list has the GHCR
+# mirror last; the build stage reads it first.
 SERVERS=()
 servers_of() {
   local arch="$1" list="$2" mode="$3" s skips
+  local -a ghcr=() rest=()
   SERVERS=()
   if [ "$TRANSPORT" = oci ]; then
     SERVERS+=("$GHCR_OCI_SERVER")
@@ -261,8 +272,13 @@ servers_of() {
     if [ "$TRANSPORT" = oci ] && [ "$s" = "$GHCR_OCI_SERVER" ]; then
       continue
     fi
-    SERVERS+=("$s")
+    if is_ghcr "$s"; then
+      ghcr+=("$s")
+    else
+      rest+=("$s")
+    fi
   done < <(list_servers "$(list_file "$arch" "$list")")
+  SERVERS+=("${ghcr[@]}" "${rest[@]}")
   if [ -n "$skips" ]; then
     local kept=()
     for s in "${SERVERS[@]}"; do

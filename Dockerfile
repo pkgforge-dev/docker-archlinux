@@ -15,9 +15,11 @@
 #   IMAGE_VERSION  the version label, and VERSION_ID and IMAGE_VERSION of
 #                  /etc/os-release
 #   SOURCE_COMMIT, BUILD_DATE   the revision and created labels
-# With no build argument (TRANSPORT=worker, SKIP_SERVERS empty), the build
-# stage reads each list as rootfs/<arch> has it. The GHCR mirror is first,
-# through the Worker. pacman reads each server after it directly.
+# The lists of rootfs/<arch> end with the GHCR mirror. With no build argument
+# (TRANSPORT=worker, SKIP_SERVERS empty), use-transport moves the GHCR mirror
+# first in each list of the build stage, through the Worker, and pacman reads
+# each server after it directly. The image ships the lists as rootfs/<arch>
+# has them.
 #------------------------------------------------------------------------------------#
 # scripts/check-image-pins reads the marker on the line above the pin.
 # tag: latest
@@ -43,8 +45,8 @@ COPY rootfs/any /rootfs
 COPY rootfs/${TARGETARCH}${TARGETVARIANT} /rootfs
 
 # ⛔ The next two steps change the config of this stage only, never /rootfs.
-# With TRANSPORT=oci, pacman-oci reads the GHCR mirror from the registry, and
-# the oci:// server is first in each list. Each SKIP_SERVERS pair removes one
+# The GHCR mirror goes first in each list. With TRANSPORT=oci, pacman-oci
+# reads it from the registry, and the oci:// server is first. Each SKIP_SERVERS pair removes one
 # server from one list. The image ships every server, because a mirror that is
 # behind follows upstream again after its next sync.
 ARG TRANSPORT=worker

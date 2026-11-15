@@ -23,15 +23,15 @@ Output is TAP. Each file is one plan. A failed assertion prints what was measure
 | `tests/static/30-signature-checking-on.sh` | each shipped `pacman.conf` has `SigLevel = Required ...`, and no SigLevel is `Never` |
 | `tests/static/35-publish-targets.sh` | `build-deploy.yml` read with yq: job ids, needs, permissions, concurrency, the leg name `Build <arch>`, no secret in a leg; the buildkit pin and its fallback to `mirror.gcr.io`; the steps buildkit, push and snapshot run `scripts/build-port` in that order, the builds from `actions/github-script` with the same build args; the export and the digest record take the base image of the push; a publish on a stand-down, the hub gate, and the output `published` that the report reads; the watch step on each exit status of `watch-schedules`; a dry run end to end with fixtures writes only to the scratch images |
 | `tests/static/36-build-port.sh` | `scripts/build-port` against a stand-in docker: on a used-up pull limit, push, snapshot and builder run once more with the same digest from the next registry; no second try for another failure, for a 429 line of another repository, or after a second pull limit; the build args are the ARGs of the Dockerfile; the push by digest, the attestations and the gha cache; the export to `DB_SNAPSHOT`; each step of `build-deploy.yml` that runs the script gives it every variable of its mode |
-| `tests/static/41-mirrorlists-start-with-anchors.sh` | each mirror list starts with its anchors file in order. It has at least 2 servers and one over https, no `oci://` server, and a header date that parses. Each `mirrorlist*` file is included by a `pacman.conf`. Each pool line is valid |
+| `tests/static/41-mirrorlists-start-with-anchors.sh` | each mirror list starts with the Server lines of its anchors file in order. It ends with its Fallback lines (the GHCR mirror), and has no GHCR path before them. It has at least 2 servers and one over https, no `oci://` server, and a header date that parses. Each `mirrorlist*` file is included by a `pacman.conf`. Each pool line and each anchors line is valid |
 | `tests/static/42-pick-transport.sh` | `scripts/pick-transport` gives `worker` when the Worker answers, `oci` when only the registry answers, `worker` when neither does |
-| `tests/static/43-use-transport.sh` | `use-transport` changes the build stage only: `worker` changes nothing, `oci` adds one XferCommand and puts the `oci://` server first in each list, a second run changes nothing; no shipped file has an XferCommand or an `oci://` server |
+| `tests/static/43-use-transport.sh` | `use-transport` changes the build stage only. `worker` puts the Worker first in each list. `oci` adds one XferCommand, and puts the `oci://` server first and the Worker second. A second run changes nothing; no shipped file has an XferCommand or an `oci://` server |
 | `tests/static/44-drop-server.sh` | `drop-server` removes exactly the servers it is given, from the lists it is given, and refuses all else |
 | `tests/static/45-pacman-conf-shape.sh` | the shipped `pacman.conf` files: both `DisableSandbox` directives as comments; no `DownloadUser`; `Architecture` is the `pacman_arch` of the port; the same `[options]` apart from `Architecture`; the repositories of the port in order; no multilib, no XferCommand, no NoExtract |
 | `tests/static/46-mirror-lag-status.sh` | with no later server, `check-mirror-lag` judges the GHCR mirror by its record; a record that cannot be used keeps the server with a warning; with `TRANSPORT=oci`, a drop names the `oci://` path and the Worker path, and the build stage reads the next server |
 | `tests/static/47-pacman-oci-pin.sh` | the vendored pacman-oci has the sha256 of `bootstrap/pacman-oci.pin`, LF line ends and `--version` |
-| `tests/static/48-gen-mirrorlist.sh` | `gen-mirrorlist` writes the lists of a port together, anchors first, or leaves each list as it was; the pool sources, the floors, the budget |
-| `tests/static/49-resolve-anchor.sh` | `resolve-anchor` reads the lists as the build stage does, with `SKIP_SERVERS` pairs and `TRANSPORT`, and clears a port only when each repository reads; `--each` |
+| `tests/static/48-gen-mirrorlist.sh` | `gen-mirrorlist` writes the lists of a port together, anchors first and fallbacks last, or leaves each list as it was; the pool sources, the floors, the budget |
+| `tests/static/49-resolve-anchor.sh` | `resolve-anchor` reads the lists as the build stage does (GHCR first, `SKIP_SERVERS`, `TRANSPORT`), and clears a port only when each repository reads; `--each` |
 | `tests/static/50-supply-chain.sh` | no remote script piped into a shell; no download made executable with no hash check; no deprecated workflow command; a `# tag:` line above each image pin |
 | `tests/static/51-workflow-policy.sh` | the shape of every workflow: permissions, timeouts, pins, checkout credentials, no untrusted value in `run:`, triggers, runners, concurrency, artifacts. No delete of a package. The behaviour of `ci.yml`: the concurrency groups, the verdict of `check`, the `changes` decision with renames |
 | `tests/static/55-shipped-hooks.sh` | each shipped pacman hook has the five directives, one `[Trigger]` and one `[Action]`, and a valid `When`. Its `Exec` ships, and it has a `Depends` for each program it runs |
@@ -298,6 +298,8 @@ The tree itself is never changed. Each row gives the fault, then the `not ok` li
 | 30 | `SigLevel = Never` in amd64 pacman.conf | rootfs/amd64/etc/pacman.conf sets no SigLevel to Never |
 | 41 | the first two servers of ppc64le mirrorlist-any swapped | ...mirrorlist-any starts with the servers of mirrors/ppc64le.any-anchors, in order |
 | 41 | an `oci://` server in amd64 | ...has no oci:// server |
+| 41 | the GHCR mirror first in amd64 mirrorlist | ...ends with the fallbacks of mirrors/amd64.anchors, and has the GHCR mirror nowhere else |
+| 41 | a `Mirror =` line in riscv64.anchors | each line of mirrors/*anchors is a comment, a Server line or a Fallback line |
 | 41 | the header date 2999-01-01 in ppc | ...gives a valid date that is not in the future |
 | 41 | a `mirrorlist-extra` that no pacman.conf includes | each mirrorlist file in rootfs/ is a list that a pacman.conf includes |
 | 41 | a bare URL in riscv64.pool | each line of mirrors/*.pool is a comment, a Server line or a known source |
@@ -312,8 +314,8 @@ The tree itself is never changed. Each row gives the fault, then the `not ok` li
 | 43 | no rootfs guard | a complete stage named rootfs is refused, and stays as it was |
 | 43 | the first-line or the XferCommand check removed | a second oci run changes nothing |
 | 43 | an oci line in mirrors/ppc.anchors | no file in rootfs/ or mirrors/ has an XferCommand or an oci:// server |
-| 43 | the oci server put last | oci puts the oci:// server first in mirrorlist, and keeps the other servers in order |
-| 43 | worker acts as oci | worker changes nothing |
+| 43 | the oci server put last, or the Worker left last | oci puts the oci:// server first and the Worker second in mirrorlist, and keeps the other servers in order |
+| 43 | worker leaves the lists as they are | worker puts the Worker first in mirrorlist, and keeps the other servers in order |
 | 43 | the XferCommand at the end of the file | oci puts one XferCommand of pacman-oci in [options] |
 | 43 | only the first list changed | ...first in mirrorlist-any... |
 | 43 | only Server lines written | oci keeps the comments of a list |
@@ -369,6 +371,8 @@ The tree itself is never changed. Each row gives the fault, then the `not ok` li
 | 48 | no MIN_SERVERS floor | a list with fewer servers than MIN_SERVERS |
 | 48 | status-json takes an inactive mirror, or one with no score | status-json gives only the https, active, complete, recent mirrors with a score |
 | 48 | the package URL next to the database file; no candidates from the package list | mirrorlist-package reads the list in the package that the database names |
+| 48 | Fallback lines ignored, or written before the candidates | mirrorlist has the anchors, then the candidates, then the fallback, which is not also a candidate |
+| 48 | a fallback that answers does not count | a dead anchor and a live fallback: mirrorlist-any is written, the fallback last |
 | 48 | only live anchors written | mirrorlist-any has its anchors in file order, and one dead anchor does not stop it |
 | 48 | no date in the header | the header of each list gives the date it was generated |
 | 48 | no pool file refused | with no pool file, mirrorlist is the anchors |
@@ -379,6 +383,7 @@ The tree itself is never changed. Each row gives the fault, then the `not ok` li
 | 49 | --each lists plain http | --each gives one line for each server that is not plain http, in list order |
 | 49 | no skip check | a SKIP_SERVERS value that is not LIST=SERVER is refused |
 | 49 | the lists ignore TRANSPORT | TRANSPORT=oci reads the oci:// server first |
+| 49 | servers_of reads the list as it ships | a GHCR mirror last in the list is read first, as use-transport makes the build stage |
 | 49 | the first server passed over | the version comes from the first server of the primary list |
 | 49 | skips ignored | a SKIP_SERVERS pair for mirrorlist passes its server |
 | 49 | an unknown list taken | a SKIP_SERVERS pair for a list the port does not have is refused |

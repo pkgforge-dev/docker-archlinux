@@ -1,8 +1,12 @@
-# Anchors for armv7. scripts/gen-mirrorlist writes them first, in this order.
-# It never ranks or drops them. At least one must answer.
+# Anchors for armv7. scripts/gen-mirrorlist writes the
+# Server lines first and the Fallback line last, each in this order. It never
+# ranks or drops them. At least one must answer.
 #
-# The first is the GHCR mirror (pkgforge-dev/mirror-archlinux), over https.
-# The second is the GeoIP endpoint of Arch Linux ARM.
+# The Fallback is the GHCR mirror (pkgforge-dev/mirror-archlinux). It can be
+# hours behind upstream, so a consumer reads it only when every other server
+# fails. The build stage reads it first (use-transport).
+#
+# The Server is the GeoIP endpoint of Arch Linux ARM.
 # ⚠ mirror.archlinuxarm.org serves plain http only.
-Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo
 Server = http://mirror.archlinuxarm.org/$arch/$repo
+Fallback = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo

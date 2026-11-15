@@ -1,11 +1,12 @@
 # Anchors for the [base-any] repository of ppc. scripts/gen-mirrorlist writes
-# them in this order to rootfs/ppc/etc/pacman.d/mirrorlist-any.
-# At least one must answer.
+# the Server lines first and the Fallback line last, each in this order, to
+# rootfs/ppc/etc/pacman.d/mirrorlist-any.
+# At least one must answer. The Fallback is the GHCR mirror, read last.
 #
 # [base-any] holds the packages with no architecture, for example iana-etc.
 # On the GHCR mirror, $arch/$repo gives /<arch>/base-any. On the origin and
 # the proxy, the path is base/any.
 # ⚠ The origin and the proxy answer HTTP 403 to GitHub runner addresses.
-Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo
 Server = https://repo.archlinuxpower.org/base/any
 Server = https://api.rv.pkgforge.dev/https://repo.archlinuxpower.org/base/any
+Fallback = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo

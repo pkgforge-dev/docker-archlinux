@@ -8,6 +8,8 @@
 # Cases:
 #   - one dead anchor in each list: both lists are written, each anchor in
 #     file order, then the candidates that answer
+#   - Fallback lines: written last, after the candidates; a live fallback is
+#     enough when each Server anchor is dead
 #   - each any-anchor dead: exit 3, and BOTH lists stay as they were
 #   - each main anchor dead: exit 3, both lists stay
 #   - no pool file: the anchors only
@@ -162,6 +164,35 @@ if [ "$dates" = "$TODAY" ]; then
   ok "the header of each list gives the date it was generated"
 else
   fail "the header of each list gives the date it was generated" "dates: $(tr '\n' ' ' <<< "$dates"), today: $TODAY" "reproduce: $REPRO"
+fi
+
+#---------------------------------------------------------------------------#
+# Fallbacks: written last, after the candidates, and they count as an answer
+#---------------------------------------------------------------------------#
+tree fallback
+anchors fallback fake.anchors A
+printf 'Fallback = %s\n' "$(server G)" >> "$work/fallback/mirrors/fake.anchors"
+anchors fallback fake.any-anchors B
+printf 'Fallback = %s\n' "$(server H)" >> "$work/fallback/mirrors/fake.any-anchors"
+printf 'Server = %s\nServer = %s\n' "$(server G)" "$(server P1)" > "$work/fallback/mirrors/fake.pool"
+gen fallback
+rc="$(cat "$work/fallback.rc")"
+main="$(servers "$work/fallback/rootfs/fake/etc/pacman.d/mirrorlist")"
+any="$(servers "$work/fallback/rootfs/fake/etc/pacman.d/mirrorlist-any")"
+if [ "$rc" -eq 0 ] && [ "$main" = "$(server A)
+$(server P1)
+$(server G)" ]; then
+  ok "mirrorlist has the anchors, then the candidates, then the fallback, which is not also a candidate"
+else
+  fail "mirrorlist has the anchors, then the candidates, then the fallback, which is not also a candidate" \
+    "exit $rc, servers: $(tr '\n' ' ' <<< "$main")" "it said: $(tr '\n' '|' < "$work/fallback.out")" "reproduce: $REPRO"
+fi
+if [ "$rc" -eq 0 ] && [ "$any" = "$(server B)
+$(server H)" ]; then
+  ok "a dead anchor and a live fallback: mirrorlist-any is written, the fallback last"
+else
+  fail "a dead anchor and a live fallback: mirrorlist-any is written, the fallback last" \
+    "exit $rc, servers: $(tr '\n' ' ' <<< "$any")" "it said: $(tr '\n' '|' < "$work/fallback.out")" "reproduce: $REPRO"
 fi
 
 #---------------------------------------------------------------------------#

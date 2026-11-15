@@ -1,10 +1,15 @@
-# Anchors for ppc. scripts/gen-mirrorlist writes them first, in this order.
-# It never ranks or drops them. At least one must answer.
+# Anchors for ppc. scripts/gen-mirrorlist writes the
+# Server lines first and the Fallback line last, each in this order. It never
+# ranks or drops them. At least one must answer.
 #
-# The first is the GHCR mirror (pkgforge-dev/mirror-archlinux). The second is
-# the ArchPOWER origin. The third is a read-through proxy of the origin.
+# The Fallback is the GHCR mirror (pkgforge-dev/mirror-archlinux). It can be
+# hours behind upstream, so a consumer reads it only when every other server
+# fails. The build stage reads it first (use-transport).
+#
+# The first Server is the ArchPOWER origin. The second is a read-through proxy
+# of the origin.
 # ArchPOWER has no other mirror, so this port has no pool file.
 # ⚠ The origin and the proxy answer HTTP 403 to GitHub runner addresses.
-Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo
 Server = https://repo.archlinuxpower.org/$repo/$arch
 Server = https://api.rv.pkgforge.dev/https://repo.archlinuxpower.org/$repo/$arch
+Fallback = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo

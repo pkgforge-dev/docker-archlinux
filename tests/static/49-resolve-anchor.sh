@@ -13,6 +13,7 @@
 #   - --each: one line for each server that is not plain http, in list order,
 #     "-" for a server that does not answer or that SKIP_SERVERS names
 #   - TRANSPORT=oci reads the oci:// server first
+#   - a GHCR mirror last in the list (GHCR_MATCH) is read first
 #
 # $arch and $repo are variables of pacman and stay literal in this file.
 # shellcheck disable=SC2016
@@ -165,5 +166,12 @@ resolve "TRANSPORT=oci reads the oci:// server first" 0 "3.0-1" \
 resolve "TRANSPORT=oci with the oci:// server in SKIP_SERVERS reads the next server" 0 "1.0-1" \
   TRANSPORT=oci 'GHCR_OCI_SERVER=oci://fake/$arch/$repo' "PACMAN_OCI=$work/fake-oci" "FAKE_OCI_ROOT=$work/oci" \
   'SKIP_SERVERS=mirrorlist=oci://fake/$arch/$repo'
+
+# A list that ships ends with the GHCR mirror. The build stage reads it first.
+lists "a b" "a b"
+resolve "a GHCR mirror last in the list is read first, as use-transport makes the build stage" 0 "2.0-1" \
+  "GHCR_MATCH=^$(file_url "$work/srv")/b/"
+resolve "with the GHCR mirror in SKIP_SERVERS, the first other server gives the version" 0 "1.0-1" \
+  "GHCR_MATCH=^$(file_url "$work/srv")/b/" "SKIP_SERVERS=mirrorlist=$(server b)"
 
 summary

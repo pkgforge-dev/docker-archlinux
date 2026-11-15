@@ -3,12 +3,14 @@
 # use-transport changes the config of the build stage, and only that.
 #
 # bootstrap/any/usr/local/bin/use-transport TRANSPORT ROOT on a fixture build
-# stage:
-#   worker  changes nothing
+# stage whose lists end with the GHCR mirror, as the lists that ship do:
+#   worker  puts the Worker first in each list that a section includes, keeps
+#           the other servers in order and every other line, and leaves
+#           pacman.conf as it was
 #   oci     adds the XferCommand of pacman-oci to [options] once, and puts the
-#           oci:// server first in each list that a section includes; the
-#           other lines stay
-#   a second oci run changes nothing
+#           oci:// server first and the Worker second in each list; the other
+#           lines stay
+#   a second worker or oci run changes nothing
 #   it refuses a ROOT named rootfs, an unknown TRANSPORT, and a ROOT with no
 #   client
 # ⛔ And no file that ships (rootfs/, mirrors/) has an uncommented XferCommand
@@ -25,6 +27,7 @@ USE="$REPO_ROOT/bootstrap/any/usr/local/bin/use-transport"
 REPRO="bash tests/static/43-use-transport.sh (the fixtures are in a temporary directory)"
 OCI='oci://ghcr.io/pkgforge-dev/mirror-archlinux/$arch/$repo'
 XFER='XferCommand = /usr/local/bin/pacman-oci %o %u'
+WORKER='https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo'
 
 work="$(work_dir)"
 trap 'rm -rf "$work"' EXIT
@@ -36,9 +39,9 @@ stage() {
   printf '#!/bin/sh\nexit 1\n' > "$1/usr/local/bin/pacman-oci"
   printf '[options]\nArchitecture = powerpc64le\n#XferCommand = /usr/bin/curl -L -C - -f -o %%o %%u\nSigLevel = Required DatabaseOptional\n\n[base]\nInclude = /etc/pacman.d/mirrorlist\n\n[base-any]\nInclude = /etc/pacman.d/mirrorlist-any\n' \
     > "$1/etc/pacman.conf"
-  printf '##\n## a header\n##\n\nServer = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo\nServer = https://repo.archlinuxpower.org/$repo/$arch\n' \
+  printf '##\n## a header\n##\n\nServer = https://repo.archlinuxpower.org/$repo/$arch\nServer = https://api.rv.pkgforge.dev/https://repo.archlinuxpower.org/$repo/$arch\n\nServer = %s\n' "$WORKER" \
     > "$1/etc/pacman.d/mirrorlist"
-  printf 'Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo\nServer = https://repo.archlinuxpower.org/base/any\n' \
+  printf 'Server = https://repo.archlinuxpower.org/base/any\nServer = %s\n' "$WORKER" \
     > "$1/etc/pacman.d/mirrorlist-any"
 }
 
@@ -54,13 +57,38 @@ servers() {
 # worker
 #---------------------------------------------------------------------------#
 stage "$work/w"
-snapshot "$work/w" > "$work/w.before"
+cp "$work/w/etc/pacman.conf" "$work/w.conf"
+for l in mirrorlist mirrorlist-any; do
+  servers "$work/w/etc/pacman.d/$l" > "$work/w.$l"
+done
 rc=0
 bash "$USE" worker "$work/w" 2> "$work/err" || rc=$?
-if [ "$rc" -eq 0 ] && [ "$(snapshot "$work/w")" = "$(cat "$work/w.before")" ]; then
-  ok "worker changes nothing"
+for l in mirrorlist mirrorlist-any; do
+  got="$(servers "$work/w/etc/pacman.d/$l")"
+  want="$WORKER
+$(grep -vxF -e "$WORKER" "$work/w.$l")"
+  if [ "$rc" -eq 0 ] && [ "$got" = "$want" ]; then
+    ok "worker puts the Worker first in $l, and keeps the other servers in order"
+  else
+    fail "worker puts the Worker first in $l, and keeps the other servers in order" \
+      "exit $rc" "got: $(tr '\n' ' ' <<< "$got")" "want: $(tr '\n' ' ' <<< "$want")" \
+      "it said: $(cat "$work/err")" "reproduce: $REPRO"
+  fi
+done
+if [ "$rc" -eq 0 ] && cmp -s "$work/w/etc/pacman.conf" "$work/w.conf" &&
+  grep -q '^## a header' "$work/w/etc/pacman.d/mirrorlist"; then
+  ok "worker leaves pacman.conf and the comments of a list as they were"
 else
-  fail "worker changes nothing" "exit $rc" "it said: $(cat "$work/err")" "reproduce: $REPRO"
+  fail "worker leaves pacman.conf and the comments of a list as they were" \
+    "exit $rc" "it said: $(cat "$work/err")" "reproduce: $REPRO"
+fi
+snapshot "$work/w" > "$work/w.once"
+rc=0
+bash "$USE" worker "$work/w" 2> "$work/err" || rc=$?
+if [ "$rc" -eq 0 ] && [ "$(snapshot "$work/w")" = "$(cat "$work/w.once")" ]; then
+  ok "a second worker run changes nothing"
+else
+  fail "a second worker run changes nothing" "exit $rc" "it said: $(cat "$work/err")" "reproduce: $REPRO"
 fi
 
 #---------------------------------------------------------------------------#
@@ -85,11 +113,11 @@ fi
 for l in mirrorlist mirrorlist-any; do
   got="$(servers "$work/o/etc/pacman.d/$l")"
   want="$OCI
-$(servers "$(dirname "$work/o")/w/etc/pacman.d/$l")"
+$(servers "$work/w/etc/pacman.d/$l")"
   if [ "$got" = "$want" ]; then
-    ok "oci puts the oci:// server first in $l, and keeps the other servers in order"
+    ok "oci puts the oci:// server first and the Worker second in $l, and keeps the other servers in order"
   else
-    fail "oci puts the oci:// server first in $l, and keeps the other servers in order" \
+    fail "oci puts the oci:// server first and the Worker second in $l, and keeps the other servers in order" \
       "got: $(tr '\n' ' ' <<< "$got")" "want: $(tr '\n' ' ' <<< "$want")" "reproduce: $REPRO"
   fi
 done

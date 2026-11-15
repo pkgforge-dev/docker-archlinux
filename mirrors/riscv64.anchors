@@ -1,7 +1,11 @@
-# Anchors for riscv64. scripts/gen-mirrorlist writes them first, in this order.
-# It never ranks or drops them. At least one must answer.
+# Anchors for riscv64. scripts/gen-mirrorlist writes the
+# Server lines first and the Fallback line last, each in this order. It never
+# ranks or drops them. At least one must answer.
 #
-# The first is the GHCR mirror (pkgforge-dev/mirror-archlinux). The second is
-# the Arch Linux RISC-V server on Arch Linux infrastructure.
-Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo
+# The Fallback is the GHCR mirror (pkgforge-dev/mirror-archlinux). It can be
+# hours behind upstream, so a consumer reads it only when every other server
+# fails. The build stage reads it first (use-transport).
+#
+# The Server is the Arch Linux RISC-V server on Arch Linux infrastructure.
 Server = https://riscv.mirror.pkgbuild.com/repo/$repo
+Fallback = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo

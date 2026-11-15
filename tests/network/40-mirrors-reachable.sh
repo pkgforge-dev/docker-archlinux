@@ -6,7 +6,8 @@
 # The lists: each list that the pacman.conf of a port includes, for each port
 # of scripts/ports list. Each server of a list gets one GET of the database
 # of the first repository that reads the list. Per list:
-#   - at least one anchor (the first servers, from the anchors file) answers 200
+#   - at least one anchor answers 200: the first servers (the Server lines of
+#     the anchors file) or the last (its Fallback lines, the GHCR mirror)
 #   - at least half of the other servers answer 200
 # Per keyring pin: at least one mirror line serves the pinned package.
 # Each server that does not answer is named, with a reproduce line.
@@ -76,6 +77,8 @@ while IFS= read -r arch; do
       *) anchors="mirrors/$arch.${list#mirrorlist-}-anchors" ;;
     esac
     n_anchor="$(servers_of "$REPO_ROOT/$anchors" | awk 'NF { n++ } END { print n + 0 }')"
+    n_fallback="$(awk '/^[[:space:]]*Fallback[[:space:]]*=/ { n++ } END { print n + 0 }' "$REPO_ROOT/$anchors")"
+    n_all="$(servers_of "$REPO_ROOT/$rel" | awk 'NF { n++ } END { print n + 0 }')"
 
     # ⚠ The build writes a new list in its own checkout, and nothing writes
     # the committed list again. Its date is shown, not judged.
@@ -88,6 +91,7 @@ while IFS= read -r arch; do
       i=$((i + 1))
       kind=ranked
       [ "$i" -gt "$n_anchor" ] || kind=anchor
+      [ "$i" -le $((n_all - n_fallback)) ] || kind=anchor
       url="${s//\$repo/$repo}"
       url="${url//\$arch/$parch}/$repo.db"
       printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$rel" "$kind" "$s" "$url" >> "$specs"

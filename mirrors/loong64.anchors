@@ -1,7 +1,11 @@
-# Anchors for loong64. scripts/gen-mirrorlist writes them first, in this order.
-# It never ranks or drops them. At least one must answer.
+# Anchors for loong64. scripts/gen-mirrorlist writes the
+# Server lines first and the Fallback line last, each in this order. It never
+# ranks or drops them. At least one must answer.
 #
-# The first is the GHCR mirror (pkgforge-dev/mirror-archlinux). The second is
-# the server on the domain of the port maintainers (LCPU).
-Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo
+# The Fallback is the GHCR mirror (pkgforge-dev/mirror-archlinux). It can be
+# hours behind upstream, so a consumer reads it only when every other server
+# fails. The build stage reads it first (use-transport).
+#
+# The Server is the server on the domain of the port maintainers (LCPU).
 Server = https://loongarchlinux.lcpu.dev/loongarch/archlinux/$repo/os/$arch
+Fallback = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo

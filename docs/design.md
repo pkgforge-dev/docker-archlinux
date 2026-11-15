@@ -32,7 +32,8 @@ Each rule below keeps one of these true for one way it could fail.
 | Below the floor, a build goes on in two cases only. `allow_anchor_downgrade` names the port, or at least 2 reachable https servers all serve the lower version. | An upstream revert stops the publish of that port each day. | `scripts/check-anchor-floor` |
 | The build reads a list without its first server in two cases: the server is behind the next one by more than `MIRROR_LAG_MAX` (43200 s), or it serves no database where a later server does. The drop also removes each later path to the same files. | pacman takes the first database that arrives. A mirror that stopped following upstream builds every image from an old package set, and nothing fails. | `scripts/check-mirror-lag`, `drop-server` |
 | ⛔ A drop and the oci transport change the build stage only. The image ships every server of each list. | A consumer loses a server that is in step again after its next sync. | `Dockerfile`, `use-transport`, `tests/static/43-use-transport.sh` |
-| ⭐ The anchors file is the only reviewed input of a mirror list. Its servers are first, in file order, and are never ranked or dropped. | A generated list loses the servers that a person chose. | `scripts/gen-mirrorlist`, `tests/static/41-mirrorlists-start-with-anchors.sh` |
+| ⭐ The anchors file is the only reviewed input of a mirror list. Its Server lines are first and its Fallback lines last, each in file order, and they are never ranked or dropped. | A generated list loses the servers that a person chose. | `scripts/gen-mirrorlist`, `tests/static/41-mirrorlists-start-with-anchors.sh` |
+| The lists that ship end with the GHCR mirror. The build stage reads it first. | The GHCR mirror can be hours behind upstream. A consumer that reads it first installs packages built against older libraries than the image has. The build has the lag check. | `mirrors/*anchors` (Fallback), `use-transport`, `tests/static/41-mirrorlists-start-with-anchors.sh` |
 | The lists of a port change together. A refusal leaves every list of the port as it was. | `[base]` and `[base-any]` read lists of two different runs. | `scripts/gen-mirrorlist` |
 | The build generates the lists before the build. The committed lists are the fallback. | A list goes stale while it waits for a pull request. | `build-deploy.yml` step `mirrors` |
 | ⛔ The databases that pacstrap used are copied out before the sync directory is emptied. The evidence reads that copy. | A package moves between the build and a second fetch. The evidence has a hole, and the publish stops. | `Dockerfile` stage `dbsnapshot`, `tests/static/68-evidence-snapshot.sh` |
@@ -233,11 +234,13 @@ On each refusal, no file is written.
 
 ## Mirrors
 
-The first server of each list of each port, PowerPC `[base]` and `[base-any]` included, is the GHCR mirror:
+The last server of each list of each port, PowerPC `[base]` and `[base-any]` included, is the GHCR mirror:
 
 ```text
 Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo
 ```
+
+A consumer of the image reads the servers of the distribution first, and the GHCR mirror only when each of them fails: the mirror can be hours behind upstream, and pacman reads the database of the first server that answers. The build stage reads the GHCR mirror first: `use-transport` moves its line above the other servers of each list of the build stage, and `scripts/lib-mirrors.sh` (`servers_of`) gives the scripts the same order. The lag check guards the build.
 
 `pkgforge-dev/mirror-archlinux` copies the repositories of each port to GHCR. Its Cloudflare Worker answers a file request with a redirect to GitHub's blob host. It serves upstream's own databases and packages, with upstream's signatures. For `[base-any]`, pacman expands the URL to `/<pacman_arch>/base-any/base-any.db`.
 
@@ -245,7 +248,7 @@ The input files of `scripts/gen-mirrorlist`:
 
 | file | holds |
 | --- | --- |
-| `mirrors/<arch>.anchors` | the first servers of `mirrorlist`, in order. Reviewed. Never ranked or dropped |
+| `mirrors/<arch>.anchors` | `Server` lines: the first servers of `mirrorlist`, in order. `Fallback` lines: the last servers, in order (the GHCR mirror). Reviewed. Never ranked or dropped |
 | `mirrors/<arch>.<X>-anchors` | the same for `mirrorlist-<X>` |
 | `mirrors/<arch>.pool` | optional: the candidates, ranked after the anchors |
 
@@ -260,7 +263,7 @@ source = mirrorlist-package DB_URL PACKAGE PATH
 
 The sources are read in file order, and the first that gives candidates is used. `status-json` takes the https mirrors that are active, complete (`MIN_COMPLETION`), synced within `MAX_SYNC_DELAY` and scored. `mirrorlist-package` reads PATH from the package PACKAGE that the database DB_URL names; it is the fallback through the GHCR mirror. A candidate is written only when it answers 200 for the database of the first repository of the list.
 
-gen-mirrorlist keeps `MIN_SERVERS` (2), writes at most `MAX_SERVERS` (12) ranked candidates, and keeps at least half of the ranked servers a list had. At least one anchor of each list must answer. The header records the generation date. Exit 0 written, 3 unchanged, 1 an input or tool error.
+gen-mirrorlist keeps `MIN_SERVERS` (2), writes at most `MAX_SERVERS` (12) ranked candidates, and keeps at least half of the ranked servers a list had. At least one anchor or fallback of each list must answer. The header records the generation date. Exit 0 written, 3 unchanged, 1 an input or tool error.
 
 ### The lag check
 
@@ -290,7 +293,7 @@ The Worker is one path to GHCR. The registry is a second path that does not use 
 
 ### The PowerPC repositories
 
-ArchPOWER has no `core` and no `extra`. `[base]` holds the packages of the architecture, and `[base-any]` the packages with no architecture, at `base/any` on the origin and the proxy. iana-etc is only in `[base-any]`, and the keyring package is there too. The databases are Zstandard. So each PowerPC `pacman.conf` has two sections with their own lists, `mirrorlist` and `mirrorlist-any`. After the GHCR mirror, each list has the origin `repo.archlinuxpower.org` and the read-through proxy `api.rv.pkgforge.dev`, which serves the same files of the same origin.
+ArchPOWER has no `core` and no `extra`. `[base]` holds the packages of the architecture, and `[base-any]` the packages with no architecture, at `base/any` on the origin and the proxy. iana-etc is only in `[base-any]`, and the keyring package is there too. The databases are Zstandard. So each PowerPC `pacman.conf` has two sections with their own lists, `mirrorlist` and `mirrorlist-any`. Each list has the origin `repo.archlinuxpower.org`, the read-through proxy `api.rv.pkgforge.dev`, which serves the same files of the same origin, and the GHCR mirror last.
 
 ## Emulation
 

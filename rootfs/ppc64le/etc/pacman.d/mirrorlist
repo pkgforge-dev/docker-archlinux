@@ -1,9 +1,11 @@
 ##
 ## Mirror list for ppc64le, Architecture = powerpc64le.
 ## Generated on 2026-10-16 by scripts/gen-mirrorlist.
-## The servers are the anchors of mirrors/ppc64le.anchors, in that order.
+## The first servers are the anchors of mirrors/ppc64le.anchors, in that order.
+## The last server is the fallback, read only when every other server fails.
 ##
 
-Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo
 Server = https://repo.archlinuxpower.org/$repo/$arch
 Server = https://api.rv.pkgforge.dev/https://repo.archlinuxpower.org/$repo/$arch
+
+Server = https://ghcr.mirror.archlinux.pkgforge.dev/$arch/$repo
