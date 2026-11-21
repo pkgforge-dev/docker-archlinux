@@ -1,0 +1,2278 @@
+{
+ "schema": 1,
+ "generated": "2026-11-21T19:28:30Z",
+ "generated_epoch": 1795289310,
+ "source": "https://github.com/pkgforge-dev/docker-archlinux",
+ "site_url": "https://pkgforge-dev.github.io/docker-archlinux/",
+ "images": {
+  "ghcr": "ghcr.io/pkgforge-dev/archlinux",
+  "hub": "docker.io/pkgforge/archlinux"
+ },
+ "interval": {
+  "workflow": ".github/workflows/build-deploy.yml",
+  "gap_days": 1,
+  "tolerance_days": 3
+ },
+ "budget": {
+  "seconds": 600,
+  "used": 73,
+  "exhausted": false
+ },
+ "latest": {
+  "state": "published",
+  "error": null,
+  "digest": "sha256:711eb4f0784085962f441ea21e4d7fe9bff4c017330e4260cd77e98a682e1814",
+  "platforms": [
+   "linux/amd64",
+   "linux/arm64",
+   "linux/arm/v7",
+   "linux/loong64",
+   "linux/ppc",
+   "linux/ppc64",
+   "linux/ppc64le",
+   "linux/riscv64"
+  ],
+  "missing": [],
+  "extra": [],
+  "hub_digest": "sha256:711eb4f0784085962f441ea21e4d7fe9bff4c017330e4260cd77e98a682e1814",
+  "hub_match": true
+ },
+ "registries": {
+  "ghcr": {
+   "image": "ghcr.io/pkgforge-dev/archlinux",
+   "read": true,
+   "error": null,
+   "tags": 1017
+  },
+  "hub": {
+   "image": "docker.io/pkgforge/archlinux",
+   "read": true,
+   "error": null,
+   "tags": 1017
+  },
+  "parity": 1,
+  "rolling": {
+   "total": 17,
+   "same": 17,
+   "differs": [],
+   "unknown": 0
+  },
+  "pinned": {
+   "total": 1000,
+   "present": 1000,
+   "missing": 0,
+   "missing_names": []
+  },
+  "index": {
+   "tags": 186,
+   "same": 186,
+   "unknown": 0,
+   "ratio": 1
+  },
+  "drift_runs": 0
+ },
+ "builds": {
+  "workflow": ".github/workflows/build-deploy.yml",
+  "read": true,
+  "error": null,
+  "default_branch": "main",
+  "runs": 40,
+  "newest_run": {
+   "id": 44909701886,
+   "run_number": 706,
+   "event": "schedule",
+   "status": "completed",
+   "conclusion": "success",
+   "created_at": "2026-11-21T13:36:24Z",
+   "html_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886"
+  }
+ },
+ "mirror": {
+  "url": "https://pkgforge-dev.github.io/mirror-archlinux/status.json",
+  "read": true,
+  "error": null,
+  "generated": "2026-11-21T19:21:14Z"
+ },
+ "summary": {
+  "ports": 8,
+  "published": 8,
+  "unread": 0,
+  "absent": 0,
+  "with_evidence": 8,
+  "builds_known": 8,
+  "builds_passed": 8
+ },
+ "ports": [
+  {
+   "arch": "amd64",
+   "platform": "linux/amd64",
+   "pacman_arch": "x86_64",
+   "distribution": "Arch Linux",
+   "homepage": "https://archlinux.org",
+   "aliases": [
+    "x86_64",
+    "amd64"
+   ],
+   "repos": [
+    "core",
+    "extra"
+   ],
+   "ghcr": {
+    "state": "published",
+    "error": null,
+    "ref": "x86_64",
+    "digest": "sha256:d464558603b2d52c1d9ef6d1d2ea8c3d88d8dd7b9c63168eae1e37af5e94cb2f",
+    "image_digest": "sha256:7fd95d15f2fc852b0076dd9c2873152f60875d9ada4dbe306e3dfd3397f065c5",
+    "created": "2026-11-21T13:39:51Z",
+    "version": "2026.11.21",
+    "revision": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "size": 196102617,
+    "layers": 4,
+    "rolling": {
+     "x86_64": "sha256:d464558603b2d52c1d9ef6d1d2ea8c3d88d8dd7b9c63168eae1e37af5e94cb2f",
+     "amd64": "sha256:d464558603b2d52c1d9ef6d1d2ea8c3d88d8dd7b9c63168eae1e37af5e94cb2f"
+    },
+    "tags": {
+     "rolling": 2,
+     "dated": 100,
+     "anchor": 6,
+     "total": 108
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "hub": {
+    "state": "published",
+    "error": null,
+    "match": true,
+    "rolling": {
+     "x86_64": "sha256:d464558603b2d52c1d9ef6d1d2ea8c3d88d8dd7b9c63168eae1e37af5e94cb2f",
+     "amd64": "sha256:d464558603b2d52c1d9ef6d1d2ea8c3d88d8dd7b9c63168eae1e37af5e94cb2f"
+    },
+    "tags": {
+     "rolling": 2,
+     "dated": 100,
+     "anchor": 6,
+     "total": 108
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "parity": {
+    "tags": 108,
+    "same": 108,
+    "unknown": 0,
+    "ratio": 1
+   },
+   "age_seconds": 20919,
+   "in_latest": true,
+   "latest_current": true,
+   "evidence": {
+    "digest": "sha256:d464558603b2d52c1d9ef6d1d2ea8c3d88d8dd7b9c63168eae1e37af5e94cb2f",
+    "packages": 137,
+    "bytes": 128223849,
+    "installed_bytes": 540176567,
+    "anchor": "7.1.0.r9.g54d9411-4",
+    "built": "2026-11-21T13:39:51Z",
+    "source_commit": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "version_id": "2026.11.21",
+    "source": "stored",
+    "run_id": null,
+    "matches": true,
+    "error": null
+   },
+   "build": {
+    "job_id": 136863535796,
+    "result": "success",
+    "started": "2026-11-21T13:41:26Z",
+    "completed": "2026-11-21T13:44:05Z",
+    "duration_seconds": 159,
+    "run_id": 44909701886,
+    "run_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886",
+    "job_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886/job/136863535796",
+    "event": "schedule",
+    "head_sha": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c"
+   },
+   "builds": [
+    {
+     "result": "success",
+     "started": "2026-11-21T13:41:26Z",
+     "duration_seconds": 159,
+     "run_id": 44909701886,
+     "job_id": 136863535796
+    },
+    {
+     "result": "success",
+     "started": "2026-11-20T14:11:52Z",
+     "duration_seconds": 248,
+     "run_id": 44751098901,
+     "job_id": 136338969599
+    },
+    {
+     "result": "success",
+     "started": "2026-11-19T14:40:03Z",
+     "duration_seconds": 212,
+     "run_id": 44544973357,
+     "job_id": 135634587120
+    },
+    {
+     "result": "success",
+     "started": "2026-11-18T14:21:31Z",
+     "duration_seconds": 236,
+     "run_id": 44323343980,
+     "job_id": 134867963564
+    },
+    {
+     "result": "success",
+     "started": "2026-11-17T00:57:54Z",
+     "duration_seconds": 197,
+     "run_id": 43991819121,
+     "job_id": 133734121402
+    },
+    {
+     "result": "success",
+     "started": "2026-11-16T13:50:53Z",
+     "duration_seconds": 160,
+     "run_id": 43879701552,
+     "job_id": 133342069889
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T11:14:22Z",
+     "duration_seconds": 121,
+     "run_id": 43707896656,
+     "job_id": 132793014421
+    },
+    {
+     "result": "cancelled",
+     "started": "2026-11-15T11:13:05Z",
+     "duration_seconds": 39,
+     "run_id": 43707636289,
+     "job_id": 132792093943
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T10:55:27Z",
+     "duration_seconds": 156,
+     "run_id": 43706388540,
+     "job_id": 132788316699
+    },
+    {
+     "result": "success",
+     "started": "2026-11-14T12:20:41Z",
+     "duration_seconds": 179,
+     "run_id": 43594332676,
+     "job_id": 132445551615
+    },
+    {
+     "result": "success",
+     "started": "2026-11-13T13:20:36Z",
+     "duration_seconds": 171,
+     "run_id": 43432097743,
+     "job_id": 131908048315
+    },
+    {
+     "result": "success",
+     "started": "2026-11-12T13:52:41Z",
+     "duration_seconds": 160,
+     "run_id": 43231475813,
+     "job_id": 131227698485
+    },
+    {
+     "result": "success",
+     "started": "2026-11-11T12:53:38Z",
+     "duration_seconds": 173,
+     "run_id": 43023780616,
+     "job_id": 130533285861
+    },
+    {
+     "result": "success",
+     "started": "2026-11-10T00:48:54Z",
+     "duration_seconds": 232,
+     "run_id": 42731132960,
+     "job_id": 129549216532
+    },
+    {
+     "result": "success",
+     "started": "2026-11-09T14:06:20Z",
+     "duration_seconds": 211,
+     "run_id": 42631358040,
+     "job_id": 129208321385
+    },
+    {
+     "result": "success",
+     "started": "2026-11-08T12:01:43Z",
+     "duration_seconds": 155,
+     "run_id": 42478300898,
+     "job_id": 128724509030
+    },
+    {
+     "result": "success",
+     "started": "2026-11-07T11:58:03Z",
+     "duration_seconds": 197,
+     "run_id": 42369836740,
+     "job_id": 128396982630
+    },
+    {
+     "result": "success",
+     "started": "2026-11-06T13:04:07Z",
+     "duration_seconds": 178,
+     "run_id": 42222480396,
+     "job_id": 127907706363
+    },
+    {
+     "result": "success",
+     "started": "2026-11-05T13:25:15Z",
+     "duration_seconds": 211,
+     "run_id": 42034980419,
+     "job_id": 127272123919
+    },
+    {
+     "result": "success",
+     "started": "2026-11-04T13:07:43Z",
+     "duration_seconds": 211,
+     "run_id": 41835250049,
+     "job_id": 126592433442
+    },
+    {
+     "result": "success",
+     "started": "2026-11-03T13:08:09Z",
+     "duration_seconds": 170,
+     "run_id": 41639655119,
+     "job_id": 125933744489
+    }
+   ],
+   "mirror": {
+    "read": true,
+    "current": false,
+    "lag_seconds": 1063,
+    "targets": [
+     {
+      "target": "x86_64-core",
+      "repo": "core",
+      "found": true,
+      "current": true,
+      "lag_seconds": 0,
+      "age_seconds": 83305,
+      "ratio_files": 1,
+      "state": "promoted"
+     },
+     {
+      "target": "x86_64-extra",
+      "repo": "extra",
+      "found": true,
+      "current": false,
+      "lag_seconds": 1063,
+      "age_seconds": 554,
+      "ratio_files": 0.9999346020534955,
+      "state": "promoted"
+     }
+    ]
+   }
+  },
+  {
+   "arch": "arm64",
+   "platform": "linux/arm64",
+   "pacman_arch": "aarch64",
+   "distribution": "Arch Linux ARM",
+   "homepage": "https://archlinuxarm.org",
+   "aliases": [
+    "aarch64",
+    "arm64"
+   ],
+   "repos": [
+    "core",
+    "extra",
+    "alarm",
+    "aur"
+   ],
+   "ghcr": {
+    "state": "published",
+    "error": null,
+    "ref": "aarch64",
+    "digest": "sha256:9080207e5ee8c4e13000f762ff56e90370da5f2b2b46c8d805b9f009545eecde",
+    "image_digest": "sha256:b04c4e170ca065fb891f11080997ad6d82ed2c67e578d967c543e2ff7d37f62d",
+    "created": "2026-11-21T13:39:51Z",
+    "version": "2026.11.21",
+    "revision": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "size": 202411398,
+    "layers": 4,
+    "rolling": {
+     "aarch64": "sha256:9080207e5ee8c4e13000f762ff56e90370da5f2b2b46c8d805b9f009545eecde",
+     "arm64": "sha256:9080207e5ee8c4e13000f762ff56e90370da5f2b2b46c8d805b9f009545eecde"
+    },
+    "tags": {
+     "rolling": 2,
+     "dated": 100,
+     "anchor": 6,
+     "total": 108
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "hub": {
+    "state": "published",
+    "error": null,
+    "match": true,
+    "rolling": {
+     "aarch64": "sha256:9080207e5ee8c4e13000f762ff56e90370da5f2b2b46c8d805b9f009545eecde",
+     "arm64": "sha256:9080207e5ee8c4e13000f762ff56e90370da5f2b2b46c8d805b9f009545eecde"
+    },
+    "tags": {
+     "rolling": 2,
+     "dated": 100,
+     "anchor": 6,
+     "total": 108
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "parity": {
+    "tags": 108,
+    "same": 108,
+    "unknown": 0,
+    "ratio": 1
+   },
+   "age_seconds": 20919,
+   "in_latest": true,
+   "latest_current": true,
+   "evidence": {
+    "digest": "sha256:9080207e5ee8c4e13000f762ff56e90370da5f2b2b46c8d805b9f009545eecde",
+    "packages": 137,
+    "bytes": 115739272,
+    "installed_bytes": 626049183,
+    "anchor": "7.1.0.r9.g54d9411-4",
+    "built": "2026-11-21T13:39:51Z",
+    "source_commit": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "version_id": "2026.11.21",
+    "source": "stored",
+    "run_id": null,
+    "matches": true,
+    "error": null
+   },
+   "build": {
+    "job_id": 136863535798,
+    "result": "success",
+    "started": "2026-11-21T13:40:38Z",
+    "completed": "2026-11-21T13:44:58Z",
+    "duration_seconds": 260,
+    "run_id": 44909701886,
+    "run_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886",
+    "job_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886/job/136863535798",
+    "event": "schedule",
+    "head_sha": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c"
+   },
+   "builds": [
+    {
+     "result": "success",
+     "started": "2026-11-21T13:40:38Z",
+     "duration_seconds": 260,
+     "run_id": 44909701886,
+     "job_id": 136863535798
+    },
+    {
+     "result": "success",
+     "started": "2026-11-20T14:11:52Z",
+     "duration_seconds": 252,
+     "run_id": 44751098901,
+     "job_id": 136338969336
+    },
+    {
+     "result": "success",
+     "started": "2026-11-19T14:40:44Z",
+     "duration_seconds": 349,
+     "run_id": 44544973357,
+     "job_id": 135634587231
+    },
+    {
+     "result": "success",
+     "started": "2026-11-18T14:21:31Z",
+     "duration_seconds": 361,
+     "run_id": 44323343980,
+     "job_id": 134867963680
+    },
+    {
+     "result": "success",
+     "started": "2026-11-17T00:57:54Z",
+     "duration_seconds": 268,
+     "run_id": 43991819121,
+     "job_id": 133734121191
+    },
+    {
+     "result": "success",
+     "started": "2026-11-16T13:50:53Z",
+     "duration_seconds": 357,
+     "run_id": 43879701552,
+     "job_id": 133342069718
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T11:14:24Z",
+     "duration_seconds": 336,
+     "run_id": 43707896656,
+     "job_id": 132793014416
+    },
+    {
+     "result": "cancelled",
+     "started": "2026-11-15T11:13:14Z",
+     "duration_seconds": 32,
+     "run_id": 43707636289,
+     "job_id": 132792093938
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T10:55:27Z",
+     "duration_seconds": 265,
+     "run_id": 43706388540,
+     "job_id": 132788316672
+    },
+    {
+     "result": "success",
+     "started": "2026-11-14T12:20:41Z",
+     "duration_seconds": 227,
+     "run_id": 43594332676,
+     "job_id": 132445551664
+    },
+    {
+     "result": "success",
+     "started": "2026-11-13T13:18:35Z",
+     "duration_seconds": 302,
+     "run_id": 43432097743,
+     "job_id": 131908042859
+    },
+    {
+     "result": "success",
+     "started": "2026-11-12T13:52:42Z",
+     "duration_seconds": 305,
+     "run_id": 43231475813,
+     "job_id": 131227698547
+    },
+    {
+     "result": "success",
+     "started": "2026-11-11T12:50:40Z",
+     "duration_seconds": 292,
+     "run_id": 43023780616,
+     "job_id": 130533285749
+    },
+    {
+     "result": "success",
+     "started": "2026-11-10T00:48:54Z",
+     "duration_seconds": 318,
+     "run_id": 42731132960,
+     "job_id": 129549216375
+    },
+    {
+     "result": "success",
+     "started": "2026-11-09T14:06:20Z",
+     "duration_seconds": 304,
+     "run_id": 42631358040,
+     "job_id": 129208321424
+    },
+    {
+     "result": "success",
+     "started": "2026-11-08T12:01:44Z",
+     "duration_seconds": 272,
+     "run_id": 42478300898,
+     "job_id": 128724508910
+    },
+    {
+     "result": "success",
+     "started": "2026-11-07T11:59:55Z",
+     "duration_seconds": 285,
+     "run_id": 42369836740,
+     "job_id": 128396982661
+    },
+    {
+     "result": "success",
+     "started": "2026-11-06T13:04:07Z",
+     "duration_seconds": 279,
+     "run_id": 42222480396,
+     "job_id": 127907706768
+    },
+    {
+     "result": "success",
+     "started": "2026-11-05T13:25:07Z",
+     "duration_seconds": 252,
+     "run_id": 42034980419,
+     "job_id": 127272123892
+    },
+    {
+     "result": "success",
+     "started": "2026-11-04T13:07:43Z",
+     "duration_seconds": 364,
+     "run_id": 41835250049,
+     "job_id": 126592433377
+    },
+    {
+     "result": "success",
+     "started": "2026-11-03T13:07:49Z",
+     "duration_seconds": 271,
+     "run_id": 41639655119,
+     "job_id": 125933744440
+    }
+   ],
+   "mirror": {
+    "read": true,
+    "current": false,
+    "lag_seconds": 1148326,
+    "targets": [
+     {
+      "target": "aarch64-core",
+      "repo": "core",
+      "found": true,
+      "current": true,
+      "lag_seconds": 0,
+      "age_seconds": 79011,
+      "ratio_files": 1,
+      "state": "promoted"
+     },
+     {
+      "target": "aarch64-extra",
+      "repo": "extra",
+      "found": true,
+      "current": false,
+      "lag_seconds": 1148326,
+      "age_seconds": 1168604,
+      "ratio_files": 0.8075060532687651,
+      "state": "promoted"
+     },
+     {
+      "target": "aarch64-alarm",
+      "repo": "alarm",
+      "found": true,
+      "current": true,
+      "lag_seconds": 0,
+      "age_seconds": 13387,
+      "ratio_files": 1,
+      "state": "promoted"
+     },
+     {
+      "target": "aarch64-aur",
+      "repo": "aur",
+      "found": true,
+      "current": true,
+      "lag_seconds": 0,
+      "age_seconds": 788675,
+      "ratio_files": 1,
+      "state": "promoted"
+     }
+    ]
+   }
+  },
+  {
+   "arch": "armv7",
+   "platform": "linux/arm/v7",
+   "pacman_arch": "armv7h",
+   "distribution": "Arch Linux ARM",
+   "homepage": "https://archlinuxarm.org",
+   "aliases": [
+    "armv7l",
+    "armv7h",
+    "armv7"
+   ],
+   "repos": [
+    "core",
+    "extra",
+    "alarm",
+    "aur"
+   ],
+   "ghcr": {
+    "state": "published",
+    "error": null,
+    "ref": "armv7l",
+    "digest": "sha256:688313571096fcf00c924717da07275cf36efdd10b85a523c710d4069c79df94",
+    "image_digest": "sha256:4fa8891fdc2f017c42ac2d2a8d274de7315f91646487a5361a1db93fb454adca",
+    "created": "2026-11-21T13:39:51Z",
+    "version": "2026.11.21",
+    "revision": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "size": 190090770,
+    "layers": 4,
+    "rolling": {
+     "armv7l": "sha256:688313571096fcf00c924717da07275cf36efdd10b85a523c710d4069c79df94",
+     "armv7h": "sha256:688313571096fcf00c924717da07275cf36efdd10b85a523c710d4069c79df94",
+     "armv7": "sha256:688313571096fcf00c924717da07275cf36efdd10b85a523c710d4069c79df94"
+    },
+    "tags": {
+     "rolling": 3,
+     "dated": 150,
+     "anchor": 9,
+     "total": 162
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "hub": {
+    "state": "published",
+    "error": null,
+    "match": true,
+    "rolling": {
+     "armv7l": "sha256:688313571096fcf00c924717da07275cf36efdd10b85a523c710d4069c79df94",
+     "armv7h": "sha256:688313571096fcf00c924717da07275cf36efdd10b85a523c710d4069c79df94",
+     "armv7": "sha256:688313571096fcf00c924717da07275cf36efdd10b85a523c710d4069c79df94"
+    },
+    "tags": {
+     "rolling": 3,
+     "dated": 150,
+     "anchor": 9,
+     "total": 162
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "parity": {
+    "tags": 162,
+    "same": 162,
+    "unknown": 0,
+    "ratio": 1
+   },
+   "age_seconds": 20919,
+   "in_latest": true,
+   "latest_current": true,
+   "evidence": {
+    "digest": "sha256:688313571096fcf00c924717da07275cf36efdd10b85a523c710d4069c79df94",
+    "packages": 137,
+    "bytes": 108819564,
+    "installed_bytes": 499647652,
+    "anchor": "7.1.0.r9.g54d9411-4",
+    "built": "2026-11-21T13:39:51Z",
+    "source_commit": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "version_id": "2026.11.21",
+    "source": "stored",
+    "run_id": null,
+    "matches": true,
+    "error": null
+   },
+   "build": {
+    "job_id": 136863535795,
+    "result": "success",
+    "started": "2026-11-21T13:40:44Z",
+    "completed": "2026-11-21T13:46:32Z",
+    "duration_seconds": 348,
+    "run_id": 44909701886,
+    "run_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886",
+    "job_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886/job/136863535795",
+    "event": "schedule",
+    "head_sha": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c"
+   },
+   "builds": [
+    {
+     "result": "success",
+     "started": "2026-11-21T13:40:44Z",
+     "duration_seconds": 348,
+     "run_id": 44909701886,
+     "job_id": 136863535795
+    },
+    {
+     "result": "success",
+     "started": "2026-11-20T14:11:51Z",
+     "duration_seconds": 294,
+     "run_id": 44751098901,
+     "job_id": 136338969468
+    },
+    {
+     "result": "success",
+     "started": "2026-11-19T14:41:47Z",
+     "duration_seconds": 333,
+     "run_id": 44544973357,
+     "job_id": 135634587205
+    },
+    {
+     "result": "success",
+     "started": "2026-11-18T14:21:31Z",
+     "duration_seconds": 308,
+     "run_id": 44323343980,
+     "job_id": 134867963593
+    },
+    {
+     "result": "success",
+     "started": "2026-11-17T00:57:53Z",
+     "duration_seconds": 273,
+     "run_id": 43991819121,
+     "job_id": 133734121182
+    },
+    {
+     "result": "success",
+     "started": "2026-11-16T13:50:53Z",
+     "duration_seconds": 320,
+     "run_id": 43879701552,
+     "job_id": 133342069903
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T11:14:22Z",
+     "duration_seconds": 317,
+     "run_id": 43707896656,
+     "job_id": 132793014428
+    },
+    {
+     "result": "cancelled",
+     "started": "2026-11-15T11:12:33Z",
+     "duration_seconds": 71,
+     "run_id": 43707636289,
+     "job_id": 132792093936
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T10:55:28Z",
+     "duration_seconds": 374,
+     "run_id": 43706388540,
+     "job_id": 132788316664
+    },
+    {
+     "result": "success",
+     "started": "2026-11-14T12:20:41Z",
+     "duration_seconds": 321,
+     "run_id": 43594332676,
+     "job_id": 132445551608
+    },
+    {
+     "result": "success",
+     "started": "2026-11-13T13:18:40Z",
+     "duration_seconds": 376,
+     "run_id": 43432097743,
+     "job_id": 131908043039
+    },
+    {
+     "result": "success",
+     "started": "2026-11-12T13:52:42Z",
+     "duration_seconds": 348,
+     "run_id": 43231475813,
+     "job_id": 131227698550
+    },
+    {
+     "result": "success",
+     "started": "2026-11-11T12:52:37Z",
+     "duration_seconds": 256,
+     "run_id": 43023780616,
+     "job_id": 130533285795
+    },
+    {
+     "result": "success",
+     "started": "2026-11-10T00:48:54Z",
+     "duration_seconds": 262,
+     "run_id": 42731132960,
+     "job_id": 129549216267
+    },
+    {
+     "result": "success",
+     "started": "2026-11-09T14:06:20Z",
+     "duration_seconds": 322,
+     "run_id": 42631358040,
+     "job_id": 129208321443
+    },
+    {
+     "result": "success",
+     "started": "2026-11-08T12:01:45Z",
+     "duration_seconds": 339,
+     "run_id": 42478300898,
+     "job_id": 128724509082
+    },
+    {
+     "result": "success",
+     "started": "2026-11-07T11:59:58Z",
+     "duration_seconds": 325,
+     "run_id": 42369836740,
+     "job_id": 128396982719
+    },
+    {
+     "result": "success",
+     "started": "2026-11-06T13:04:07Z",
+     "duration_seconds": 334,
+     "run_id": 42222480396,
+     "job_id": 127907706407
+    },
+    {
+     "result": "success",
+     "started": "2026-11-05T13:26:13Z",
+     "duration_seconds": 268,
+     "run_id": 42034980419,
+     "job_id": 127272123965
+    },
+    {
+     "result": "success",
+     "started": "2026-11-04T13:07:43Z",
+     "duration_seconds": 349,
+     "run_id": 41835250049,
+     "job_id": 126592434033
+    },
+    {
+     "result": "success",
+     "started": "2026-11-03T13:03:49Z",
+     "duration_seconds": 360,
+     "run_id": 41639655119,
+     "job_id": 125933744314
+    }
+   ],
+   "mirror": {
+    "read": true,
+    "current": false,
+    "lag_seconds": 1144525,
+    "targets": [
+     {
+      "target": "armv7h-core",
+      "repo": "core",
+      "found": true,
+      "current": true,
+      "lag_seconds": 0,
+      "age_seconds": 79011,
+      "ratio_files": 1,
+      "state": "promoted"
+     },
+     {
+      "target": "armv7h-extra",
+      "repo": "extra",
+      "found": true,
+      "current": false,
+      "lag_seconds": 1144525,
+      "age_seconds": 1168604,
+      "ratio_files": 0.8212076121857624,
+      "state": "promoted"
+     },
+     {
+      "target": "armv7h-alarm",
+      "repo": "alarm",
+      "found": true,
+      "current": true,
+      "lag_seconds": 0,
+      "age_seconds": 13387,
+      "ratio_files": 1,
+      "state": "promoted"
+     },
+     {
+      "target": "armv7h-aur",
+      "repo": "aur",
+      "found": true,
+      "current": true,
+      "lag_seconds": 0,
+      "age_seconds": 590689,
+      "ratio_files": 1,
+      "state": "promoted"
+     }
+    ]
+   }
+  },
+  {
+   "arch": "loong64",
+   "platform": "linux/loong64",
+   "pacman_arch": "loong64",
+   "distribution": "Arch Linux for Loong64 (LCPU)",
+   "homepage": "https://loongarchlinux.lcpu.dev",
+   "aliases": [
+    "loongarch64",
+    "loong64"
+   ],
+   "repos": [
+    "core",
+    "extra"
+   ],
+   "ghcr": {
+    "state": "published",
+    "error": null,
+    "ref": "loongarch64",
+    "digest": "sha256:670d43040c6e15156cce323ed970c598850525c4bebb632dd47c1770f4740907",
+    "image_digest": "sha256:c521652aee178e8f751d6975effe88ca8b2d72ee085666bcc418b94d5bc358c6",
+    "created": "2026-11-21T13:39:51Z",
+    "version": "2026.11.21",
+    "revision": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "size": 207473218,
+    "layers": 4,
+    "rolling": {
+     "loongarch64": "sha256:670d43040c6e15156cce323ed970c598850525c4bebb632dd47c1770f4740907",
+     "loong64": "sha256:670d43040c6e15156cce323ed970c598850525c4bebb632dd47c1770f4740907"
+    },
+    "tags": {
+     "rolling": 2,
+     "dated": 98,
+     "anchor": 6,
+     "total": 106
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "hub": {
+    "state": "published",
+    "error": null,
+    "match": true,
+    "rolling": {
+     "loongarch64": "sha256:670d43040c6e15156cce323ed970c598850525c4bebb632dd47c1770f4740907",
+     "loong64": "sha256:670d43040c6e15156cce323ed970c598850525c4bebb632dd47c1770f4740907"
+    },
+    "tags": {
+     "rolling": 2,
+     "dated": 98,
+     "anchor": 6,
+     "total": 106
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "parity": {
+    "tags": 106,
+    "same": 106,
+    "unknown": 0,
+    "ratio": 1
+   },
+   "age_seconds": 20919,
+   "in_latest": true,
+   "latest_current": true,
+   "evidence": {
+    "digest": "sha256:670d43040c6e15156cce323ed970c598850525c4bebb632dd47c1770f4740907",
+    "packages": 137,
+    "bytes": 134709617,
+    "installed_bytes": 678329422,
+    "anchor": "7.1.0.r9.g54d9411-4",
+    "built": "2026-11-21T13:39:51Z",
+    "source_commit": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "version_id": "2026.11.21",
+    "source": "stored",
+    "run_id": null,
+    "matches": true,
+    "error": null
+   },
+   "build": {
+    "job_id": 136863535833,
+    "result": "success",
+    "started": "2026-11-21T13:40:37Z",
+    "completed": "2026-11-21T13:53:13Z",
+    "duration_seconds": 756,
+    "run_id": 44909701886,
+    "run_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886",
+    "job_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886/job/136863535833",
+    "event": "schedule",
+    "head_sha": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c"
+   },
+   "builds": [
+    {
+     "result": "success",
+     "started": "2026-11-21T13:40:37Z",
+     "duration_seconds": 756,
+     "run_id": 44909701886,
+     "job_id": 136863535833
+    },
+    {
+     "result": "success",
+     "started": "2026-11-20T14:11:52Z",
+     "duration_seconds": 795,
+     "run_id": 44751098901,
+     "job_id": 136338969276
+    },
+    {
+     "result": "success",
+     "started": "2026-11-19T14:36:30Z",
+     "duration_seconds": 352,
+     "run_id": 44544973357,
+     "job_id": 135634587140
+    },
+    {
+     "result": "success",
+     "started": "2026-11-18T14:21:31Z",
+     "duration_seconds": 388,
+     "run_id": 44323343980,
+     "job_id": 134867963535
+    },
+    {
+     "result": "success",
+     "started": "2026-11-17T00:57:53Z",
+     "duration_seconds": 234,
+     "run_id": 43991819121,
+     "job_id": 133734121261
+    },
+    {
+     "result": "success",
+     "started": "2026-11-16T13:50:53Z",
+     "duration_seconds": 368,
+     "run_id": 43879701552,
+     "job_id": 133342069882
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T11:14:22Z",
+     "duration_seconds": 280,
+     "run_id": 43707896656,
+     "job_id": 132793014389
+    },
+    {
+     "result": "cancelled",
+     "started": "2026-11-15T11:11:18Z",
+     "duration_seconds": 147,
+     "run_id": 43707636289,
+     "job_id": 132792093979
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T10:55:27Z",
+     "duration_seconds": 234,
+     "run_id": 43706388540,
+     "job_id": 132788316627
+    },
+    {
+     "result": "success",
+     "started": "2026-11-14T12:20:41Z",
+     "duration_seconds": 252,
+     "run_id": 43594332676,
+     "job_id": 132445551606
+    },
+    {
+     "result": "success",
+     "started": "2026-11-13T13:19:37Z",
+     "duration_seconds": 495,
+     "run_id": 43432097743,
+     "job_id": 131908043313
+    },
+    {
+     "result": "success",
+     "started": "2026-11-12T13:52:41Z",
+     "duration_seconds": 274,
+     "run_id": 43231475813,
+     "job_id": 131227698414
+    },
+    {
+     "result": "success",
+     "started": "2026-11-11T12:50:22Z",
+     "duration_seconds": 311,
+     "run_id": 43023780616,
+     "job_id": 130533285816
+    },
+    {
+     "result": "success",
+     "started": "2026-11-10T00:48:54Z",
+     "duration_seconds": 310,
+     "run_id": 42731132960,
+     "job_id": 129549216443
+    },
+    {
+     "result": "success",
+     "started": "2026-11-09T14:06:20Z",
+     "duration_seconds": 262,
+     "run_id": 42631358040,
+     "job_id": 129208321464
+    },
+    {
+     "result": "success",
+     "started": "2026-11-08T12:01:44Z",
+     "duration_seconds": 257,
+     "run_id": 42478300898,
+     "job_id": 128724508821
+    },
+    {
+     "result": "success",
+     "started": "2026-11-07T12:00:03Z",
+     "duration_seconds": 312,
+     "run_id": 42369836740,
+     "job_id": 128396982819
+    },
+    {
+     "result": "success",
+     "started": "2026-11-06T13:04:07Z",
+     "duration_seconds": 244,
+     "run_id": 42222480396,
+     "job_id": 127907706394
+    },
+    {
+     "result": "success",
+     "started": "2026-11-05T13:26:26Z",
+     "duration_seconds": 289,
+     "run_id": 42034980419,
+     "job_id": 127272123886
+    },
+    {
+     "result": "success",
+     "started": "2026-11-04T13:07:43Z",
+     "duration_seconds": 288,
+     "run_id": 41835250049,
+     "job_id": 126592433600
+    },
+    {
+     "result": "success",
+     "started": "2026-11-03T13:08:47Z",
+     "duration_seconds": 244,
+     "run_id": 41639655119,
+     "job_id": 125933744629
+    }
+   ],
+   "mirror": {
+    "read": true,
+    "current": false,
+    "lag_seconds": 426906,
+    "targets": [
+     {
+      "target": "loong64-core",
+      "repo": "core",
+      "found": true,
+      "current": true,
+      "lag_seconds": 0,
+      "age_seconds": 554,
+      "ratio_files": 1,
+      "state": "promoted"
+     },
+     {
+      "target": "loong64-extra",
+      "repo": "extra",
+      "found": true,
+      "current": false,
+      "lag_seconds": 426906,
+      "age_seconds": 422503,
+      "ratio_files": 0.8685198054204308,
+      "state": "promoted"
+     }
+    ]
+   }
+  },
+  {
+   "arch": "ppc",
+   "platform": "linux/ppc",
+   "pacman_arch": "powerpc",
+   "distribution": "ArchPOWER",
+   "homepage": "https://archlinuxpower.org",
+   "aliases": [
+    "ppc",
+    "powerpc"
+   ],
+   "repos": [
+    "base",
+    "base-any"
+   ],
+   "ghcr": {
+    "state": "published",
+    "error": null,
+    "ref": "ppc",
+    "digest": "sha256:f3e497301b108fbf4d6d6a2c6ae62a98e69a05503c7f632634343a548d151726",
+    "image_digest": "sha256:5115b2b90efb892c59325b75a7019db2f377737eada65136c450942c418d3d42",
+    "created": "2026-11-21T13:39:51Z",
+    "version": "2026.11.21",
+    "revision": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "size": 193916293,
+    "layers": 4,
+    "rolling": {
+     "ppc": "sha256:f3e497301b108fbf4d6d6a2c6ae62a98e69a05503c7f632634343a548d151726",
+     "powerpc": "sha256:f3e497301b108fbf4d6d6a2c6ae62a98e69a05503c7f632634343a548d151726"
+    },
+    "tags": {
+     "rolling": 2,
+     "dated": 90,
+     "anchor": 4,
+     "total": 96
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "hub": {
+    "state": "published",
+    "error": null,
+    "match": true,
+    "rolling": {
+     "ppc": "sha256:f3e497301b108fbf4d6d6a2c6ae62a98e69a05503c7f632634343a548d151726",
+     "powerpc": "sha256:f3e497301b108fbf4d6d6a2c6ae62a98e69a05503c7f632634343a548d151726"
+    },
+    "tags": {
+     "rolling": 2,
+     "dated": 90,
+     "anchor": 4,
+     "total": 96
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "parity": {
+    "tags": 96,
+    "same": 96,
+    "unknown": 0,
+    "ratio": 1
+   },
+   "age_seconds": 20919,
+   "in_latest": true,
+   "latest_current": true,
+   "evidence": {
+    "digest": "sha256:f3e497301b108fbf4d6d6a2c6ae62a98e69a05503c7f632634343a548d151726",
+    "packages": 140,
+    "bytes": 161288048,
+    "installed_bytes": 589195136,
+    "anchor": "7.1.0.r9.g54d9411-2.5",
+    "built": "2026-11-21T13:39:51Z",
+    "source_commit": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "version_id": "2026.11.21",
+    "source": "stored",
+    "run_id": null,
+    "matches": true,
+    "error": null
+   },
+   "build": {
+    "job_id": 136863535811,
+    "result": "success",
+    "started": "2026-11-21T13:40:40Z",
+    "completed": "2026-11-21T13:45:24Z",
+    "duration_seconds": 284,
+    "run_id": 44909701886,
+    "run_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886",
+    "job_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886/job/136863535811",
+    "event": "schedule",
+    "head_sha": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c"
+   },
+   "builds": [
+    {
+     "result": "success",
+     "started": "2026-11-21T13:40:40Z",
+     "duration_seconds": 284,
+     "run_id": 44909701886,
+     "job_id": 136863535811
+    },
+    {
+     "result": "success",
+     "started": "2026-11-20T14:11:51Z",
+     "duration_seconds": 241,
+     "run_id": 44751098901,
+     "job_id": 136338969314
+    },
+    {
+     "result": "success",
+     "started": "2026-11-19T14:36:27Z",
+     "duration_seconds": 388,
+     "run_id": 44544973357,
+     "job_id": 135634587107
+    },
+    {
+     "result": "success",
+     "started": "2026-11-18T23:29:35Z",
+     "duration_seconds": 299,
+     "run_id": 44421170131,
+     "job_id": 135214300392
+    },
+    {
+     "result": "failure",
+     "started": "2026-11-18T14:21:31Z",
+     "duration_seconds": 231,
+     "run_id": 44323343980,
+     "job_id": 134867963944
+    },
+    {
+     "result": "success",
+     "started": "2026-11-17T00:57:53Z",
+     "duration_seconds": 282,
+     "run_id": 43991819121,
+     "job_id": 133734121183
+    },
+    {
+     "result": "success",
+     "started": "2026-11-16T13:50:53Z",
+     "duration_seconds": 198,
+     "run_id": 43879701552,
+     "job_id": 133342069813
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T11:14:24Z",
+     "duration_seconds": 124,
+     "run_id": 43707896656,
+     "job_id": 132793014437
+    },
+    {
+     "result": "cancelled",
+     "started": "2026-11-15T11:12:03Z",
+     "duration_seconds": 103,
+     "run_id": 43707636289,
+     "job_id": 132792093928
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T10:55:27Z",
+     "duration_seconds": 248,
+     "run_id": 43706388540,
+     "job_id": 132788316686
+    },
+    {
+     "result": "success",
+     "started": "2026-11-14T12:20:41Z",
+     "duration_seconds": 250,
+     "run_id": 43594332676,
+     "job_id": 132445551612
+    },
+    {
+     "result": "success",
+     "started": "2026-11-13T13:16:19Z",
+     "duration_seconds": 331,
+     "run_id": 43432097743,
+     "job_id": 131908042861
+    },
+    {
+     "result": "success",
+     "started": "2026-11-12T13:52:41Z",
+     "duration_seconds": 235,
+     "run_id": 43231475813,
+     "job_id": 131227698739
+    },
+    {
+     "result": "success",
+     "started": "2026-11-11T12:50:30Z",
+     "duration_seconds": 267,
+     "run_id": 43023780616,
+     "job_id": 130533285770
+    },
+    {
+     "result": "success",
+     "started": "2026-11-10T00:48:54Z",
+     "duration_seconds": 236,
+     "run_id": 42731132960,
+     "job_id": 129549216414
+    },
+    {
+     "result": "success",
+     "started": "2026-11-09T14:06:20Z",
+     "duration_seconds": 325,
+     "run_id": 42631358040,
+     "job_id": 129208321538
+    },
+    {
+     "result": "success",
+     "started": "2026-11-08T12:01:46Z",
+     "duration_seconds": 321,
+     "run_id": 42478300898,
+     "job_id": 128724508897
+    },
+    {
+     "result": "success",
+     "started": "2026-11-07T11:59:52Z",
+     "duration_seconds": 220,
+     "run_id": 42369836740,
+     "job_id": 128396982639
+    },
+    {
+     "result": "success",
+     "started": "2026-11-06T13:04:07Z",
+     "duration_seconds": 328,
+     "run_id": 42222480396,
+     "job_id": 127907706605
+    },
+    {
+     "result": "success",
+     "started": "2026-11-05T13:24:42Z",
+     "duration_seconds": 268,
+     "run_id": 42034980419,
+     "job_id": 127272123791
+    },
+    {
+     "result": "success",
+     "started": "2026-11-04T13:07:43Z",
+     "duration_seconds": 335,
+     "run_id": 41835250049,
+     "job_id": 126592433705
+    },
+    {
+     "result": "success",
+     "started": "2026-11-03T13:04:43Z",
+     "duration_seconds": 1825,
+     "run_id": 41639655119,
+     "job_id": 125933744515
+    }
+   ],
+   "mirror": {
+    "read": true,
+    "current": false,
+    "lag_seconds": 2623603,
+    "targets": [
+     {
+      "target": "powerpc-base",
+      "repo": "base",
+      "found": true,
+      "current": false,
+      "lag_seconds": 2623603,
+      "age_seconds": 2803903,
+      "ratio_files": 0.5761772853185596,
+      "state": "promoted"
+     },
+     {
+      "target": "powerpc-base-any",
+      "repo": "base-any",
+      "found": true,
+      "current": true,
+      "lag_seconds": 0,
+      "age_seconds": 911427,
+      "ratio_files": 1,
+      "state": "promoted"
+     }
+    ]
+   }
+  },
+  {
+   "arch": "ppc64",
+   "platform": "linux/ppc64",
+   "pacman_arch": "powerpc64",
+   "distribution": "ArchPOWER",
+   "homepage": "https://archlinuxpower.org",
+   "aliases": [
+    "ppc64",
+    "powerpc64"
+   ],
+   "repos": [
+    "base",
+    "base-any"
+   ],
+   "ghcr": {
+    "state": "published",
+    "error": null,
+    "ref": "ppc64",
+    "digest": "sha256:e69eb7003290f6b3c69184d615aaa79d461dcf42aac0e53b4fd34f2ec4df48f3",
+    "image_digest": "sha256:6357e45d6fa302c8dd5d7a9b2c25e420f191312842833bd85e6817151c274086",
+    "created": "2026-11-21T13:39:51Z",
+    "version": "2026.11.21",
+    "revision": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "size": 196239079,
+    "layers": 4,
+    "rolling": {
+     "ppc64": "sha256:e69eb7003290f6b3c69184d615aaa79d461dcf42aac0e53b4fd34f2ec4df48f3",
+     "powerpc64": "sha256:e69eb7003290f6b3c69184d615aaa79d461dcf42aac0e53b4fd34f2ec4df48f3"
+    },
+    "tags": {
+     "rolling": 2,
+     "dated": 92,
+     "anchor": 4,
+     "total": 98
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "hub": {
+    "state": "published",
+    "error": null,
+    "match": true,
+    "rolling": {
+     "ppc64": "sha256:e69eb7003290f6b3c69184d615aaa79d461dcf42aac0e53b4fd34f2ec4df48f3",
+     "powerpc64": "sha256:e69eb7003290f6b3c69184d615aaa79d461dcf42aac0e53b4fd34f2ec4df48f3"
+    },
+    "tags": {
+     "rolling": 2,
+     "dated": 92,
+     "anchor": 4,
+     "total": 98
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "parity": {
+    "tags": 98,
+    "same": 98,
+    "unknown": 0,
+    "ratio": 1
+   },
+   "age_seconds": 20919,
+   "in_latest": true,
+   "latest_current": true,
+   "evidence": {
+    "digest": "sha256:e69eb7003290f6b3c69184d615aaa79d461dcf42aac0e53b4fd34f2ec4df48f3",
+    "packages": 140,
+    "bytes": 165985722,
+    "installed_bytes": 610877066,
+    "anchor": "7.1.0.r9.g54d9411-2.5",
+    "built": "2026-11-21T13:39:51Z",
+    "source_commit": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "version_id": "2026.11.21",
+    "source": "stored",
+    "run_id": null,
+    "matches": true,
+    "error": null
+   },
+   "build": {
+    "job_id": 136863535806,
+    "result": "success",
+    "started": "2026-11-21T13:41:09Z",
+    "completed": "2026-11-21T13:43:56Z",
+    "duration_seconds": 167,
+    "run_id": 44909701886,
+    "run_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886",
+    "job_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886/job/136863535806",
+    "event": "schedule",
+    "head_sha": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c"
+   },
+   "builds": [
+    {
+     "result": "success",
+     "started": "2026-11-21T13:41:09Z",
+     "duration_seconds": 167,
+     "run_id": 44909701886,
+     "job_id": 136863535806
+    },
+    {
+     "result": "success",
+     "started": "2026-11-20T14:11:51Z",
+     "duration_seconds": 209,
+     "run_id": 44751098901,
+     "job_id": 136338969347
+    },
+    {
+     "result": "success",
+     "started": "2026-11-19T14:35:41Z",
+     "duration_seconds": 301,
+     "run_id": 44544973357,
+     "job_id": 135634587082
+    },
+    {
+     "result": "success",
+     "started": "2026-11-18T14:21:31Z",
+     "duration_seconds": 274,
+     "run_id": 44323343980,
+     "job_id": 134867964141
+    },
+    {
+     "result": "success",
+     "started": "2026-11-17T00:57:54Z",
+     "duration_seconds": 295,
+     "run_id": 43991819121,
+     "job_id": 133734121279
+    },
+    {
+     "result": "success",
+     "started": "2026-11-16T13:50:53Z",
+     "duration_seconds": 275,
+     "run_id": 43879701552,
+     "job_id": 133342069806
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T11:14:22Z",
+     "duration_seconds": 132,
+     "run_id": 43707896656,
+     "job_id": 132793014439
+    },
+    {
+     "result": "cancelled",
+     "started": "2026-11-15T11:12:51Z",
+     "duration_seconds": 54,
+     "run_id": 43707636289,
+     "job_id": 132792093974
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T10:55:28Z",
+     "duration_seconds": 232,
+     "run_id": 43706388540,
+     "job_id": 132788316679
+    },
+    {
+     "result": "success",
+     "started": "2026-11-14T12:20:41Z",
+     "duration_seconds": 258,
+     "run_id": 43594332676,
+     "job_id": 132445551627
+    },
+    {
+     "result": "success",
+     "started": "2026-11-13T13:17:11Z",
+     "duration_seconds": 213,
+     "run_id": 43432097743,
+     "job_id": 131908043088
+    },
+    {
+     "result": "success",
+     "started": "2026-11-12T13:52:42Z",
+     "duration_seconds": 210,
+     "run_id": 43231475813,
+     "job_id": 131227698490
+    },
+    {
+     "result": "success",
+     "started": "2026-11-11T12:51:04Z",
+     "duration_seconds": 296,
+     "run_id": 43023780616,
+     "job_id": 130533285848
+    },
+    {
+     "result": "success",
+     "started": "2026-11-10T00:48:54Z",
+     "duration_seconds": 283,
+     "run_id": 42731132960,
+     "job_id": 129549216209
+    },
+    {
+     "result": "success",
+     "started": "2026-11-09T14:06:20Z",
+     "duration_seconds": 230,
+     "run_id": 42631358040,
+     "job_id": 129208321515
+    },
+    {
+     "result": "success",
+     "started": "2026-11-08T12:01:44Z",
+     "duration_seconds": 216,
+     "run_id": 42478300898,
+     "job_id": 128724508813
+    },
+    {
+     "result": "success",
+     "started": "2026-11-07T11:59:02Z",
+     "duration_seconds": 295,
+     "run_id": 42369836740,
+     "job_id": 128396982652
+    },
+    {
+     "result": "success",
+     "started": "2026-11-06T13:04:07Z",
+     "duration_seconds": 203,
+     "run_id": 42222480396,
+     "job_id": 127907706555
+    },
+    {
+     "result": "success",
+     "started": "2026-11-05T13:24:40Z",
+     "duration_seconds": 207,
+     "run_id": 42034980419,
+     "job_id": 127272123751
+    },
+    {
+     "result": "success",
+     "started": "2026-11-04T13:07:43Z",
+     "duration_seconds": 240,
+     "run_id": 41835250049,
+     "job_id": 126592433405
+    },
+    {
+     "result": "success",
+     "started": "2026-11-03T13:04:50Z",
+     "duration_seconds": 293,
+     "run_id": 41639655119,
+     "job_id": 125933744490
+    }
+   ],
+   "mirror": {
+    "read": true,
+    "current": true,
+    "lag_seconds": 0,
+    "targets": [
+     {
+      "target": "powerpc64-base",
+      "repo": "base",
+      "found": true,
+      "current": true,
+      "lag_seconds": 0,
+      "age_seconds": 181887,
+      "ratio_files": 1,
+      "state": "promoted"
+     },
+     {
+      "target": "powerpc64-base-any",
+      "repo": "base-any",
+      "found": true,
+      "current": true,
+      "lag_seconds": 0,
+      "age_seconds": 911427,
+      "ratio_files": 1,
+      "state": "promoted"
+     }
+    ]
+   }
+  },
+  {
+   "arch": "ppc64le",
+   "platform": "linux/ppc64le",
+   "pacman_arch": "powerpc64le",
+   "distribution": "ArchPOWER",
+   "homepage": "https://archlinuxpower.org",
+   "aliases": [
+    "ppc64le",
+    "powerpc64le"
+   ],
+   "repos": [
+    "base",
+    "base-any"
+   ],
+   "ghcr": {
+    "state": "published",
+    "error": null,
+    "ref": "ppc64le",
+    "digest": "sha256:aa9db61d4af6fccd627b341d38354c5f50d2cd89987535bc0587a5a90f0aab8c",
+    "image_digest": "sha256:f991feca5decb497db41c6e369aa239b3a72ce8b6fce05eccf7ccb9c1bd18991",
+    "created": "2026-11-21T13:39:51Z",
+    "version": "2026.11.21",
+    "revision": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "size": 202343663,
+    "layers": 4,
+    "rolling": {
+     "ppc64le": "sha256:aa9db61d4af6fccd627b341d38354c5f50d2cd89987535bc0587a5a90f0aab8c",
+     "powerpc64le": "sha256:aa9db61d4af6fccd627b341d38354c5f50d2cd89987535bc0587a5a90f0aab8c"
+    },
+    "tags": {
+     "rolling": 2,
+     "dated": 92,
+     "anchor": 4,
+     "total": 98
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "hub": {
+    "state": "published",
+    "error": null,
+    "match": true,
+    "rolling": {
+     "ppc64le": "sha256:aa9db61d4af6fccd627b341d38354c5f50d2cd89987535bc0587a5a90f0aab8c",
+     "powerpc64le": "sha256:aa9db61d4af6fccd627b341d38354c5f50d2cd89987535bc0587a5a90f0aab8c"
+    },
+    "tags": {
+     "rolling": 2,
+     "dated": 92,
+     "anchor": 4,
+     "total": 98
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "parity": {
+    "tags": 98,
+    "same": 98,
+    "unknown": 0,
+    "ratio": 1
+   },
+   "age_seconds": 20919,
+   "in_latest": true,
+   "latest_current": true,
+   "evidence": {
+    "digest": "sha256:aa9db61d4af6fccd627b341d38354c5f50d2cd89987535bc0587a5a90f0aab8c",
+    "packages": 141,
+    "bytes": 173096600,
+    "installed_bytes": 634535415,
+    "anchor": "7.1.0.r9.g54d9411-2.5",
+    "built": "2026-11-21T13:39:51Z",
+    "source_commit": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "version_id": "2026.11.21",
+    "source": "stored",
+    "run_id": null,
+    "matches": true,
+    "error": null
+   },
+   "build": {
+    "job_id": 136863535852,
+    "result": "success",
+    "started": "2026-11-21T13:40:53Z",
+    "completed": "2026-11-21T13:45:48Z",
+    "duration_seconds": 295,
+    "run_id": 44909701886,
+    "run_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886",
+    "job_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886/job/136863535852",
+    "event": "schedule",
+    "head_sha": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c"
+   },
+   "builds": [
+    {
+     "result": "success",
+     "started": "2026-11-21T13:40:53Z",
+     "duration_seconds": 295,
+     "run_id": 44909701886,
+     "job_id": 136863535852
+    },
+    {
+     "result": "success",
+     "started": "2026-11-20T14:11:52Z",
+     "duration_seconds": 239,
+     "run_id": 44751098901,
+     "job_id": 136338969409
+    },
+    {
+     "result": "success",
+     "started": "2026-11-19T14:39:36Z",
+     "duration_seconds": 275,
+     "run_id": 44544973357,
+     "job_id": 135634587167
+    },
+    {
+     "result": "success",
+     "started": "2026-11-18T14:21:31Z",
+     "duration_seconds": 268,
+     "run_id": 44323343980,
+     "job_id": 134867963581
+    },
+    {
+     "result": "success",
+     "started": "2026-11-17T00:57:53Z",
+     "duration_seconds": 182,
+     "run_id": 43991819121,
+     "job_id": 133734121368
+    },
+    {
+     "result": "success",
+     "started": "2026-11-16T13:50:53Z",
+     "duration_seconds": 218,
+     "run_id": 43879701552,
+     "job_id": 133342069893
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T11:14:22Z",
+     "duration_seconds": 131,
+     "run_id": 43707896656,
+     "job_id": 132793014520
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T11:11:11Z",
+     "duration_seconds": 136,
+     "run_id": 43707636289,
+     "job_id": 132792093948
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T10:55:27Z",
+     "duration_seconds": 196,
+     "run_id": 43706388540,
+     "job_id": 132788316644
+    },
+    {
+     "result": "success",
+     "started": "2026-11-14T12:20:41Z",
+     "duration_seconds": 264,
+     "run_id": 43594332676,
+     "job_id": 132445551581
+    },
+    {
+     "result": "success",
+     "started": "2026-11-13T13:18:25Z",
+     "duration_seconds": 237,
+     "run_id": 43432097743,
+     "job_id": 131908042988
+    },
+    {
+     "result": "success",
+     "started": "2026-11-12T13:52:42Z",
+     "duration_seconds": 251,
+     "run_id": 43231475813,
+     "job_id": 131227698448
+    },
+    {
+     "result": "success",
+     "started": "2026-11-11T12:51:39Z",
+     "duration_seconds": 294,
+     "run_id": 43023780616,
+     "job_id": 130533285798
+    },
+    {
+     "result": "success",
+     "started": "2026-11-10T00:48:54Z",
+     "duration_seconds": 251,
+     "run_id": 42731132960,
+     "job_id": 129549216450
+    },
+    {
+     "result": "success",
+     "started": "2026-11-09T14:06:20Z",
+     "duration_seconds": 251,
+     "run_id": 42631358040,
+     "job_id": 129208321616
+    },
+    {
+     "result": "success",
+     "started": "2026-11-08T12:01:45Z",
+     "duration_seconds": 269,
+     "run_id": 42478300898,
+     "job_id": 128724508907
+    },
+    {
+     "result": "success",
+     "started": "2026-11-07T11:58:11Z",
+     "duration_seconds": 295,
+     "run_id": 42369836740,
+     "job_id": 128396982655
+    },
+    {
+     "result": "success",
+     "started": "2026-11-06T13:04:07Z",
+     "duration_seconds": 269,
+     "run_id": 42222480396,
+     "job_id": 127907706515
+    },
+    {
+     "result": "success",
+     "started": "2026-11-05T13:26:24Z",
+     "duration_seconds": 282,
+     "run_id": 42034980419,
+     "job_id": 127272124007
+    },
+    {
+     "result": "success",
+     "started": "2026-11-04T13:07:43Z",
+     "duration_seconds": 218,
+     "run_id": 41835250049,
+     "job_id": 126592433422
+    },
+    {
+     "result": "success",
+     "started": "2026-11-03T13:04:05Z",
+     "duration_seconds": 268,
+     "run_id": 41639655119,
+     "job_id": 125933744423
+    }
+   ],
+   "mirror": {
+    "read": true,
+    "current": true,
+    "lag_seconds": 0,
+    "targets": [
+     {
+      "target": "powerpc64le-base",
+      "repo": "base",
+      "found": true,
+      "current": true,
+      "lag_seconds": 0,
+      "age_seconds": 181887,
+      "ratio_files": 1,
+      "state": "promoted"
+     },
+     {
+      "target": "powerpc64le-base-any",
+      "repo": "base-any",
+      "found": true,
+      "current": true,
+      "lag_seconds": 0,
+      "age_seconds": 911427,
+      "ratio_files": 1,
+      "state": "promoted"
+     }
+    ]
+   }
+  },
+  {
+   "arch": "riscv64",
+   "platform": "linux/riscv64",
+   "pacman_arch": "riscv64",
+   "distribution": "Arch Linux RISC-V",
+   "homepage": "https://archriscv.felixc.at",
+   "aliases": [
+    "riscv64"
+   ],
+   "repos": [
+    "core",
+    "extra"
+   ],
+   "ghcr": {
+    "state": "published",
+    "error": null,
+    "ref": "riscv64",
+    "digest": "sha256:60f06e5161bba8d72057559b921e1060865df123ca70ac13c32dc32276b6b9cd",
+    "image_digest": "sha256:f4c0793b33d79c0bc892d9c717c9d666404d6564e5a2bb409700ba8fd5875097",
+    "created": "2026-11-21T13:39:51Z",
+    "version": "2026.11.21",
+    "revision": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "size": 222490799,
+    "layers": 4,
+    "rolling": {
+     "riscv64": "sha256:60f06e5161bba8d72057559b921e1060865df123ca70ac13c32dc32276b6b9cd"
+    },
+    "tags": {
+     "rolling": 1,
+     "dated": 50,
+     "anchor": 4,
+     "total": 55
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "hub": {
+    "state": "published",
+    "error": null,
+    "match": true,
+    "rolling": {
+     "riscv64": "sha256:60f06e5161bba8d72057559b921e1060865df123ca70ac13c32dc32276b6b9cd"
+    },
+    "tags": {
+     "rolling": 1,
+     "dated": 50,
+     "anchor": 4,
+     "total": 55
+    },
+    "newest_dated": "2026.11.21"
+   },
+   "parity": {
+    "tags": 55,
+    "same": 55,
+    "unknown": 0,
+    "ratio": 1
+   },
+   "age_seconds": 20919,
+   "in_latest": true,
+   "latest_current": true,
+   "evidence": {
+    "digest": "sha256:60f06e5161bba8d72057559b921e1060865df123ca70ac13c32dc32276b6b9cd",
+    "packages": 135,
+    "bytes": 143423008,
+    "installed_bytes": 672410334,
+    "anchor": "7.1.0.r9.g54d9411-4.1",
+    "built": "2026-11-21T13:39:51Z",
+    "source_commit": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c",
+    "version_id": "2026.11.21",
+    "source": "stored",
+    "run_id": null,
+    "matches": true,
+    "error": null
+   },
+   "build": {
+    "job_id": 136863535860,
+    "result": "success",
+    "started": "2026-11-21T13:41:28Z",
+    "completed": "2026-11-21T13:46:55Z",
+    "duration_seconds": 327,
+    "run_id": 44909701886,
+    "run_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886",
+    "job_url": "https://github.com/pkgforge-dev/docker-archlinux/actions/runs/44909701886/job/136863535860",
+    "event": "schedule",
+    "head_sha": "62fb4fe974ed3a6c6e22b24e9324117a1255fe3c"
+   },
+   "builds": [
+    {
+     "result": "success",
+     "started": "2026-11-21T13:41:28Z",
+     "duration_seconds": 327,
+     "run_id": 44909701886,
+     "job_id": 136863535860
+    },
+    {
+     "result": "success",
+     "started": "2026-11-20T14:11:51Z",
+     "duration_seconds": 366,
+     "run_id": 44751098901,
+     "job_id": 136338969410
+    },
+    {
+     "result": "success",
+     "started": "2026-11-19T14:35:50Z",
+     "duration_seconds": 355,
+     "run_id": 44544973357,
+     "job_id": 135634587042
+    },
+    {
+     "result": "success",
+     "started": "2026-11-18T14:21:31Z",
+     "duration_seconds": 439,
+     "run_id": 44323343980,
+     "job_id": 134867963559
+    },
+    {
+     "result": "success",
+     "started": "2026-11-17T00:57:53Z",
+     "duration_seconds": 303,
+     "run_id": 43991819121,
+     "job_id": 133734121329
+    },
+    {
+     "result": "success",
+     "started": "2026-11-16T13:50:53Z",
+     "duration_seconds": 310,
+     "run_id": 43879701552,
+     "job_id": 133342069778
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T11:14:22Z",
+     "duration_seconds": 286,
+     "run_id": 43707896656,
+     "job_id": 132793014446
+    },
+    {
+     "result": "cancelled",
+     "started": "2026-11-15T11:11:14Z",
+     "duration_seconds": 151,
+     "run_id": 43707636289,
+     "job_id": 132792093978
+    },
+    {
+     "result": "success",
+     "started": "2026-11-15T10:55:27Z",
+     "duration_seconds": 301,
+     "run_id": 43706388540,
+     "job_id": 132788316695
+    },
+    {
+     "result": "success",
+     "started": "2026-11-14T12:20:41Z",
+     "duration_seconds": 396,
+     "run_id": 43594332676,
+     "job_id": 132445551665
+    },
+    {
+     "result": "success",
+     "started": "2026-11-13T13:17:16Z",
+     "duration_seconds": 434,
+     "run_id": 43432097743,
+     "job_id": 131908043019
+    },
+    {
+     "result": "success",
+     "started": "2026-11-12T13:52:42Z",
+     "duration_seconds": 412,
+     "run_id": 43231475813,
+     "job_id": 131227698607
+    },
+    {
+     "result": "success",
+     "started": "2026-11-11T12:51:06Z",
+     "duration_seconds": 378,
+     "run_id": 43023780616,
+     "job_id": 130533285801
+    },
+    {
+     "result": "success",
+     "started": "2026-11-10T00:48:54Z",
+     "duration_seconds": 308,
+     "run_id": 42731132960,
+     "job_id": 129549216571
+    },
+    {
+     "result": "success",
+     "started": "2026-11-09T14:06:20Z",
+     "duration_seconds": 376,
+     "run_id": 42631358040,
+     "job_id": 129208321498
+    },
+    {
+     "result": "success",
+     "started": "2026-11-08T12:01:44Z",
+     "duration_seconds": 385,
+     "run_id": 42478300898,
+     "job_id": 128724508909
+    },
+    {
+     "result": "success",
+     "started": "2026-11-07T12:00:01Z",
+     "duration_seconds": 404,
+     "run_id": 42369836740,
+     "job_id": 128396982716
+    },
+    {
+     "result": "success",
+     "started": "2026-11-06T13:04:07Z",
+     "duration_seconds": 318,
+     "run_id": 42222480396,
+     "job_id": 127907706766
+    },
+    {
+     "result": "success",
+     "started": "2026-11-05T13:24:33Z",
+     "duration_seconds": 287,
+     "run_id": 42034980419,
+     "job_id": 127272123792
+    },
+    {
+     "result": "success",
+     "started": "2026-11-04T13:07:43Z",
+     "duration_seconds": 334,
+     "run_id": 41835250049,
+     "job_id": 126592433540
+    },
+    {
+     "result": "success",
+     "started": "2026-11-03T13:04:36Z",
+     "duration_seconds": 346,
+     "run_id": 41639655119,
+     "job_id": 125933744386
+    }
+   ],
+   "mirror": {
+    "read": true,
+    "current": false,
+    "lag_seconds": 0,
+    "targets": [
+     {
+      "target": "riscv64-core",
+      "repo": "core",
+      "found": true,
+      "current": true,
+      "lag_seconds": 0,
+      "age_seconds": 32841,
+      "ratio_files": 1,
+      "state": "promoted"
+     },
+     {
+      "target": "riscv64-extra",
+      "repo": "extra",
+      "found": true,
+      "current": false,
+      "lag_seconds": 0,
+      "age_seconds": 554,
+      "ratio_files": 0.9999332398691502,
+      "state": "promoted"
+     }
+    ]
+   }
+  }
+ ]
+}
