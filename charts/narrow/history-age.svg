@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="392" viewBox="0 0 420 392" role="img" aria-labelledby="title desc">
+<title id="title">Image age, last 30 days</title>
+<desc id="desc">Age of each image over time, on a log scale, against the build interval. With more than 2 days of history, one point per day: the largest age of that day.</desc>
+<style>.bg{fill:#fcfcfb;stroke:rgba(11,11,11,.10)}text{font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif}.tt{font-size:16px;font-weight:600;fill:#0b0b0b}.hd{font-size:30px;font-weight:600;fill:#0b0b0b}.sub{font-size:13px;fill:#52514e}.lb{font-size:12px;fill:#0b0b0b}.gr{font-size:12px;font-weight:600;fill:#52514e;paint-order:stroke;stroke:#fcfcfb;stroke-width:5px;stroke-linejoin:round}.vl{font-size:12px;fill:#0b0b0b;font-variant-numeric:tabular-nums}.mu{fill:#6f6e69}.lg{font-size:12px;fill:#52514e}.tk{font-size:11px;fill:#6f6e69;font-variant-numeric:tabular-nums}.ax{font-size:12px;fill:#52514e}.note{font-size:13px;fill:#6f6e69}.grid{stroke:#e9e8e3;stroke-width:1}.base{stroke:#c3c2b7;stroke-width:1}.ref{stroke:#7d7b75;stroke-width:1;stroke-dasharray:4 3}.lead{stroke:#c3c2b7;stroke-width:1;fill:none}.track{fill:#ebeae5}.ring{stroke:#fcfcfb;stroke-width:2}.cut{stroke:#fcfcfb;stroke-width:2}.line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}.hollow{fill:none;stroke:#898781;stroke-width:1.5}.cell{fill:#f1f0ec}.s1{fill:#2a78d6}.l1{stroke:#2a78d6}.s2{fill:#eb6834}.l2{stroke:#eb6834}.s3{fill:#1baf7a}.l3{stroke:#1baf7a}.s4{fill:#eda100}.l4{stroke:#eda100}.s5{fill:#e87ba4}.l5{stroke:#e87ba4}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#4a3aa7}.l7{stroke:#4a3aa7}.s8{fill:#e34948}.l8{stroke:#e34948}.s0{fill:#a3a29c}.l0{stroke:#a3a29c}.st-good{fill:#0ca30c}.st-warning{fill:#fab219}.st-critical{fill:#d03b3b}.st-none{fill:#898781}.st-unknown{fill:#898781}@media (prefers-color-scheme:dark){.bg{fill:#1a1a19;stroke:rgba(255,255,255,.10)}.tt,.hd,.lb,.vl{fill:#ffffff}.sub,.gr,.ax,.lg{fill:#c3c2b7}.tk,.note,.mu{fill:#9a9890}.grid{stroke:#2a2a28}.base,.lead{stroke:#3d3d3a}.ref{stroke:#9a9890}.track{fill:#2e2e2c}.cell{fill:#232322}.ring,.cut,.gr{stroke:#1a1a19}.s1{fill:#3987e5}.l1{stroke:#3987e5}.s2{fill:#d95926}.l2{stroke:#d95926}.s3{fill:#199e70}.l3{stroke:#199e70}.s4{fill:#c98500}.l4{stroke:#c98500}.s5{fill:#d55181}.l5{stroke:#d55181}.s6{fill:#008300}.l6{stroke:#008300}.s7{fill:#9085e9}.l7{stroke:#9085e9}.s8{fill:#e66767}.l8{stroke:#e66767}.s0{fill:#6b6a65}.l0{stroke:#6b6a65}}</style>
+<rect class="bg" x="0.5" y="0.5" width="419" height="391" rx="12"/>
+<text x="24.0" y="40.0" class="tt">Image age, last 30 days</text>
+<text x="24.0" y="82.0" class="hd">13.8 h</text>
+<text x="121.5" y="64.0" class="sub">oldest image now. One line per port, last 30</text>
+<text x="121.5" y="81.0" class="sub">days, log scale.</text>
+<path d="M23.0 108.0h12" class="line l1"/>
+<text x="40.0" y="112.0" class="lg">amd64</text>
+<path d="M94.2 108.0h12" class="line l2"/>
+<text x="111.2" y="112.0" class="lg">arm64</text>
+<path d="M165.4 108.0h12" class="line l3"/>
+<text x="182.4" y="112.0" class="lg">armv7</text>
+<path d="M236.1 108.0h12" class="line l4"/>
+<text x="253.1" y="112.0" class="lg">loong64</text>
+<path d="M313.6 108.0h12" class="line l5"/>
+<text x="330.6" y="112.0" class="lg">ppc</text>
+<path d="M23.0 128.0h12" class="line l6"/>
+<text x="40.0" y="132.0" class="lg">ppc64</text>
+<path d="M90.4 128.0h12" class="line l7"/>
+<text x="107.4" y="132.0" class="lg">ppc64le</text>
+<path d="M167.8 128.0h12" class="line l8"/>
+<text x="184.8" y="132.0" class="lg">riscv64</text>
+<path d="M245.2 128.0h12" class="line ref" stroke-dasharray="4 3"/>
+<text x="262.2" y="132.0" class="lg">built every 1 d</text>
+<path d="M70.0 328.0H297.8" class="base"/>
+<text x="62.0" y="332.0" class="tk" text-anchor="end">30 min</text>
+<path d="M70.0 266.7H297.8" class="grid"/>
+<text x="62.0" y="270.7" class="tk" text-anchor="end">3 h</text>
+<path d="M70.0 219.3H297.8" class="grid"/>
+<text x="62.0" y="223.3" class="tk" text-anchor="end">12 h</text>
+<path d="M70.0 158.0H297.8" class="grid"/>
+<text x="62.0" y="162.0" class="tk" text-anchor="end">3 d</text>
+<path d="M103.4 328.0v4" class="base"/>
+<text x="103.4" y="346.0" class="tk" text-anchor="middle">Nov 3</text>
+<path d="M179.3 328.0v4" class="base"/>
+<text x="179.3" y="346.0" class="tk" text-anchor="middle">Nov 13</text>
+<path d="M255.2 328.0v4" class="base"/>
+<text x="255.2" y="346.0" class="tk" text-anchor="middle">Nov 23</text>
+<path d="M70.0 195.6H297.8" class="ref"/>
+<path d="M72.4 224.4L80.3 195.8L88.0 198.1L95.4 193.8L102.7 196.7L110.5 198.0L118.2 195.5L125.8 196.4L133.5 196.0L140.4 199.5L148.9 195.5L154.5 192.7L164.0 197.5L171.6 181.6L178.9 195.4L186.8 196.4L194.2 196.9L201.8 197.2L209.1 194.9L217.3 197.1L224.7 180.5L232.4 196.8L239.8 197.7L247.1 199.8L254.8 195.8L261.4 193.6L270.1 202.4L275.9 209.6L284.4 196.2L292.6 195.6L297.8 214.6" class="line l1"><title>amd64</title></path>
+<path d="M72.4 224.4L80.3 195.8L88.0 198.1L95.4 193.8L102.7 196.7L110.5 198.0L118.2 195.5L125.8 196.4L133.5 196.0L140.4 199.5L148.9 195.5L154.5 192.7L164.0 197.5L171.6 181.6L178.9 195.4L186.8 196.4L194.2 196.9L201.8 197.2L209.1 194.9L217.3 197.1L224.7 180.5L232.4 196.8L239.8 197.7L247.1 199.8L254.8 195.8L261.4 193.6L270.1 202.4L275.9 209.6L284.4 196.2L292.6 195.6L297.8 214.6" class="line l2"><title>arm64</title></path>
+<path d="M72.4 224.4L80.3 195.8L88.0 198.1L95.4 193.8L102.7 196.7L110.5 198.0L118.2 195.5L125.8 196.4L133.5 196.0L140.4 199.5L148.9 195.5L154.5 192.7L164.0 197.5L171.6 181.6L178.9 195.4L186.8 196.4L194.2 196.9L201.8 197.2L209.1 194.9L217.3 197.1L224.7 180.5L232.4 196.8L239.8 197.7L247.1 199.8L254.8 195.8L261.4 193.6L270.1 202.4L275.9 209.6L284.4 196.2L292.6 195.6L297.8 214.6" class="line l3"><title>armv7</title></path>
+<path d="M72.4 224.4L80.3 195.8L88.0 198.1L95.4 193.8L102.7 196.7L110.5 198.0L118.2 195.5L125.8 196.4L133.5 196.0L140.4 199.5L148.9 195.5L154.5 192.7L164.0 197.5L171.6 181.6L178.9 195.4L186.8 196.4L194.2 196.9L201.8 197.2L209.1 194.9L217.3 197.1L224.7 180.5L232.4 196.8L239.8 197.7L247.1 199.8L254.8 195.8L261.4 193.6L270.1 202.4L275.9 209.6L284.4 196.2L292.6 195.6L297.8 214.6" class="line l4"><title>loong64</title></path>
+<path d="M72.4 224.4L80.3 195.8L88.0 198.1L95.4 193.8L102.7 196.7L110.5 198.0L118.2 195.5L125.8 196.4L133.5 196.0L140.4 199.5L148.9 195.5L154.5 192.7L164.0 197.5L171.6 181.6L178.9 195.4L186.8 196.4L194.2 196.9L201.8 197.2L209.1 194.9L217.3 197.1L224.7 174.0L232.4 214.0L239.8 197.7L247.1 199.8L254.8 195.8L261.4 193.6L270.1 202.4L275.9 209.6L284.4 196.2L292.6 195.6L297.8 214.6" class="line l5"><title>ppc</title></path>
+<path d="M72.4 224.4L80.3 195.8L88.0 198.1L95.4 193.8L102.7 196.7L110.5 198.0L118.2 195.5L125.8 196.4L133.5 196.0L140.4 199.5L148.9 195.5L154.5 192.7L164.0 197.5L171.6 181.6L178.9 195.4L186.8 196.4L194.2 196.9L201.8 197.2L209.1 194.9L217.3 197.1L224.7 180.5L232.4 196.8L239.8 197.7L247.1 199.8L254.8 195.8L261.4 193.6L270.1 202.4L275.9 209.6L284.4 196.2L292.6 195.6L297.8 214.6" class="line l6"><title>ppc64</title></path>
+<path d="M72.4 224.4L80.3 195.8L88.0 198.1L95.4 193.8L102.7 196.7L110.5 198.0L118.2 195.5L125.8 196.4L133.5 196.0L140.4 199.5L148.9 195.5L154.5 192.7L164.0 197.5L171.6 181.6L178.9 195.4L186.8 196.4L194.2 196.9L201.8 197.2L209.1 194.9L217.3 197.1L224.7 180.5L232.4 196.8L239.8 197.7L247.1 199.8L254.8 195.8L261.4 193.6L270.1 202.4L275.9 209.6L284.4 196.2L292.6 195.6L297.8 214.6" class="line l7"><title>ppc64le</title></path>
+<path d="M72.4 224.4L80.3 195.8L88.0 198.1L95.4 193.8L102.7 196.7L110.5 198.0L118.2 195.5L125.8 196.4L133.5 196.0L140.4 199.5L148.9 195.5L154.5 192.7L164.0 197.5L171.6 181.6L178.9 195.4L186.8 196.4L194.2 196.9L201.8 197.2L209.1 194.9L217.3 197.1L224.7 180.5L232.4 196.8L239.8 197.7L247.1 199.8L254.8 195.8L261.4 193.6L270.1 202.4L275.9 209.6L284.4 196.2L292.6 195.6L297.8 214.6" class="line l8"><title>riscv64</title></path>
+<path d="M303.8 214.6L309.8 229.6" class="lead"/>
+<path d="M303.8 214.6L309.8 244.6" class="lead"/>
+<path d="M303.8 214.6L309.8 259.6" class="lead"/>
+<path d="M303.8 214.6L309.8 274.6" class="lead"/>
+<path d="M303.8 214.6L309.8 289.6" class="lead"/>
+<path d="M303.8 214.6L309.8 304.6" class="lead"/>
+<path d="M303.8 214.6L309.8 319.6" class="lead"/>
+<circle cx="297.8" cy="214.6" r="4" class="s1 ring"><title>amd64 13.8 h</title></circle>
+<text x="313.8" y="218.6" class="vl">amd64<tspan class="mu" dx="5">13.8 h</tspan></text>
+<circle cx="297.8" cy="214.6" r="4" class="s2 ring"><title>arm64 13.8 h</title></circle>
+<text x="313.8" y="233.6" class="vl">arm64<tspan class="mu" dx="5">13.8 h</tspan></text>
+<circle cx="297.8" cy="214.6" r="4" class="s3 ring"><title>armv7 13.8 h</title></circle>
+<text x="313.8" y="248.6" class="vl">armv7<tspan class="mu" dx="5">13.8 h</tspan></text>
+<circle cx="297.8" cy="214.6" r="4" class="s4 ring"><title>loong64 13.8 h</title></circle>
+<text x="313.8" y="263.6" class="vl">loong64<tspan class="mu" dx="5">13.8 h</tspan></text>
+<circle cx="297.8" cy="214.6" r="4" class="s5 ring"><title>ppc 13.8 h</title></circle>
+<text x="313.8" y="278.6" class="vl">ppc<tspan class="mu" dx="5">13.8 h</tspan></text>
+<circle cx="297.8" cy="214.6" r="4" class="s6 ring"><title>ppc64 13.8 h</title></circle>
+<text x="313.8" y="293.6" class="vl">ppc64<tspan class="mu" dx="5">13.8 h</tspan></text>
+<circle cx="297.8" cy="214.6" r="4" class="s7 ring"><title>ppc64le 13.8 h</title></circle>
+<text x="313.8" y="308.6" class="vl">ppc64le<tspan class="mu" dx="5">13.8 h</tspan></text>
+<circle cx="297.8" cy="214.6" r="4" class="s8 ring"><title>riscv64 13.8 h</title></circle>
+<text x="313.8" y="323.6" class="vl">riscv64<tspan class="mu" dx="5">13.8 h</tspan></text>
+<text x="183.9" y="370.0" class="ax" text-anchor="middle">Time, UTC</text>
+<text class="ax" text-anchor="middle" transform="translate(30.0 243.0) rotate(-90)">Age, log scale</text>
+</svg>
